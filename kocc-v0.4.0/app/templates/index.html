@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+    <title>KOCC - KKB OpenShift Control Center</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #f4f5f5;
+            color: #151515;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+        header {
+            background: #151515;
+            color: white;
+            padding: 18px 32px;
+        }
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        header h1 { margin: 0; font-size: 24px; }
+        .subtitle { margin-top: 5px; color: #d2d2d2; }
+        .cluster-form {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .cluster-form label { font-weight: bold; }
+        .cluster-form select {
+            min-width: 190px;
+            padding: 9px 12px;
+            border: 1px solid #8a8d90;
+            border-radius: 4px;
+            background: white;
+            font-size: 14px;
+        }
+        main { padding: 24px 32px 48px; }
+        .selected {
+            margin: 0 0 20px;
+            color: #4f5255;
+        }
+        .release {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 3px 8px;
+            border-radius: 10px;
+            background: #e7f1fa;
+            color: #004b95;
+            font-size: 12px;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 6px;
+            padding: 18px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+        }
+        .card h3 {
+            margin: 0 0 10px;
+            color: #6a6e73;
+            font-size: 14px;
+        }
+        .value { font-size: 27px; font-weight: bold; }
+        .subvalue {
+            margin-top: 7px;
+            color: #6a6e73;
+            font-size: 13px;
+        }
+        .healthy { color: #3e8635; }
+        .warning { color: #f0ab00; }
+        .danger { color: #c9190b; }
+        .error {
+            padding: 18px;
+            border-left: 5px solid #c9190b;
+            background: #faeae8;
+            color: #7d1007;
+        }
+        h2 { margin-top: 32px; }
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            background: white;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            white-space: nowrap;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid #d2d2d2;
+            text-align: left;
+            font-size: 14px;
+        }
+        th { background: #f0f0f0; }
+        .status, .role {
+            display: inline-block;
+            padding: 4px 9px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-ready {
+            color: #1e4f18;
+            background: #e9f4e7;
+        }
+        .status-not-ready {
+            color: #7d1007;
+            background: #faeae8;
+        }
+        .role {
+            margin-right: 4px;
+            color: #004b95;
+            background: #e7f1fa;
+        }
+        .progress {
+            width: 100%;
+            min-width: 160px;
+            height: 9px;
+            overflow: hidden;
+            border-radius: 6px;
+            background: #d2d2d2;
+        }
+        .progress > span {
+            display: block;
+            height: 100%;
+            background: #0066cc;
+        }
+        .resource-cell { min-width: 210px; }
+        .resource-cell small {
+            display: block;
+            margin-top: 5px;
+            color: #6a6e73;
+        }
+    </style>
+</head>
+<body>
+<header>
+    <div class="header-row">
+        <div>
+            <h1>KKB OpenShift Control Center</h1>
+            <div class="subtitle">
+                Multi Cluster OpenShift Operasyon Platformu
+            </div>
+        </div>
+        <form class="cluster-form" method="get" action="/">
+            <label for="cluster">Cluster</label>
+            <select
+                id="cluster"
+                name="cluster"
+                onchange="this.form.submit()"
+            >
+                {% for key, item in cluster_options.items() %}
+                <option
+                    value="{{ key }}"
+                    {% if key == selected_cluster %}selected{% endif %}
+                >
+                    {{ item.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+</header>
+
+<main>
+    <p class="selected">
+        Görüntülenen cluster:
+        <strong>{{ selected_cluster_name }}</strong>
+        <span class="release">v{{ release }}</span>
+    </p>
+
+    {% if error %}
+    <div class="error">
+        <strong>Cluster verisi alınamadı.</strong><br>
+        {{ error }}
+    </div>
+    {% else %}
+
+    <div class="cards">
+        <div class="card">
+            <h3>OpenShift Version</h3>
+            <div class="value">{{ data.version }}</div>
+        </div>
+        <div class="card">
+            <h3>Node</h3>
+            <div class="value">{{ data.nodes.total }}</div>
+            <div class="subvalue">
+                <span class="healthy">{{ data.nodes.ready }} Ready</span>
+                ·
+                <span class="{% if data.nodes.not_ready %}danger{% else %}healthy{% endif %}">
+                    {{ data.nodes.not_ready }} NotReady
+                </span>
+            </div>
+        </div>
+        <div class="card">
+            <h3>Pod</h3>
+            <div class="value">{{ data.pods.total }}</div>
+            <div class="subvalue">
+                {{ data.pods.running }} Running ·
+                {{ data.pods.pending }} Pending ·
+                {{ data.pods.failed }} Failed
+            </div>
+        </div>
+        <div class="card">
+            <h3>Namespace</h3>
+            <div class="value">{{ data.namespace_count }}</div>
+        </div>
+    </div>
+
+    <h2>Cluster Resource Özeti</h2>
+    <div class="cards">
+        <div class="card">
+            <h3>CPU Allocatable</h3>
+            <div class="value">
+                {{ data.resources.cluster.cpu_allocatable_text }}
+            </div>
+            <div class="subvalue">
+                Capacity:
+                {{ data.resources.cluster.cpu_capacity_text }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>CPU Request</h3>
+            <div class="value">
+                {{ data.resources.cluster.cpu_request_text }}
+            </div>
+            <div class="subvalue">
+                %{{ data.resources.cluster.cpu_request_percent }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>CPU Limit</h3>
+            <div class="value">
+                {{ data.resources.cluster.cpu_limit_text }}
+            </div>
+            <div class="subvalue">
+                %{{ data.resources.cluster.cpu_limit_percent }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>Memory Allocatable</h3>
+            <div class="value">
+                {{ data.resources.cluster.memory_allocatable_text }}
+            </div>
+            <div class="subvalue">
+                Capacity:
+                {{ data.resources.cluster.memory_capacity_text }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>Memory Request</h3>
+            <div class="value">
+                {{ data.resources.cluster.memory_request_text }}
+            </div>
+            <div class="subvalue">
+                %{{ data.resources.cluster.memory_request_percent }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>Memory Limit</h3>
+            <div class="value">
+                {{ data.resources.cluster.memory_limit_text }}
+            </div>
+            <div class="subvalue">
+                %{{ data.resources.cluster.memory_limit_percent }}
+            </div>
+        </div>
+        <div class="card">
+            <h3>Disk Capacity</h3>
+            <div class="value">
+                {{ data.resources.cluster.storage_capacity_text }}
+            </div>
+            <div class="subvalue">
+                Allocatable:
+                {{ data.resources.cluster.storage_allocatable_text }}
+            </div>
+        </div>
+    </div>
+
+    <h2>Node Dağılımı</h2>
+    <div class="cards">
+        <div class="card">
+            <h3>Master</h3>
+            <div class="value">{{ data.nodes.role_counts.master }}</div>
+        </div>
+        <div class="card">
+            <h3>Infra</h3>
+            <div class="value">{{ data.nodes.role_counts.infra }}</div>
+        </div>
+        <div class="card">
+            <h3>Worker</h3>
+            <div class="value">{{ data.nodes.role_counts.worker }}</div>
+        </div>
+        <div class="card">
+            <h3>Other</h3>
+            <div class="value">{{ data.nodes.role_counts.other }}</div>
+        </div>
+    </div>
+
+    <h2>Node Detayları</h2>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Node</th>
+                    <th>Durum</th>
+                    <th>Role</th>
+                    <th>CPU Capacity</th>
+                    <th>CPU Allocatable</th>
+                    <th>Memory Capacity</th>
+                    <th>Memory Allocatable</th>
+                    <th>Disk Capacity</th>
+                    <th>Disk Allocatable</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for node in data.nodes.items %}
+                <tr>
+                    <td>{{ node.name }}</td>
+                    <td>
+                        {% if node.ready %}
+                        <span class="status status-ready">Ready</span>
+                        {% else %}
+                        <span class="status status-not-ready">
+                            NotReady
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% for role in node.roles %}
+                        <span class="role">{{ role }}</span>
+                        {% endfor %}
+                    </td>
+                    <td>{{ node.cpu_capacity_text }}</td>
+                    <td>{{ node.cpu_allocatable_text }}</td>
+                    <td>{{ node.memory_capacity_text }}</td>
+                    <td>{{ node.memory_allocatable_text }}</td>
+                    <td>{{ node.storage_capacity_text }}</td>
+                    <td>{{ node.storage_allocatable_text }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h2>Namespace Resource Özeti</h2>
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th>Namespace</th>
+                    <th>Pod</th>
+                    <th>Container</th>
+                    <th>CPU Request</th>
+                    <th>CPU Limit</th>
+                    <th>Memory Request</th>
+                    <th>Memory Limit</th>
+                    <th>Eksik CPU Req.</th>
+                    <th>Eksik CPU Limit</th>
+                    <th>Eksik Mem. Req.</th>
+                    <th>Eksik Mem. Limit</th>
+                    <th>Tamamen Tanımsız</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for namespace in data.resources.namespaces %}
+                <tr>
+                    <td>{{ namespace.namespace }}</td>
+                    <td>{{ namespace.pod_count }}</td>
+                    <td>{{ namespace.container_count }}</td>
+                    <td>{{ namespace.cpu_request_text }}</td>
+                    <td>{{ namespace.cpu_limit_text }}</td>
+                    <td>{{ namespace.memory_request_text }}</td>
+                    <td>{{ namespace.memory_limit_text }}</td>
+                    <td>{{ namespace.missing_cpu_request }}</td>
+                    <td>{{ namespace.missing_cpu_limit }}</td>
+                    <td>{{ namespace.missing_memory_request }}</td>
+                    <td>{{ namespace.missing_memory_limit }}</td>
+                    <td>{{ namespace.completely_undefined }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</main>
+</body>
+</html>

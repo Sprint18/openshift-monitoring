@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+    app.kubernetes.io/version: "0.4.0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kocc-readonly
+  labels:
+    app.kubernetes.io/name: kocc
+    app.kubernetes.io/version: "0.4.0"
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - clusterversions
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kocc-readonly
+  labels:
+    app.kubernetes.io/name: kocc
+    app.kubernetes.io/version: "0.4.0"
+subjects:
+  - kind: ServiceAccount
+    name: kocc
+    namespace: kocc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kocc-readonly
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+    app.kubernetes.io/version: "0.4.0"
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: kocc:0.4.0
+  triggers: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+    app.kubernetes.io/version: "0.4.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kocc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kocc
+        app.kubernetes.io/version: "0.4.0"
+    spec:
+      serviceAccountName: kocc
+      containers:
+        - name: kocc
+          image: image-registry.openshift-image-registry.svc:5000/kocc/kocc:0.4.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: remote-clusters
+              mountPath: /etc/portal/clusters
+              readOnly: true
+      volumes:
+        - name: remote-clusters
+          secret:
+            secretName: kocc-remote-clusters
+            items:
+              - key: rmtest.kubeconfig
+                path: rmtest.kubeconfig
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+spec:
+  selector:
+    app.kubernetes.io/name: kocc
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: kocc
+  labels:
+    app.kubernetes.io/name: kocc
+spec:
+  to:
+    kind: Service
+    name: kocc
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
