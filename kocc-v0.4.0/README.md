@@ -10,6 +10,9 @@ Bu release, KOCC portalına ilk multi-cluster altyapısını ekler.
 
 Python içerisinde API host, token veya CA değeri tanımlanmaz.
 
+OpenShift API çağrıları, bağlantı sorunlarının portal worker'larını
+süresiz bloke etmemesi için connect/read timeout ile yapılır.
+
 ## Dizin yapısı
 
 ```text
@@ -48,6 +51,14 @@ read yetkisine sahip olmalıdır:
 - pods
 - config.openshift.io/clusterversions
 
+## Dynatrace OneAgent
+
+Deployment pod template'i OneAgent injection için
+`oneagent.dynatrace.com/inject: "true"` annotation'ını taşır. Injection'ın
+çalışması için cluster'da Dynatrace Operator ve geçerli bir DynaKube
+konfigürasyonu bulunmalı, `kocc` namespace'i ilgili DynaKube namespace selector
+kapsamında olmalıdır.
+
 ## OpenShift nesneleri
 
 `openshift/kocc-v0.4.0.yaml` içindeki namespace referansları `kocc` olarak
@@ -71,6 +82,9 @@ oc rollout status deployment/kocc
 ## Test
 
 ```bash
+python -m pip install -r requirements-dev.txt
+pytest
+
 curl -k https://ROUTE/health
 curl -k "https://ROUTE/api/summary?cluster=kkbtest"
 curl -k "https://ROUTE/api/summary?cluster=rmtest"

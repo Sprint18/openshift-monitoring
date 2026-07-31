@@ -8,6 +8,9 @@ from kubernetes.client import ApiClient
 
 from app.resource_parser import cpu_to_millicores, memory_to_bytes
 
+API_REQUEST_TIMEOUT = (5, 30)
+TERMINAL_POD_PHASES = {"Succeeded", "Failed"}
+
 
 class ClusterCollector:
     def __init__(self, api_client: ApiClient) -> None:
@@ -20,6 +23,7 @@ class ClusterCollector:
             version="v1",
             plural="clusterversions",
             name="version",
+            _request_timeout=API_REQUEST_TIMEOUT,
         )
         status = result.get("status", {})
         history = status.get("history", [])
@@ -62,8 +66,14 @@ class ClusterCollector:
             for condition in conditions
         )
 
-    def get_node_summary(self) -> dict[str, Any]:
-        nodes = self.core_api.list_node().items
+    def get_node_summary(
+        self,
+        nodes: list[client.V1Node] | None = None,
+    ) -> dict[str, Any]:
+        if nodes is None:
+            nodes = self.core_api.list_node(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
         role_counts = {
             "master": 0,
             "infra": 0,
@@ -133,8 +143,14 @@ class ClusterCollector:
             "items": node_items,
         }
 
-    def get_pod_summary(self) -> dict[str, Any]:
-        pods = self.core_api.list_pod_for_all_namespaces().items
+    def get_pod_summary(
+        self,
+        pods: list[client.V1Pod] | None = None,
+    ) -> dict[str, Any]:
+        if pods is None:
+            pods = self.core_api.list_pod_for_all_namespaces(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
         phase_counts: dict[str, int] = defaultdict(int)
 
         for pod in pods:
@@ -150,12 +166,34 @@ class ClusterCollector:
             "phase_counts": dict(sorted(phase_counts.items())),
         }
 
-    def get_namespace_count(self) -> int:
-        return len(self.core_api.list_namespace().items)
+    def get_namespace_count(
+        self,
+        namespaces: list[client.V1Namespace] | None = None,
+    ) -> int:
+        if namespaces is None:
+            namespaces = self.core_api.list_namespace(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
+        return len(namespaces)
 
-    def get_resource_summary(self) -> dict[str, Any]:
-        nodes = self.core_api.list_node().items
-        pods = self.core_api.list_pod_for_all_namespaces().items
+    def get_resource_summary(
+        self,
+        nodes: list[client.V1Node] | None = None,
+        pods: list[client.V1Pod] | None = None,
+        namespace_list: list[client.V1Namespace] | None = None,
+    ) -> dict[str, Any]:
+        if nodes is None:
+            nodes = self.core_api.list_node(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
+        if pods is None:
+            pods = self.core_api.list_pod_for_all_namespaces(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
+        if namespace_list is None:
+            namespace_list = self.core_api.list_namespace(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
 
         cluster = {
             "cpu_capacity": 0,
@@ -210,17 +248,28 @@ class ClusterCollector:
             }
         )
 
+        for namespace in namespace_list:
+            namespace_name = namespace.metadata.name
+            namespace_item = namespaces[namespace_name]
+            namespace_item["namespace"] = namespace_name
+
         for pod in pods:
+            if pod.status.phase in TERMINAL_POD_PHASES:
+                continue
+
             namespace = pod.metadata.namespace or "default"
             namespace_item = namespaces[namespace]
             namespace_item["namespace"] = namespace
             namespace_item["pod_count"] += 1
 
-            for container_item in pod.spec.containers or []:
+            containers = list(pod.spec.containers or [])
+            containers.extend(pod.spec.init_containers or [])
+
+            for container_item in containers:
                 namespace_item["container_count"] += 1
                 resources = container_item.resources
-                requests = resources.requests or {}
-                limits = resources.limits or {}
+                requests = getattr(resources, "requests", None) or {}
+                limits = getattr(resources, "limits", None) or {}
 
                 cpu_request = cpu_to_millicores(requests.get("cpu"))
                 cpu_limit = cpu_to_millicores(limits.get("cpu"))
@@ -267,10 +316,24 @@ class ClusterCollector:
         }
 
     def collect_dashboard(self) -> dict[str, Any]:
+        nodes = self.core_api.list_node(
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items
+        pods = self.core_api.list_pod_for_all_namespaces(
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items
+        namespaces = self.core_api.list_namespace(
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items
+
         return {
             "version": self.get_cluster_version(),
-            "nodes": self.get_node_summary(),
-            "pods": self.get_pod_summary(),
-            "namespace_count": self.get_namespace_count(),
-            "resources": self.get_resource_summary(),
+            "nodes": self.get_node_summary(nodes),
+            "pods": self.get_pod_summary(pods),
+            "namespace_count": self.get_namespace_count(namespaces),
+            "resources": self.get_resource_summary(
+                nodes,
+                pods,
+                namespaces,
+            ),
         }

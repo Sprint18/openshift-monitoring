@@ -151,17 +151,24 @@ def raise_http_error(exc: Exception) -> None:
         logger.exception("OpenShift API error")
         raise HTTPException(
             status_code=502,
-            detail=(
-                "OpenShift API çağrısı başarısız oldu. "
-                f"Status: {exc.status}; Reason: {exc.reason}"
-            ),
+            detail="OpenShift API çağrısı başarısız oldu.",
         ) from exc
 
     logger.exception("Unexpected dashboard error")
     raise HTTPException(
         status_code=500,
-        detail=f"Beklenmeyen hata: {exc}",
+        detail="Beklenmeyen bir uygulama hatası oluştu.",
     ) from exc
+
+
+def dashboard_error_message(exc: Exception) -> str:
+    if isinstance(exc, ClusterNotFoundError):
+        return str(exc)
+    if isinstance(exc, ClusterConfigurationError):
+        return str(exc)
+    if isinstance(exc, ApiException):
+        return "OpenShift API çağrısı başarısız oldu."
+    return "Beklenmeyen bir uygulama hatası oluştu."
 
 
 @app.get("/api/clusters")
@@ -234,7 +241,7 @@ def dashboard(
                 "selected_cluster": cluster_key,
                 "selected_cluster_name": selected_name,
                 "data": None,
-                "error": str(exc),
+                "error": dashboard_error_message(exc),
                 "release": app.version,
             },
         )

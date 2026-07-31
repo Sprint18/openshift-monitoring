@@ -95,6 +95,8 @@ spec:
       labels:
         app.kubernetes.io/name: kocc
         app.kubernetes.io/version: "0.4.0"
+      annotations:
+        oneagent.dynatrace.com/inject: "true"
     spec:
       serviceAccountName: kocc
       containers:
@@ -139,7 +141,7 @@ spec:
             items:
               - key: rmtest.kubeconfig
                 path: rmtest.kubeconfig
-            defaultMode: 0400
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service

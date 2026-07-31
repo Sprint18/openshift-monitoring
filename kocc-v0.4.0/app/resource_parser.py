@@ -8,6 +8,13 @@ CPU_SUFFIXES = {
     "u": Decimal("0.001"),
     "m": Decimal("1"),
     "": Decimal("1000"),
+    "k": Decimal("1000000"),
+    "K": Decimal("1000000"),
+    "M": Decimal("1000000000"),
+    "G": Decimal("1000000000000"),
+    "T": Decimal("1000000000000000"),
+    "P": Decimal("1000000000000000000"),
+    "E": Decimal("1000000000000000000000"),
 }
 
 MEMORY_SUFFIXES = {
@@ -27,7 +34,8 @@ MEMORY_SUFFIXES = {
 }
 
 QUANTITY_PATTERN = re.compile(
-    r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))([a-zA-Z]*)\s*$"
+    r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    r"([a-zA-Z]*)\s*$"
 )
 
 
