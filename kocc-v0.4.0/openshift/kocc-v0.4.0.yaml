@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -43,7 +44,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: kocc
-    namespace: kocc
+    namespace: ocp-monitoring-portal-test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -53,6 +54,7 @@ apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 ---
@@ -60,6 +62,7 @@ apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -76,12 +79,17 @@ spec:
     to:
       kind: ImageStreamTag
       name: kocc:0.4.0
+      namespace: ocp-monitoring-portal-test
   triggers: []
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
+  annotations:
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"kocc:0.4.0","namespace":"ocp-monitoring-portal-test"},"fieldPath":"spec.template.spec.containers[?(@.name==\"kocc\")].image","paused":false}]
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -96,12 +104,14 @@ spec:
         app.kubernetes.io/name: kocc
         app.kubernetes.io/version: "0.4.0"
       annotations:
-        oneagent.dynatrace.com/inject: "true"
+        dynatrace.com/inject: "false"
+        oneagent.dynatrace.com/inject: "false"
+        metadata-enrichment.dynatrace.com/inject: "false"
     spec:
       serviceAccountName: kocc
       containers:
         - name: kocc
-          image: image-registry.openshift-image-registry.svc:5000/kocc/kocc:0.4.0
+          image: image-registry.openshift-image-registry.svc:5000/ocp-monitoring-portal-test/kocc:0.4.0
           imagePullPolicy: Always
           ports:
             - name: http
@@ -147,6 +157,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 spec:
@@ -162,6 +173,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 spec:
