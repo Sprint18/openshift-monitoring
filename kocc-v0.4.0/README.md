@@ -13,6 +13,15 @@ Python içerisinde API host, token veya CA değeri tanımlanmaz.
 OpenShift API çağrıları, bağlantı sorunlarının portal worker'larını
 süresiz bloke etmemesi için connect/read timeout ile yapılır.
 
+Python 3.12 build'i için runtime bağımlılıkları kurum package mirror'larında
+bulunma olasılığı yüksek, yaygın ve birbiriyle uyumlu exact sürümlere
+sabitlenmiştir:
+
+- `fastapi==0.115.6`
+- `uvicorn[standard]==0.34.0`
+- `jinja2==3.1.5`
+- `kubernetes==32.0.1`
+
 ## Dizin yapısı
 
 ```text
@@ -102,6 +111,7 @@ oc start-build kocc --from-dir=. --follow
 
 ```bash
 oc get build
+oc get builds -l buildconfig=kocc
 oc get build -l buildconfig=kocc
 ```
 
@@ -111,6 +121,7 @@ Son build `Complete` durumunda olmalıdır.
 
 ```bash
 oc get imagestream kocc
+oc get istag kocc:0.4.0
 oc get imagestreamtag kocc:0.4.0
 oc get buildconfig kocc -o jsonpath='{.spec.output.to.kind}{" "}{.spec.output.to.namespace}{"/"}{.spec.output.to.name}{"\n"}'
 ```
