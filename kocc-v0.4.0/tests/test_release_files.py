@@ -65,8 +65,6 @@ def test_deployment_excludes_dynatrace_and_preserves_secret_volume() -> None:
 
     assert pod_template["metadata"]["annotations"] == {
         "dynatrace.com/inject": "false",
-        "oneagent.dynatrace.com/inject": "false",
-        "metadata-enrichment.dynatrace.com/inject": "false",
     }
     assert all(
         env.get("name") != "LD_PRELOAD"

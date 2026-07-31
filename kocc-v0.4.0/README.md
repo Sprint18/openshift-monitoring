@@ -13,14 +13,14 @@ Python içerisinde API host, token veya CA değeri tanımlanmaz.
 OpenShift API çağrıları, bağlantı sorunlarının portal worker'larını
 süresiz bloke etmemesi için connect/read timeout ile yapılır.
 
-Python 3.12 build'i için runtime bağımlılıkları kurum package mirror'larında
-bulunma olasılığı yüksek, yaygın ve birbiriyle uyumlu exact sürümlere
-sabitlenmiştir:
+Python 3.12 build'i, eski çalışan monitoring portal ile aynı exact runtime
+sürümlerini kullanır:
 
-- `fastapi==0.115.6`
-- `uvicorn[standard]==0.34.0`
-- `jinja2==3.1.5`
-- `kubernetes==32.0.1`
+- `fastapi==0.116.1`
+- `starlette==0.47.3`
+- `uvicorn==0.35.0`
+- `jinja2==3.1.6`
+- `kubernetes==33.1.0`
 
 ## Dizin yapısı
 
@@ -157,12 +157,31 @@ ImageStreamTag'in resolve edilmiş image referansını gösterebilir.
 Dynatrace injection ve `LD_PRELOAD` kontrolü:
 
 ```bash
-oc get deployment kocc -o jsonpath='{.spec.template.metadata.annotations}{"\n"}'
-oc get pods -l app.kubernetes.io/name=kocc \
-  -o jsonpath='{range .items[*].spec.containers[*].env[?(@.name=="LD_PRELOAD")]}{.name}={.value}{"\n"}{end}'
+BUILD_POD=$(oc get pods \
+  -l openshift.io/build.name \
+  --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1:].metadata.name}')
+
+oc get pod "$BUILD_POD" \
+  -o jsonpath='{.spec.initContainers[*].name}{"\n"}'
+
+oc get pod "$BUILD_POD" -o yaml | \
+  grep -iE 'dynatrace|oneagent|LD_PRELOAD'
+
+RUNTIME_POD=$(oc get pods \
+  -l app.kubernetes.io/name=kocc \
+  --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1:].metadata.name}')
+
+oc get pod "$RUNTIME_POD" \
+  -o jsonpath='{.spec.initContainers[*].name}{"\n"}'
+
+oc get pod "$RUNTIME_POD" -o yaml | \
+  grep -iE 'dynatrace|oneagent|LD_PRELOAD'
 ```
 
-İkinci komutun boş sonuç dönmesi beklenir.
+Init container listelerinde `dynatrace-operator` bulunmamalı; iki `grep` komutu da
+boş sonuç dönmelidir.
 
 ### 8. Health ve cluster API endpointlerini test et
 
