@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any
 
@@ -10,6 +11,9 @@ from app.resource_parser import cpu_to_millicores, memory_to_bytes
 
 API_REQUEST_TIMEOUT = (5, 30)
 TERMINAL_POD_PHASES = {"Succeeded", "Failed"}
+DETAIL_LIMIT = 20
+
+logger = logging.getLogger("kocc.collector")
 
 
 class ClusterCollector:
@@ -152,9 +156,40 @@ class ClusterCollector:
                 _request_timeout=API_REQUEST_TIMEOUT,
             ).items
         phase_counts: dict[str, int] = defaultdict(int)
+        problem_items: list[dict[str, Any]] = []
 
         for pod in pods:
-            phase_counts[pod.status.phase or "Unknown"] += 1
+            phase = pod.status.phase or "Unknown"
+            phase_counts[phase] += 1
+            if phase == "Succeeded":
+                continue
+
+            statuses = getattr(pod.status, "container_statuses", None) or []
+            total_containers = len(pod.spec.containers or [])
+            ready_containers = sum(
+                1 for status in statuses if status.ready
+            )
+            if phase == "Running" and ready_containers == total_containers:
+                continue
+
+            problem_items.append(
+                {
+                    "namespace": pod.metadata.namespace or "default",
+                    "name": getattr(pod.metadata, "name", "unknown"),
+                    "phase": phase,
+                    "ready_containers": ready_containers,
+                    "total_containers": total_containers,
+                    "reason": self.pod_reason(pod),
+                }
+            )
+
+        problem_items.sort(
+            key=lambda item: (item["namespace"], item["name"])
+        )
+        problem_by_namespace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in problem_items:
+            if len(problem_by_namespace[item["namespace"]]) < 10:
+                problem_by_namespace[item["namespace"]].append(item)
 
         return {
             "total": len(pods),
@@ -164,7 +199,157 @@ class ClusterCollector:
             "succeeded": phase_counts["Succeeded"],
             "unknown": phase_counts["Unknown"],
             "phase_counts": dict(sorted(phase_counts.items())),
+            "problem_count": len(problem_items),
+            "problem_items": problem_items[:DETAIL_LIMIT],
+            "problem_more_count": max(0, len(problem_items) - DETAIL_LIMIT),
+            "problem_by_namespace": dict(problem_by_namespace),
         }
+
+    @staticmethod
+    def pod_reason(pod: client.V1Pod) -> str:
+        statuses = list(
+            getattr(pod.status, "init_container_statuses", None) or []
+        )
+        statuses.extend(
+            getattr(pod.status, "container_statuses", None) or []
+        )
+        for status in statuses:
+            state = getattr(status, "state", None)
+            waiting = getattr(state, "waiting", None)
+            if waiting and waiting.reason:
+                return waiting.reason
+            terminated = getattr(state, "terminated", None)
+            if terminated and terminated.reason:
+                return terminated.reason
+        return getattr(pod.status, "reason", None) or ""
+
+    def get_restart_summary(
+        self,
+        pods: list[client.V1Pod],
+    ) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        crashloop_count = 0
+
+        for pod in pods:
+            if (pod.status.phase or "Unknown") == "Succeeded":
+                continue
+            statuses = list(
+                getattr(pod.status, "init_container_statuses", None) or []
+            )
+            statuses.extend(
+                getattr(pod.status, "container_statuses", None) or []
+            )
+            reasons = []
+            for status in statuses:
+                waiting = getattr(
+                    getattr(status, "state", None), "waiting", None
+                )
+                if waiting and waiting.reason:
+                    reasons.append(waiting.reason)
+            if "CrashLoopBackOff" in reasons:
+                crashloop_count += 1
+
+            restart_count = sum(
+                getattr(status, "restart_count", 0) or 0
+                for status in statuses
+            )
+            if restart_count <= 0 and not reasons:
+                continue
+            items.append(
+                {
+                    "namespace": pod.metadata.namespace or "default",
+                    "name": getattr(pod.metadata, "name", "unknown"),
+                    "restart_count": restart_count,
+                    "reason": reasons[0] if reasons else self.pod_reason(pod),
+                }
+            )
+
+        items.sort(
+            key=lambda item: (
+                -item["restart_count"],
+                item["namespace"],
+                item["name"],
+            )
+        )
+        by_namespace: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in items:
+            if len(by_namespace[item["namespace"]]) < 10:
+                by_namespace[item["namespace"]].append(item)
+        return {
+            "crashloop_count": crashloop_count,
+            "items": items[:DETAIL_LIMIT],
+            "by_namespace": dict(by_namespace),
+        }
+
+    def get_cluster_operator_summary(self) -> dict[str, Any]:
+        try:
+            result = self.custom_api.list_cluster_custom_object(
+                group="config.openshift.io",
+                version="v1",
+                plural="clusteroperators",
+                _request_timeout=API_REQUEST_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.warning("ClusterOperator data unavailable: %s", exc)
+            return {
+                "available": False,
+                "healthy": 0,
+                "degraded": 0,
+                "progressing": 0,
+                "unavailable": 0,
+                "items": [],
+            }
+
+        items: list[dict[str, Any]] = []
+        counts = {
+            "healthy": 0,
+            "degraded": 0,
+            "progressing": 0,
+            "unavailable": 0,
+        }
+        for operator in result.get("items", []):
+            conditions = {
+                condition.get("type"): condition
+                for condition in operator.get("status", {}).get(
+                    "conditions", []
+                )
+            }
+            available = conditions.get("Available", {}).get("status") == "True"
+            progressing = (
+                conditions.get("Progressing", {}).get("status") == "True"
+            )
+            degraded = conditions.get("Degraded", {}).get("status") == "True"
+            if degraded:
+                counts["degraded"] += 1
+            if progressing:
+                counts["progressing"] += 1
+            if not available:
+                counts["unavailable"] += 1
+            if available and not progressing and not degraded:
+                counts["healthy"] += 1
+
+            relevant = (
+                conditions.get("Degraded")
+                if degraded
+                else conditions.get("Progressing")
+                if progressing
+                else conditions.get("Available")
+            ) or {}
+            items.append(
+                {
+                    "name": operator.get("metadata", {}).get(
+                        "name", "unknown"
+                    ),
+                    "available": available,
+                    "progressing": progressing,
+                    "degraded": degraded,
+                    "reason": relevant.get("reason", ""),
+                    "message": relevant.get("message", ""),
+                }
+            )
+
+        items.sort(key=lambda item: item["name"])
+        return {"available": True, **counts, "items": items}
 
     def get_namespace_count(
         self,
@@ -247,6 +432,7 @@ class ClusterCollector:
                 "completely_undefined": 0,
             }
         )
+        missing_details: list[dict[str, str]] = []
 
         for namespace in namespace_list:
             namespace_name = namespace.metadata.name
@@ -291,15 +477,31 @@ class ClusterCollector:
                 missing = 0
                 if "cpu" not in requests:
                     namespace_item["missing_cpu_request"] += 1
+                    missing_details.append(
+                        self.missing_detail(pod, container_item, "CPU Request")
+                    )
                     missing += 1
                 if "cpu" not in limits:
                     namespace_item["missing_cpu_limit"] += 1
+                    missing_details.append(
+                        self.missing_detail(pod, container_item, "CPU Limit")
+                    )
                     missing += 1
                 if "memory" not in requests:
                     namespace_item["missing_memory_request"] += 1
+                    missing_details.append(
+                        self.missing_detail(
+                            pod, container_item, "Memory Request"
+                        )
+                    )
                     missing += 1
                 if "memory" not in limits:
                     namespace_item["missing_memory_limit"] += 1
+                    missing_details.append(
+                        self.missing_detail(
+                            pod, container_item, "Memory Limit"
+                        )
+                    )
                     missing += 1
 
                 if missing == 4:
@@ -313,6 +515,24 @@ class ClusterCollector:
         return {
             "cluster": cluster,
             "namespaces": namespace_items,
+            "missing_details": missing_details[:DETAIL_LIMIT],
+            "missing_detail_count": len(missing_details),
+            "missing_detail_more_count": max(
+                0, len(missing_details) - DETAIL_LIMIT
+            ),
+        }
+
+    @staticmethod
+    def missing_detail(
+        pod: client.V1Pod,
+        container_item: client.V1Container,
+        field: str,
+    ) -> dict[str, str]:
+        return {
+            "namespace": pod.metadata.namespace or "default",
+            "pod": getattr(pod.metadata, "name", "unknown"),
+            "container": getattr(container_item, "name", "unknown"),
+            "field": field,
         }
 
     def collect_dashboard(self) -> dict[str, Any]:
@@ -326,14 +546,18 @@ class ClusterCollector:
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
 
+        resource_summary = self.get_resource_summary(
+            nodes,
+            pods,
+            namespaces,
+        )
+
         return {
             "version": self.get_cluster_version(),
             "nodes": self.get_node_summary(nodes),
             "pods": self.get_pod_summary(pods),
+            "restarts": self.get_restart_summary(pods),
+            "cluster_operators": self.get_cluster_operator_summary(),
             "namespace_count": self.get_namespace_count(namespaces),
-            "resources": self.get_resource_summary(
-                nodes,
-                pods,
-                namespaces,
-            ),
+            "resources": resource_summary,
         }

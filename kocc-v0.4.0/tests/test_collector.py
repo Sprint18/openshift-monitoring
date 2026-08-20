@@ -8,8 +8,28 @@ def item_list(items: list[object]) -> SimpleNamespace:
     return SimpleNamespace(items=items)
 
 
-def container(resources: object | None = None) -> SimpleNamespace:
-    return SimpleNamespace(resources=resources)
+def container(
+    resources: object | None = None,
+    name: str = "app",
+) -> SimpleNamespace:
+    return SimpleNamespace(resources=resources, name=name)
+
+
+def container_status(
+    ready: bool,
+    restarts: int = 0,
+    waiting_reason: str | None = None,
+) -> SimpleNamespace:
+    waiting = (
+        SimpleNamespace(reason=waiting_reason)
+        if waiting_reason
+        else None
+    )
+    return SimpleNamespace(
+        ready=ready,
+        restart_count=restarts,
+        state=SimpleNamespace(waiting=waiting, terminated=None),
+    )
 
 
 def pod(
@@ -17,10 +37,19 @@ def pod(
     phase: str,
     containers: list[object],
     init_containers: list[object] | None = None,
+    name: str = "pod-1",
+    statuses: list[object] | None = None,
+    init_statuses: list[object] | None = None,
+    reason: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        metadata=SimpleNamespace(namespace=namespace),
-        status=SimpleNamespace(phase=phase),
+        metadata=SimpleNamespace(namespace=namespace, name=name),
+        status=SimpleNamespace(
+            phase=phase,
+            reason=reason,
+            container_statuses=statuses or [],
+            init_container_statuses=init_statuses or [],
+        ),
         spec=SimpleNamespace(
             containers=containers,
             init_containers=init_containers or [],
@@ -61,7 +90,156 @@ def test_resource_summary_handles_missing_resources_and_terminal_pods(
         "empty",
     ]
     assert result["namespaces"][0]["completely_undefined"] == 1
+    assert result["missing_detail_count"] == 4
+    assert result["missing_details"][0] == {
+        "namespace": "active",
+        "pod": "pod-1",
+        "container": "app",
+        "field": "CPU Request",
+    }
     assert core_api_class.called
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_pod_summary_detects_non_ready_and_ignores_succeeded(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+) -> None:
+    collector = ClusterCollector(Mock())
+    pods = [
+        pod("ns", "Running", [container()], statuses=[container_status(True)]),
+        pod(
+            "ns",
+            "Running",
+            [container()],
+            name="unready",
+            statuses=[container_status(False)],
+        ),
+        pod("ns", "Pending", [container()], name="pending"),
+        pod("ns", "Succeeded", [container()], name="completed"),
+    ]
+
+    result = collector.get_pod_summary(pods)
+
+    assert result["problem_count"] == 2
+    assert [item["name"] for item in result["problem_items"]] == [
+        "pending",
+        "unready",
+    ]
+    assert "completed" not in {
+        item["name"] for item in result["problem_items"]
+    }
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_pod_summary_reports_all_ready(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+) -> None:
+    collector = ClusterCollector(Mock())
+    healthy = pod(
+        "ns",
+        "Running",
+        [container(), container(name="sidecar")],
+        statuses=[container_status(True), container_status(True)],
+    )
+
+    result = collector.get_pod_summary([healthy])
+
+    assert result["problem_count"] == 0
+    assert result["problem_items"] == []
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_restart_summary_detects_crashloop_and_ranks_restarts(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+) -> None:
+    collector = ClusterCollector(Mock())
+    pods = [
+        pod(
+            "ns",
+            "Running",
+            [container()],
+            name="crashing",
+            statuses=[container_status(False, 8, "CrashLoopBackOff")],
+        ),
+        pod(
+            "ns",
+            "Running",
+            [container()],
+            name="restarted",
+            statuses=[container_status(True, 3)],
+        ),
+        pod(
+            "ns",
+            "Succeeded",
+            [container()],
+            name="job",
+            statuses=[container_status(False, 20)],
+        ),
+    ]
+
+    result = collector.get_restart_summary(pods)
+
+    assert result["crashloop_count"] == 1
+    assert [item["name"] for item in result["items"]] == [
+        "crashing",
+        "restarted",
+    ]
+    assert result["items"][0]["reason"] == "CrashLoopBackOff"
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_cluster_operator_summary_degrades_when_api_is_unavailable(
+    _core_api_class: Mock,
+    custom_api_class: Mock,
+) -> None:
+    custom_api_class.return_value.list_cluster_custom_object.side_effect = (
+        PermissionError("forbidden")
+    )
+
+    result = ClusterCollector(Mock()).get_cluster_operator_summary()
+
+    assert result["available"] is False
+    assert result["items"] == []
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_cluster_operator_summary_counts_conditions(
+    _core_api_class: Mock,
+    custom_api_class: Mock,
+) -> None:
+    custom_api_class.return_value.list_cluster_custom_object.return_value = {
+        "items": [
+            {
+                "metadata": {"name": "network"},
+                "status": {
+                    "conditions": [
+                        {"type": "Available", "status": "False"},
+                        {
+                            "type": "Progressing",
+                            "status": "True",
+                            "reason": "Updating",
+                        },
+                        {"type": "Degraded", "status": "True"},
+                    ]
+                },
+            }
+        ]
+    }
+
+    result = ClusterCollector(Mock()).get_cluster_operator_summary()
+
+    assert result["available"] is True
+    assert result["degraded"] == 1
+    assert result["progressing"] == 1
+    assert result["unavailable"] == 1
 
 
 @patch("app.collector.client.CustomObjectsApi")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,83 @@ def resource_severity(value: int, capacity: int) -> str:
     if ratio >= 10:
         return "warning"
     return "normal"
+
+
+def health_score(data: dict[str, Any]) -> dict[str, Any]:
+    """Return an explainable 100-point score.
+
+    Nodes account for 30 points, non-ready pods for 20, four resource
+    pressure/overcommit signals for 40, and ClusterOperators for 10. Missing
+    optional ClusterOperator data is neutral instead of penalizing the cluster.
+    """
+    nodes = data["nodes"]
+    pods = data["pods"]
+    cluster = data["resources"]["cluster"]
+    operators = data["cluster_operators"]
+
+    node_penalty = round(
+        30 * nodes["not_ready"] / max(nodes["total"], 1)
+    )
+    active_pods = max(pods["total"] - pods["succeeded"], 1)
+    pod_penalty = round(
+        20 * min(pods["problem_count"], active_pods) / active_pods
+    )
+
+    ratios = {
+        "cpu_request": percentage(
+            cluster["cpu_request"], cluster["cpu_capacity"]
+        ),
+        "cpu_limit": percentage(
+            cluster["cpu_limit"], cluster["cpu_capacity"]
+        ),
+        "memory_request": percentage(
+            cluster["memory_request"], cluster["memory_capacity"]
+        ),
+        "memory_limit": percentage(
+            cluster["memory_limit"], cluster["memory_capacity"]
+        ),
+    }
+
+    def ratio_penalty(ratio: float, is_limit: bool) -> int:
+        healthy_threshold = 100 if is_limit else 80
+        critical_threshold = 150 if is_limit else 100
+        if ratio <= healthy_threshold:
+            return 0
+        if ratio <= critical_threshold:
+            return 5
+        return 10
+
+    resource_penalty = sum(
+        ratio_penalty(ratio, key.endswith("limit"))
+        for key, ratio in ratios.items()
+    )
+    operator_penalty = 0
+    if operators["available"]:
+        operator_penalty = min(
+            10,
+            operators["degraded"] * 3
+            + operators["unavailable"] * 2
+            + operators["progressing"],
+        )
+
+    score = max(
+        0,
+        100
+        - node_penalty
+        - pod_penalty
+        - resource_penalty
+        - operator_penalty,
+    )
+    status = "Healthy" if score >= 90 else "Warning" if score >= 75 else "Critical"
+    return {
+        "score": score,
+        "status": status,
+        "node_penalty": node_penalty,
+        "pod_penalty": pod_penalty,
+        "resource_penalty": resource_penalty,
+        "operator_penalty": operator_penalty,
+        "signals": ratios,
+    }
 
 
 def top_resource_limits(
@@ -113,8 +192,30 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
         role_counts.setdefault(role, 0)
 
     pods = data.setdefault("pods", {})
-    for key in ("total", "running", "pending", "failed"):
+    for key in (
+        "total",
+        "running",
+        "pending",
+        "failed",
+        "succeeded",
+        "unknown",
+        "problem_count",
+        "problem_more_count",
+    ):
         pods.setdefault(key, 0)
+    pods.setdefault("problem_items", [])
+    pods.setdefault("problem_by_namespace", {})
+
+    restarts = data.setdefault("restarts", {})
+    restarts.setdefault("crashloop_count", 0)
+    restarts.setdefault("items", [])
+    restarts.setdefault("by_namespace", {})
+
+    operators = data.setdefault("cluster_operators", {})
+    operators.setdefault("available", False)
+    for key in ("healthy", "degraded", "progressing", "unavailable"):
+        operators.setdefault(key, 0)
+    operators.setdefault("items", [])
 
     resources = data.setdefault("resources", {})
     cluster_resources = resources.setdefault("cluster", {})
@@ -132,6 +233,9 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     ):
         cluster_resources.setdefault(key, 0)
     resources.setdefault("namespaces", [])
+    resources.setdefault("missing_details", [])
+    resources.setdefault("missing_detail_count", 0)
+    resources.setdefault("missing_detail_more_count", 0)
 
     for node in nodes["items"]:
         node.setdefault("name", "N/A")
@@ -172,6 +276,7 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
+    started_at = time.perf_counter()
     definition = get_cluster_definition(cluster_key)
     api_client = new_cluster_client(cluster_key)
 
@@ -217,19 +322,34 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
     )
     cluster_resources["cpu_request_percent"] = percentage(
         cluster_resources["cpu_request"],
-        cluster_resources["cpu_allocatable"],
+        cluster_resources["cpu_capacity"],
     )
     cluster_resources["cpu_limit_percent"] = percentage(
         cluster_resources["cpu_limit"],
-        cluster_resources["cpu_allocatable"],
+        cluster_resources["cpu_capacity"],
     )
     cluster_resources["memory_request_percent"] = percentage(
         cluster_resources["memory_request"],
-        cluster_resources["memory_allocatable"],
+        cluster_resources["memory_capacity"],
     )
     cluster_resources["memory_limit_percent"] = percentage(
         cluster_resources["memory_limit"],
-        cluster_resources["memory_allocatable"],
+        cluster_resources["memory_capacity"],
+    )
+    cluster_resources["cpu_overcommit_ratio"] = round(
+        cluster_resources["cpu_limit_percent"] / 100, 2
+    )
+    cluster_resources["memory_overcommit_ratio"] = round(
+        cluster_resources["memory_limit_percent"] / 100, 2
+    )
+    cluster_resources["cpu_overcommitted"] = (
+        cluster_resources["cpu_limit"] > cluster_resources["cpu_capacity"]
+        and cluster_resources["cpu_capacity"] > 0
+    )
+    cluster_resources["memory_overcommitted"] = (
+        cluster_resources["memory_limit"]
+        > cluster_resources["memory_capacity"]
+        and cluster_resources["memory_capacity"] > 0
     )
 
     for node in data["nodes"]["items"]:
@@ -296,6 +416,11 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
             cluster_resources["memory_capacity"],
         ),
     }
+    data["health"] = health_score(data)
+    data["collected_at"] = datetime.now().astimezone().strftime("%H:%M:%S")
+    data["collection_duration_seconds"] = round(
+        time.perf_counter() - started_at, 2
+    )
 
     return data
 

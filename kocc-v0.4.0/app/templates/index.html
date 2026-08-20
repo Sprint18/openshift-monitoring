@@ -68,6 +68,7 @@
             margin-bottom: 20px;
         }
         .card {
+            position: relative;
             background: white;
             border-radius: 6px;
             padding: 18px;
@@ -78,6 +79,35 @@
             color: #6a6e73;
             font-size: 14px;
         }
+        .interactive-card { cursor: help; }
+        .interactive-card:focus {
+            outline: 3px solid #73bcf7;
+            outline-offset: 2px;
+        }
+        .popover {
+            display: none;
+            position: absolute;
+            top: calc(100% - 8px);
+            left: 12px;
+            z-index: 20;
+            width: min(480px, calc(100vw - 80px));
+            max-height: 320px;
+            overflow: auto;
+            padding: 14px;
+            border: 1px solid #8a8d90;
+            border-radius: 6px;
+            background: white;
+            color: #151515;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+            cursor: default;
+        }
+        .interactive-card:hover .popover,
+        .interactive-card:focus .popover,
+        .interactive-card:focus-within .popover,
+        .interactive-card.is-open .popover { display: block; }
+        .popover ul { margin: 0; padding-left: 20px; }
+        .popover li { margin: 0 0 8px; }
+        .popover-title { margin: 0 0 10px; font-weight: bold; }
         .value { font-size: 27px; font-weight: bold; }
         .subvalue {
             margin-top: 7px;
@@ -223,6 +253,68 @@
             height: 100%;
             background: #0066cc;
         }
+        .progress.request > span { background: #0066cc; }
+        .progress.limit > span { background: #8a8d90; }
+        .progress.overcommitted > span { background: #c9190b; }
+        .resource-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .resource-overview .card { display: grid; gap: 10px; }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .overcommit-badge {
+            display: inline-block;
+            padding: 3px 7px;
+            border-radius: 10px;
+            color: #7d1007;
+            background: #faeae8;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .health-Healthy { color: #3e8635; }
+        .health-Warning { color: #f0ab00; }
+        .health-Critical { color: #c9190b; }
+        .action-button,
+        .namespace-link {
+            border: 0;
+            color: #0066cc;
+            background: transparent;
+            font: inherit;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .action-button {
+            padding: 9px 12px;
+            border: 1px solid #0066cc;
+            border-radius: 4px;
+            text-decoration: none;
+        }
+        .refresh-meta {
+            display: flex;
+            align-items: end;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .drilldown {
+            display: none;
+            margin: 12px 0 16px;
+            padding: 16px;
+            border-left: 5px solid #0066cc;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+        }
+        .drilldown.is-open { display: block; }
+        @media (max-width: 600px) {
+            main { padding: 18px 14px 40px; }
+            header { padding: 16px 14px; }
+            .ranking-grid { grid-template-columns: 1fr; }
+            .popover { width: calc(100vw - 56px); left: 0; }
+        }
         .resource-cell { min-width: 210px; }
         .resource-cell small {
             display: block;
@@ -261,11 +353,31 @@
 </header>
 
 <main>
-    <p class="selected">
-        Görüntülenen cluster:
-        <strong>{{ selected_cluster_name }}</strong>
-        <span class="release">v{{ release }}</span>
-    </p>
+    <div class="table-toolbar">
+        <p class="selected">
+            Görüntülenen cluster:
+            <strong>{{ selected_cluster_name }}</strong>
+            <span class="release">v{{ release }}</span>
+        </p>
+        {% if not error %}
+        <div class="refresh-meta">
+            <div class="field-group">
+                <label for="refresh-interval">Auto Refresh</label>
+                <select id="refresh-interval">
+                    <option value="0">Manual</option>
+                    <option value="30">30 sec</option>
+                    <option value="60">1 min</option>
+                    <option value="300">5 min</option>
+                </select>
+            </div>
+            <div>
+                Last Refresh: <strong>{{ data["collected_at"] }}</strong><br>
+                Collection Time:
+                <strong>{{ data["collection_duration_seconds"] }} sec</strong>
+            </div>
+        </div>
+        {% endif %}
+    </div>
 
     {% if error %}
     <div class="error">
@@ -279,7 +391,7 @@
             <h3>OpenShift Version</h3>
             <div class="value">{{ data["version"] }}</div>
         </div>
-        <div class="card">
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Node detaylarını göster">
             <h3>Node</h3>
             <div class="value">{{ data["nodes"]["total"] }}</div>
             <div class="subvalue">
@@ -289,8 +401,22 @@
                     {{ data["nodes"]["not_ready"] }} NotReady
                 </span>
             </div>
+            <div class="popover">
+                <p class="popover-title">Node Details</p>
+                <ul>
+                    {% for node in data["nodes"]["items"] %}
+                    <li class="{% if not node["ready"] %}danger{% endif %}">
+                        <strong>{{ node["name"] }}</strong> —
+                        {{ node["roles"]|join(", ") }} —
+                        {% if node["ready"] %}Ready{% else %}NotReady{% endif %} —
+                        CPU {{ node["cpu_capacity_text"] }} —
+                        Memory {{ node["memory_capacity_text"] }}
+                    </li>
+                    {% else %}<li>No node data</li>{% endfor %}
+                </ul>
+            </div>
         </div>
-        <div class="card">
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Problemli podları göster">
             <h3>Pod</h3>
             <div class="value">{{ data["pods"]["total"] }}</div>
             <div class="subvalue">
@@ -298,71 +424,73 @@
                 {{ data["pods"]["pending"] }} Pending ·
                 {{ data["pods"]["failed"] }} Failed
             </div>
+            <div class="popover">
+                <p class="popover-title">Pods Not Ready</p>
+                {% if data["pods"]["problem_items"] %}
+                <ul>
+                    {% for pod in data["pods"]["problem_items"] %}
+                    <li>
+                        <strong>{{ pod["namespace"] }} / {{ pod["name"] }}</strong>
+                        — {{ pod["phase"] }} —
+                        {{ pod["ready_containers"] }}/{{ pod["total_containers"] }} Ready
+                        {% if pod["reason"] %}— {{ pod["reason"] }}{% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if data["pods"]["problem_more_count"] %}
+                <strong>+ {{ data["pods"]["problem_more_count"] }} more</strong>
+                {% endif %}
+                {% else %}<p>All pods are Ready</p>{% endif %}
+            </div>
         </div>
         <div class="card">
             <h3>Namespace</h3>
             <div class="value">{{ data["namespace_count"] }}</div>
         </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Health score detaylarını göster">
+            <h3>Overall Health</h3>
+            <div class="value health-{{ data["health"]["status"] }}">
+                {{ data["health"]["score"] }}/100
+            </div>
+            <div class="subvalue">{{ data["health"]["status"] }}</div>
+            <div class="popover">
+                <p class="popover-title">Health Score Deductions</p>
+                <ul>
+                    <li>Nodes Ready: -{{ data["health"]["node_penalty"] }}</li>
+                    <li>Non-ready Pods: -{{ data["health"]["pod_penalty"] }}</li>
+                    <li>CPU Request / Capacity: %{{ data["health"]["signals"]["cpu_request"] }}</li>
+                    <li>CPU Limit / Capacity: %{{ data["health"]["signals"]["cpu_limit"] }}</li>
+                    <li>Memory Request / Capacity: %{{ data["health"]["signals"]["memory_request"] }}</li>
+                    <li>Memory Limit / Capacity: %{{ data["health"]["signals"]["memory_limit"] }}</li>
+                    <li>Resource Pressure deduction: -{{ data["health"]["resource_penalty"] }}</li>
+                    <li>ClusterOperators deduction: -{{ data["health"]["operator_penalty"] }}</li>
+                </ul>
+            </div>
+        </div>
     </div>
 
-    <h2>Cluster Resource Özeti</h2>
-    <div class="cards">
+    <h2>Resource Capacity / Overcommit</h2>
+    <div class="resource-overview">
+        {% for resource, label in [("cpu", "CPU"), ("memory", "Memory")] %}
         <div class="card">
-            <h3>CPU Allocatable</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["cpu_allocatable_text"] }}
+            <h3>{{ label }}</h3>
+            <div class="metric-row"><span>Capacity</span><strong>{{ data["resources"]["cluster"][resource + "_capacity_text"] }}</strong></div>
+            <div class="metric-row"><span>Requests</span><strong>{{ data["resources"]["cluster"][resource + "_request_text"] }} — %{{ data["resources"]["cluster"][resource + "_request_percent"] }}</strong></div>
+            <div class="progress request"><span style="width: {{ [data["resources"]["cluster"][resource + "_request_percent"], 100]|min }}%"></span></div>
+            <div class="metric-row">
+                <span>Limits</span>
+                <strong>
+                    {{ data["resources"]["cluster"][resource + "_limit_text"] }} —
+                    %{{ data["resources"]["cluster"][resource + "_limit_percent"] }}
+                    {% if data["resources"]["cluster"][resource + "_overcommitted"] %}
+                    <span class="overcommit-badge">OVERCOMMITTED</span>
+                    {% endif %}
+                </strong>
             </div>
-            <div class="subvalue">
-                Capacity:
-                {{ data["resources"]["cluster"]["cpu_capacity_text"] }}
-            </div>
+            <div class="progress limit {% if data["resources"]["cluster"][resource + "_overcommitted"] %}overcommitted{% endif %}"><span style="width: {{ [data["resources"]["cluster"][resource + "_limit_percent"], 100]|min }}%"></span></div>
+            <div class="subvalue">Overcommit ratio: {{ data["resources"]["cluster"][resource + "_overcommit_ratio"] }}x</div>
         </div>
-        <div class="card">
-            <h3>CPU Request</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["cpu_request_text"] }}
-            </div>
-            <div class="subvalue">
-                %{{ data["resources"]["cluster"]["cpu_request_percent"] }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>CPU Limit</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["cpu_limit_text"] }}
-            </div>
-            <div class="subvalue">
-                %{{ data["resources"]["cluster"]["cpu_limit_percent"] }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Allocatable</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["memory_allocatable_text"] }}
-            </div>
-            <div class="subvalue">
-                Capacity:
-                {{ data["resources"]["cluster"]["memory_capacity_text"] }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Request</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["memory_request_text"] }}
-            </div>
-            <div class="subvalue">
-                %{{ data["resources"]["cluster"]["memory_request_percent"] }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Limit</h3>
-            <div class="value">
-                {{ data["resources"]["cluster"]["memory_limit_text"] }}
-            </div>
-            <div class="subvalue">
-                %{{ data["resources"]["cluster"]["memory_limit_percent"] }}
-            </div>
-        </div>
+        {% endfor %}
         <div class="card">
             <h3>Disk Capacity</h3>
             <div class="value">
@@ -371,6 +499,49 @@
             <div class="subvalue">
                 Allocatable:
                 {{ data["resources"]["cluster"]["storage_allocatable_text"] }}
+            </div>
+        </div>
+    </div>
+
+    <h2>Operational Health</h2>
+    <div class="cards">
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Eksik resource alanlarını göster">
+            <h3>Missing Requests / Limits</h3>
+            <div class="value">{{ data["resources"]["missing_detail_count"] }}</div>
+            <div class="popover">
+                <p class="popover-title">Missing Resource Fields</p>
+                {% if data["resources"]["missing_details"] %}<ul>
+                    {% for item in data["resources"]["missing_details"] %}
+                    <li>{{ item["namespace"] }} / {{ item["pod"] }} / {{ item["container"] }} — {{ item["field"] }} missing</li>
+                    {% endfor %}
+                </ul>{% else %}<p>No missing resource fields</p>{% endif %}
+                {% if data["resources"]["missing_detail_more_count"] %}<strong>+ {{ data["resources"]["missing_detail_more_count"] }} more</strong>{% endif %}
+            </div>
+        </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="ClusterOperator detaylarını göster">
+            <h3>Cluster Operators</h3>
+            {% if data["cluster_operators"]["available"] %}
+            <div class="value">{{ data["cluster_operators"]["healthy"] }} Healthy</div>
+            <div class="subvalue">{{ data["cluster_operators"]["degraded"] }} Degraded · {{ data["cluster_operators"]["progressing"] }} Progressing · {{ data["cluster_operators"]["unavailable"] }} Unavailable</div>
+            {% else %}<div class="value warning">Unavailable</div>{% endif %}
+            <div class="popover">
+                <p class="popover-title">ClusterOperator Health</p>
+                {% if data["cluster_operators"]["available"] %}<ul>
+                    {% for operator in data["cluster_operators"]["items"] %}
+                    <li><strong>{{ operator["name"] }}</strong> — Available {{ operator["available"] }} · Progressing {{ operator["progressing"] }} · Degraded {{ operator["degraded"] }}{% if operator["reason"] %} — {{ operator["reason"] }}{% endif %}{% if operator["message"] %}: {{ operator["message"] }}{% endif %}</li>
+                    {% endfor %}
+                </ul>{% else %}<p>ClusterOperator data unavailable</p>{% endif %}
+            </div>
+        </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Restart detaylarını göster">
+            <h3>CrashLoopBackOff</h3>
+            <div class="value {% if data["restarts"]["crashloop_count"] %}danger{% endif %}">{{ data["restarts"]["crashloop_count"] }}</div>
+            <div class="subvalue">Top restarted pods</div>
+            <div class="popover">
+                <p class="popover-title">Pod Restarts</p>
+                {% if data["restarts"]["items"] %}<ul>
+                    {% for pod in data["restarts"]["items"] %}<li>{{ pod["namespace"] }} / {{ pod["name"] }} — {{ pod["restart_count"] }} restarts{% if pod["reason"] %} — {{ pod["reason"] }}{% endif %}</li>{% endfor %}
+                </ul>{% else %}<p>No pod restarts</p>{% endif %}
             </div>
         </div>
     </div>
@@ -470,7 +641,7 @@
                         {% for item in data["resources"]["top_limits"]["cpu"] %}
                         <tr data-rank="{{ item["rank"] }}">
                             <td>{{ item["rank"] }}</td>
-                            <td>{{ item["namespace"] }}</td>
+                            <td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td>
                             <td>{{ item["request_text"] }}</td>
                             <td>{{ item["limit_text"] }}</td>
                             <td>%{{ item["capacity_percent"] }}</td>
@@ -499,7 +670,7 @@
                         {% for item in data["resources"]["top_limits"]["memory"] %}
                         <tr data-rank="{{ item["rank"] }}">
                             <td>{{ item["rank"] }}</td>
-                            <td>{{ item["namespace"] }}</td>
+                            <td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td>
                             <td>{{ item["request_text"] }}</td>
                             <td>{{ item["limit_text"] }}</td>
                             <td>%{{ item["capacity_percent"] }}</td>
@@ -517,22 +688,19 @@
     <div class="table-toolbar">
         <div class="field-group">
             <label for="namespace-filter">Namespace</label>
-            <input
-                id="namespace-filter"
-                list="namespace-options"
-                value="All Namespaces"
-                autocomplete="off"
-                aria-controls="namespace-resource-table"
-            >
-            <datalist id="namespace-options">
-                <option value="All Namespaces"></option>
+            <select id="namespace-filter" aria-controls="namespace-resource-table">
+                <option value="">All Namespaces</option>
                 {% for namespace in data["resources"]["namespace_options"] %}
-                <option value="{{ namespace }}"></option>
+                <option value="{{ namespace }}">{{ namespace }}</option>
                 {% endfor %}
-            </datalist>
+            </select>
         </div>
-        <div id="namespace-result-count" aria-live="polite"></div>
+        <div>
+            <span id="namespace-result-count" aria-live="polite"></span>
+            <button type="button" class="action-button" id="export-csv">Export CSV</button>
+        </div>
     </div>
+    <section id="namespace-drilldown" class="drilldown" aria-live="polite"></section>
     <div class="table-wrapper namespace-table-wrapper">
         <table id="namespace-resource-table">
             <thead>
@@ -579,7 +747,7 @@
                     data-missing-memory-limit="{{ namespace["missing_memory_limit"] }}"
                     data-completely-undefined="{{ namespace["completely_undefined"] }}"
                 >
-                    <td>{{ namespace["namespace"] }}</td>
+                    <td><button class="namespace-link" data-namespace-link="{{ namespace["namespace"] }}">{{ namespace["namespace"] }}</button></td>
                     <td>{{ namespace["pod_count"] }}</td>
                     <td>{{ namespace["container_count"] }}</td>
                     <td>{{ namespace["cpu_request_text"] }}</td>
@@ -617,8 +785,17 @@
     {% endif %}
 </main>
 {% if not error %}
+<script id="dashboard-data" type="application/json">{{ {
+    "cluster": selected_cluster,
+    "namespaces": data["resources"]["namespaces"],
+    "problemPods": data["pods"]["problem_by_namespace"],
+    "restartPods": data["restarts"]["by_namespace"]
+}|tojson }}</script>
 <script>
-    (() => {
+    const initializeDashboard = () => {
+        const dashboardData = JSON.parse(
+            document.getElementById("dashboard-data").textContent
+        );
         const rankingSize = document.getElementById("ranking-size");
         const updateRankings = () => {
             const limit = Number(rankingSize.value);
@@ -634,21 +811,24 @@
         const body = document.getElementById("namespace-resource-body");
         const count = document.getElementById("namespace-result-count");
         const rows = Array.from(body.querySelectorAll("tr[data-namespace]"));
+        const filterStorageKey = `namespaceFilter:${dashboardData.cluster}`;
+        const storedNamespace = sessionStorage.getItem(filterStorageKey) || "";
+        filter.value = Array.from(filter.options)
+            .some((option) => option.value === storedNamespace)
+            ? storedNamespace : "";
         const updateNamespaceFilter = () => {
-            const query = filter.value.trim().toLocaleLowerCase("tr");
+            const selectedNamespace = filter.value;
             let visible = 0;
             rows.forEach((row) => {
-                const namespace = row.dataset.namespace
-                    .toLocaleLowerCase("tr");
-                const matches = query === "" ||
-                    query === "all namespaces" ||
-                    namespace.includes(query);
+                const matches = selectedNamespace === "" ||
+                    row.dataset.namespace === selectedNamespace;
                 row.hidden = !matches;
                 if (matches) visible += 1;
             });
             count.textContent = `${visible} namespace gösteriliyor`;
+            sessionStorage.setItem(filterStorageKey, selectedNamespace);
         };
-        filter.addEventListener("input", updateNamespaceFilter);
+        filter.addEventListener("change", updateNamespaceFilter);
         updateNamespaceFilter();
 
         document.querySelectorAll(".sort-button").forEach((button) => {
@@ -671,7 +851,105 @@
                 rows.forEach((row) => body.appendChild(row));
             });
         });
-    })();
+
+        const escapeHtml = (value) => String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        const drilldown = document.getElementById("namespace-drilldown");
+        const openDrilldown = (namespaceName) => {
+            const namespace = dashboardData.namespaces.find(
+                (item) => item.namespace === namespaceName
+            );
+            if (!namespace) return;
+            const problemPods = dashboardData.problemPods[namespaceName] || [];
+            const restartPods = dashboardData.restartPods[namespaceName] || [];
+            const list = (items, formatter, emptyText) => items.length
+                ? `<ul>${items.map((item) => `<li>${formatter(item)}</li>`).join("")}</ul>`
+                : `<p>${emptyText}</p>`;
+            drilldown.innerHTML = `
+                <h3>${escapeHtml(namespaceName)}</h3>
+                <p>${namespace.pod_count} pods · ${namespace.container_count} containers</p>
+                <p>CPU: ${escapeHtml(namespace.cpu_request_text)} request / ${escapeHtml(namespace.cpu_limit_text)} limit</p>
+                <p>Memory: ${escapeHtml(namespace.memory_request_text)} request / ${escapeHtml(namespace.memory_limit_text)} limit</p>
+                <h4>Non-ready Pods</h4>
+                ${list(problemPods, (pod) => `${escapeHtml(pod.name)} — ${escapeHtml(pod.phase)} — ${pod.ready_containers}/${pod.total_containers} Ready`, "No non-ready pod data")}
+                <h4>Top Restart Pods</h4>
+                ${list(restartPods, (pod) => `${escapeHtml(pod.name)} — ${pod.restart_count} restarts — ${escapeHtml(pod.reason || "")}`, "No pod restarts")}
+                <button type="button" class="action-button" id="close-drilldown">Close</button>
+            `;
+            drilldown.classList.add("is-open");
+            drilldown.scrollIntoView({behavior: "smooth", block: "nearest"});
+            document.getElementById("close-drilldown").addEventListener(
+                "click", () => drilldown.classList.remove("is-open")
+            );
+        };
+        document.querySelectorAll("[data-namespace-link]").forEach((link) => {
+            link.addEventListener("click", () => {
+                filter.value = link.dataset.namespaceLink;
+                updateNamespaceFilter();
+                openDrilldown(link.dataset.namespaceLink);
+            });
+        });
+
+        document.querySelectorAll(".interactive-card").forEach((card) => {
+            card.addEventListener("click", () => {
+                card.classList.toggle("is-open");
+            });
+            card.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    card.classList.toggle("is-open");
+                }
+                if (event.key === "Escape") card.classList.remove("is-open");
+            });
+        });
+
+        document.getElementById("export-csv").addEventListener("click", () => {
+            const headers = Array.from(
+                document.querySelectorAll("#namespace-resource-table thead th")
+            ).map((cell) => cell.textContent.trim().replace("↕", "").trim());
+            const visibleRows = rows.filter((row) => !row.hidden);
+            const csvRows = [headers, ...visibleRows.map((row) =>
+                Array.from(row.cells).map((cell) => cell.textContent.trim())
+            )];
+            const csv = csvRows.map((row) => row.map((value) =>
+                `"${value.replaceAll('"', '""')}"`
+            ).join(",")).join("\n");
+            const url = URL.createObjectURL(
+                new Blob([csv], {type: "text/csv;charset=utf-8"})
+            );
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${dashboardData.cluster}-namespace-resources.csv`;
+            link.click();
+            URL.revokeObjectURL(url);
+        });
+
+        const refresh = document.getElementById("refresh-interval");
+        const refreshKey = "dashboardRefreshSeconds";
+        refresh.value = localStorage.getItem(refreshKey) || "0";
+        let refreshTimer = null;
+        const scheduleRefresh = () => {
+            if (refreshTimer) window.clearTimeout(refreshTimer);
+            localStorage.setItem(refreshKey, refresh.value);
+            const seconds = Number(refresh.value);
+            if (seconds > 0) {
+                refreshTimer = window.setTimeout(
+                    () => window.location.reload(), seconds * 1000
+                );
+            }
+        };
+        refresh.addEventListener("change", scheduleRefresh);
+        scheduleRefresh();
+    };
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initializeDashboard);
+    } else {
+        initializeDashboard();
+    }
 </script>
 {% endif %}
 </body>

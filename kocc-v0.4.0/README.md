@@ -14,6 +14,30 @@ Python içerisinde API host, token veya CA değeri tanımlanmaz.
 OpenShift API çağrıları, bağlantı sorunlarının portal worker'larını
 süresiz bloke etmemesi için connect/read timeout ile yapılır.
 
+Dashboard; problemli Pod, restart/CrashLoop, eksik request/limit ve namespace
+resource detaylarını aynı Pod/Node/Namespace listelerinden üretir. Eklenen tek
+OpenShift API çağrısı `config.openshift.io/clusteroperators` listesidir. Bu
+kaynağa erişim yoksa yalnız ClusterOperator widget'ı `Unavailable` gösterir;
+diğer dashboard bölümleri çalışmaya devam eder.
+
+## Cluster health score
+
+Health score açıklanabilir 100 puanlık bir modeldir:
+
+- Node readiness: 30 puan. NotReady node oranına göre doğrusal kesinti yapılır.
+- Problemli Pod'lar: 20 puan. Succeeded Pod'lar çıkarıldıktan sonra non-ready
+  Pod oranına göre doğrusal kesinti yapılır.
+- Resource baskısı: 40 puan. CPU/Memory request için `%80` ve `%100`; limit
+  için `%100` ve `%150` eşikleri dört bağımsız sinyal olarak değerlendirilir.
+  Her sinyal sırasıyla `0`, `5` veya `10` puan keser.
+- ClusterOperator health: 10 puan. Her Degraded operator 3, Available olmayan
+  operator 2, Progressing operator 1 puan keser; toplam kesinti 10 ile
+  sınırlandırılır. Operator verisi alınamıyorsa cluster cezalandırılmaz.
+
+Sonuç `90–100 Healthy`, `75–89 Warning`, `0–74 Critical` olarak gösterilir.
+CPU ve Memory overcommit yüzdeleri request/limit değerlerinin cluster
+capacity'ye oranından hesaplanır.
+
 Python 3.12 build'i, eski çalışan monitoring portal ile aynı exact runtime
 sürümlerini kullanır:
 
