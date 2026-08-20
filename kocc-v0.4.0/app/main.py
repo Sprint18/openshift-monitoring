@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -22,18 +23,18 @@ from app.resource_parser import format_cpu, format_memory
 logger = logging.getLogger("kocc")
 
 app = FastAPI(
-    title="KKB OpenShift Control Center",
+    title="OpenShift Clusters Monitoring Platform",
     version="0.4.0",
 )
 
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {
         "status": "ok",
-        "application": "KOCC",
+        "application": "OpenShift Clusters Monitoring Platform",
         "version": app.version,
     }
 
@@ -44,13 +45,83 @@ def percentage(value: int, total: int) -> float:
     return round((value / total) * 100, 2)
 
 
+def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Fill optional dashboard fields without changing the API contract."""
+    data.setdefault("version", "N/A")
+    data.setdefault("namespace_count", 0)
+
+    nodes = data.setdefault("nodes", {})
+    nodes.setdefault("total", 0)
+    nodes.setdefault("ready", 0)
+    nodes.setdefault("not_ready", 0)
+    nodes.setdefault("items", [])
+    role_counts = nodes.setdefault("role_counts", {})
+    for role in ("master", "infra", "worker", "other"):
+        role_counts.setdefault(role, 0)
+
+    pods = data.setdefault("pods", {})
+    for key in ("total", "running", "pending", "failed"):
+        pods.setdefault(key, 0)
+
+    resources = data.setdefault("resources", {})
+    cluster_resources = resources.setdefault("cluster", {})
+    for key in (
+        "cpu_capacity",
+        "cpu_allocatable",
+        "cpu_request",
+        "cpu_limit",
+        "memory_capacity",
+        "memory_allocatable",
+        "memory_request",
+        "memory_limit",
+        "storage_capacity",
+        "storage_allocatable",
+    ):
+        cluster_resources.setdefault(key, 0)
+    resources.setdefault("namespaces", [])
+
+    for node in nodes["items"]:
+        node.setdefault("name", "N/A")
+        node.setdefault("roles", [])
+        node.setdefault("ready", False)
+        for key in (
+            "cpu_capacity",
+            "cpu_allocatable",
+            "memory_capacity",
+            "memory_allocatable",
+            "storage_capacity",
+            "storage_allocatable",
+        ):
+            node.setdefault(key, 0)
+
+    namespace_defaults = {
+        "namespace": "N/A",
+        "pod_count": 0,
+        "container_count": 0,
+        "cpu_request": 0,
+        "cpu_limit": 0,
+        "memory_request": 0,
+        "memory_limit": 0,
+        "missing_cpu_request": 0,
+        "missing_cpu_limit": 0,
+        "missing_memory_request": 0,
+        "missing_memory_limit": 0,
+        "completely_undefined": 0,
+    }
+    for namespace in resources["namespaces"]:
+        for key, default in namespace_defaults.items():
+            namespace.setdefault(key, default)
+
+    return data
+
+
 def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
     definition = get_cluster_definition(cluster_key)
     api_client = new_cluster_client(cluster_key)
 
     try:
         collector = ClusterCollector(api_client)
-        data = collector.collect_dashboard()
+        data = normalize_dashboard_data(collector.collect_dashboard())
     finally:
         api_client.close()
 

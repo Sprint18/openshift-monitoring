@@ -1,6 +1,7 @@
-# KKB OpenShift Control Center (KOCC) v0.4.0
+# OpenShift Clusters Monitoring Platform v0.4.0
 
-Bu release, KOCC portalına ilk multi-cluster altyapısını ekler.
+Bu release, OpenShift Clusters Monitoring Platform'a ilk multi-cluster
+altyapısını ekler.
 
 ## Cluster bağlantıları
 
@@ -66,10 +67,9 @@ veya cross-project RoleBinding gerekmez.
 ## Dynatrace exclusion
 
 KOCC workload'u Dynatrace injection dışındadır. Pod template üzerindeki
-`dynatrace.com/inject: "false"`, `oneagent.dynatrace.com/inject: "false"` ve
-`metadata-enrichment.dynatrace.com/inject: "false"` annotation'ları yalnızca KOCC
-Pod'larını etkiler; cluster genelindeki Dynatrace kurulumunu değiştirmez. Yeni
-KOCC Pod'unda Dynatrace kaynaklı `LD_PRELOAD` bulunmamalıdır.
+`dynatrace.com/inject: "false"` annotation'ı yalnızca KOCC Pod'larını etkiler;
+cluster genelindeki Dynatrace kurulumunu değiştirmez. Yeni KOCC Pod'unda
+Dynatrace kaynaklı `LD_PRELOAD` bulunmamalıdır.
 
 ## Kurulum ve doğrulama
 
