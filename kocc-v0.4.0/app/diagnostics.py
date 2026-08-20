@@ -4,11 +4,49 @@ from typing import Any
 
 
 IMAGE_REASONS = {"ImagePullBackOff", "ErrImagePull"}
+LOG_SIGNAL_KEYWORDS = (
+    "connection refused", "timeout", "permission denied", "no such file",
+    "certificate", "authentication", "unauthorized", "out of memory",
+    "killed", "exception", "traceback", "panic", "fatal",
+    "cannot connect", "failed to start",
+)
+
+
+def restart_severity(restart_count: int) -> str:
+    if restart_count >= 100:
+        return "critical"
+    if restart_count >= 20:
+        return "high"
+    if restart_count >= 6:
+        return "warning"
+    return "low"
+
+
+def extract_log_signals(logs: dict[str, Any] | None) -> list[str]:
+    signals: list[str] = []
+    for container_name, entries in (logs or {}).items():
+        values = entries.values() if isinstance(entries, dict) else [entries]
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            for line in value.splitlines():
+                lowered = line.lower()
+                keyword = next((item for item in LOG_SIGNAL_KEYWORDS if item in lowered), None)
+                if keyword:
+                    snippet = " ".join(line.strip().split())[:160]
+                    evidence = f"Log signal ({container_name}): {keyword} — {snippet}"
+                    if evidence not in signals:
+                        signals.append(evidence)
+                    break
+            if len(signals) >= 5:
+                return signals
+    return signals
 
 
 def analyze_pod_diagnostics(
     pod: dict[str, Any],
     events: list[dict[str, Any]],
+    logs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Produce conservative, evidence-based diagnostic guidance."""
     containers = pod.get("containers", [])
@@ -33,6 +71,7 @@ def analyze_pod_diagnostics(
     }
     event_reasons = {event.get("reason", "") for event in events}
     event_messages = [event.get("message", "") for event in events]
+    log_signals = extract_log_signals(logs)
 
     def result(
         cause: str,
@@ -46,6 +85,38 @@ def analyze_pod_diagnostics(
             "checks": checks,
             "severity": severity,
         }
+
+    failed_containers = []
+    for container in containers:
+        exit_code = container.get("exit_code")
+        last_exit_code = container.get("last_exit_code")
+        terminated_reason = container.get("terminated_reason")
+        last_reason = container.get("last_terminated_reason")
+        restarts = int(container.get("restart_count", 0) or 0)
+        nonzero_exit = any(
+            value is not None and value != 0 for value in (exit_code, last_exit_code)
+        )
+        error_termination = terminated_reason == "Error" or last_reason == "Error"
+        if restarts and nonzero_exit and error_termination:
+            effective_exit = exit_code if exit_code not in (None, 0) else last_exit_code
+            evidence = [
+                f'Container: {container.get("name", "N/A")}',
+                f"Restart count: {restarts}",
+                f"Application process exited with code {effective_exit}",
+                f'Terminated reason: {terminated_reason or last_reason or "N/A"}',
+            ]
+            for label, key in (
+                ("Started", "last_started_at"),
+                ("Finished", "last_finished_at"),
+            ):
+                if container.get(key):
+                    evidence.append(f"{label}: {container[key]}")
+            failed_containers.append({
+                "container": container.get("name", "N/A"),
+                "cause": "Application process exited with a non-zero code",
+                "severity": restart_severity(restarts),
+                "evidence": evidence,
+            })
 
     if "OOMKilled" in reasons or 137 in exit_codes:
         limits = [
@@ -95,7 +166,7 @@ def analyze_pod_diagnostics(
         ]
         return result(
             "Container tekrar tekrar başlayıp kapanıyor olabilir.",
-            [f"Restart count: {restarts}", *previous],
+            [f"Restart count: {restarts}", *previous, *log_signals],
             [
                 "Previous container logunu inceleyin.",
                 "Process exit code ve startup konfigürasyonunu doğrulayın.",
@@ -103,6 +174,25 @@ def analyze_pod_diagnostics(
             ],
             "critical",
         )
+
+    if failed_containers:
+        highest = max(
+            failed_containers,
+            key=lambda item: {"low": 1, "warning": 2, "high": 3, "critical": 4}[item["severity"]],
+        )
+        analysis = result(
+            "Uygulama container'ı hata koduyla kapanıp tekrar başlatılıyor.",
+            [item for finding in failed_containers for item in finding["evidence"]]
+            + log_signals,
+            [
+                "Previous container loglarını inceleyin.",
+                "Application startup/config hatalarını ve environment variable değerlerini doğrulayın.",
+                "Secret/ConfigMap içerikleri ile DB/API gibi bağımlı servis erişimini kontrol edin.",
+            ],
+            highest["severity"],
+        )
+        analysis["container_findings"] = failed_containers
+        return analysis
 
     if (
         "FailedScheduling" in event_reasons

@@ -468,6 +468,9 @@ def test_missing_resource_search_pagination_csv_and_single_flight_contract(
     assert "seconds === 15 && dashboardData.collectionDuration > 10" in response.text
     assert '"missingApplicationRecords"' in response.text
     assert "pod-000" in response.text
+    assert 'data-initial-record-count="50"' in response.text
+    assert response.text.count("data-missing-record") >= 50
+    assert "missing_resources_initialized application=" in response.text
 
 
 @patch("app.main.ClusterCollector")
@@ -506,6 +509,12 @@ def test_health_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_diagnostics_loading_text_is_turkish() -> None:
+    response = client.get("/diagnostics?cluster=kkbtest")
+    assert response.status_code == 200
+    assert "Sorunlu podlar yükleniyor..." in response.text
 
 
 @patch("app.main.new_cluster_client")
@@ -563,6 +572,21 @@ def test_cache_is_cluster_isolated(prepare_data: Mock) -> None:
     assert second["cache"]["hit"] is True
     assert remote["selected_cluster"] == "rmtest"
     assert prepare_data.call_count == 2
+
+
+@patch("app.main.prepare_dashboard_data")
+def test_cache_hit_and_miss_are_logged(
+    prepare_data: Mock, caplog,
+) -> None:
+    prepare_data.return_value = {"snapshot": True}
+
+    with caplog.at_level("INFO", logger="kocc.performance"):
+        cached_dashboard_data("kkbtest")
+        cached_dashboard_data("kkbtest")
+
+    assert "op=cache.snapshot" in caplog.text
+    assert "cache_hit=false" in caplog.text
+    assert "cache_hit=true" in caplog.text
 
 
 @patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)

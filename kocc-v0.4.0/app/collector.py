@@ -10,6 +10,7 @@ from kubernetes import client
 from kubernetes.client import ApiClient
 
 from app.resource_parser import cpu_to_millicores, memory_to_bytes
+from app.performance import log_performance
 
 API_REQUEST_TIMEOUT = (5, 30)
 TERMINAL_POD_PHASES = {"Succeeded", "Failed"}
@@ -207,9 +208,13 @@ class ClusterCollector:
         }
 
     def get_problem_pods(self) -> list[dict[str, Any]]:
+        total_started = time.perf_counter()
+        started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        log_performance("diagnostics.list_pods", started, item_count=len(pods))
+        started = time.perf_counter()
         try:
             events = self.core_api.list_event_for_all_namespaces(
                 _request_timeout=API_REQUEST_TIMEOUT,
@@ -217,6 +222,8 @@ class ClusterCollector:
         except Exception as exc:
             logger.warning("Diagnostic event list unavailable: %s", exc)
             events = []
+        log_performance("diagnostics.list_events", started, item_count=len(events))
+        filter_started = time.perf_counter()
         unhealthy_uids = {
             getattr(event.involved_object, "uid", None)
             for event in events
@@ -273,21 +280,32 @@ class ClusterCollector:
                 "age_seconds": age_seconds,
                 "severity": "critical" if main_reason in DIAGNOSTIC_REASONS else "warning",
             })
-        return sorted(result, key=lambda item: (-item["restarts"], item["namespace"], item["name"]))
+        result.sort(key=lambda item: (-item["restarts"], item["namespace"], item["name"]))
+        log_performance(
+            "diagnostics.filter_problem_pods", filter_started,
+            item_count=len(result),
+        )
+        log_performance("diagnostics.total", total_started, item_count=len(result))
+        return result
 
     def get_pod_diagnostic(
         self, namespace: str, pod_name: str, container_name: str | None, tail: int
     ) -> dict[str, Any]:
+        total_started = time.perf_counter()
+        started = time.perf_counter()
         pod = self.core_api.read_namespaced_pod(
             name=pod_name,
             namespace=namespace,
             _request_timeout=API_REQUEST_TIMEOUT,
         )
+        log_performance("diagnostics.get_pod", started, item_count=1)
+        started = time.perf_counter()
         events = self.core_api.list_namespaced_event(
             namespace=namespace,
             field_selector=f"involvedObject.name={pod_name}",
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        log_performance("diagnostics.list_events", started, item_count=len(events))
         statuses = list(pod.status.container_statuses or [])
         status_by_name = {status.name: status for status in statuses}
         containers = [
@@ -297,6 +315,7 @@ class ClusterCollector:
         selected = container_name or (containers[0]["name"] if containers else None)
         logs = {"container": selected, "current": "", "previous": "", "previous_available": False}
         if selected:
+            started = time.perf_counter()
             try:
                 logs["current"] = self.core_api.read_namespaced_pod_log(
                     name=pod_name, namespace=namespace, container=selected,
@@ -308,8 +327,10 @@ class ClusterCollector:
                     "Current log unavailable for %s/%s: %s",
                     namespace, pod_name, exc,
                 )
+            log_performance("diagnostics.current_log", started, item_count=tail)
             selected_status = status_by_name.get(selected)
             if selected_status and (selected_status.restart_count or 0) > 0:
+                started = time.perf_counter()
                 try:
                     logs["previous"] = self.core_api.read_namespaced_pod_log(
                         name=pod_name, namespace=namespace, container=selected,
@@ -319,12 +340,15 @@ class ClusterCollector:
                     logs["previous_available"] = True
                 except Exception as exc:
                     logger.info("Previous log unavailable for %s/%s: %s", namespace, pod_name, exc)
+                log_performance(
+                    "diagnostics.previous_log", started, item_count=tail,
+                )
         owners = pod.metadata.owner_references or []
         event_items = [self.event_item(event) for event in events]
         event_items.sort(
             key=lambda item: item["last_timestamp"], reverse=True
         )
-        return {
+        result = {
             "pod": {
                 "namespace": namespace,
                 "name": pod_name,
@@ -341,6 +365,8 @@ class ClusterCollector:
             "events": event_items,
             "logs": logs,
         }
+        log_performance("diagnostics.total", total_started, item_count=1)
+        return result
 
     def get_cluster_version(self) -> str:
         result = self.custom_api.get_cluster_custom_object(
@@ -856,6 +882,7 @@ class ClusterCollector:
             key=lambda item: item["namespace"],
         )
 
+        missing_started = time.perf_counter()
         application_missing = self.summarize_missing_details(
             [
                 item
@@ -871,6 +898,16 @@ class ClusterCollector:
         all_missing = self.summarize_missing_details(
             missing_details,
             missing_records,
+        )
+        log_performance(
+            "process.missing_resources",
+            missing_started,
+            item_count=len(missing_records),
+        )
+        logger.info(
+            "missing_resources_collected application=%s all=%s",
+            len(application_missing["records"]),
+            len(all_missing["records"]),
         )
 
         return {
@@ -920,16 +957,21 @@ class ClusterCollector:
         nodes = self.core_api.list_node(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        log_performance("api.list_nodes", step_started, item_count=len(nodes))
         logger.info("collect_nodes: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        log_performance("api.list_pods", step_started, item_count=len(pods))
         logger.info("collect_pods: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         namespaces = self.core_api.list_namespace(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        log_performance(
+            "api.list_namespaces", step_started, item_count=len(namespaces)
+        )
         logger.info(
             "collect_namespaces: %.2fs", time.perf_counter() - step_started
         )
@@ -940,27 +982,44 @@ class ClusterCollector:
             pods,
             namespaces,
         )
+        log_performance(
+            "process.resource_summary", step_started,
+            item_count=len(resource_summary["namespaces"]),
+        )
         logger.info(
             "resource_summary: %.2fs", time.perf_counter() - step_started
         )
 
         step_started = time.perf_counter()
         version = self.get_cluster_version()
+        log_performance("api.cluster_version", step_started, item_count=1)
         logger.info("collect_version: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         operators = self.get_cluster_operator_summary()
+        log_performance(
+            "api.cluster_operators", step_started,
+            item_count=len(operators["items"]),
+        )
         logger.info(
             "collect_operators: %.2fs", time.perf_counter() - step_started
         )
-        logger.info(
-            "collect_dashboard_total: %.2fs", time.perf_counter() - collection_started
+        step_started = time.perf_counter()
+        node_summary = self.get_node_summary(nodes)
+        log_performance("process.node_summary", step_started, item_count=len(nodes))
+        step_started = time.perf_counter()
+        pod_summary = self.get_pod_summary(pods)
+        log_performance("process.pod_summary", step_started, item_count=len(pods))
+        step_started = time.perf_counter()
+        restart_summary = self.get_restart_summary(pods)
+        log_performance(
+            "process.restart_ranking", step_started,
+            item_count=len(restart_summary["items"]),
         )
-
-        return {
+        result = {
             "version": version,
-            "nodes": self.get_node_summary(nodes),
-            "pods": self.get_pod_summary(pods),
-            "restarts": self.get_restart_summary(pods),
+            "nodes": node_summary,
+            "pods": pod_summary,
+            "restarts": restart_summary,
             "cluster_operators": operators,
             "namespace_count": self.get_namespace_count(namespaces),
             "resources": resource_summary,
@@ -976,3 +1035,9 @@ class ClusterCollector:
                 ],
             },
         }
+        log_performance("total.collection", collection_started)
+        logger.info(
+            "collect_dashboard_total: %.2fs",
+            time.perf_counter() - collection_started,
+        )
+        return result

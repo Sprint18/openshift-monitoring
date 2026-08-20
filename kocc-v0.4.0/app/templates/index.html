@@ -787,7 +787,21 @@
                     <th class="numeric"><button class="sort-button missing-sort-button" data-sort="missing_count" data-type="number">Missing Count</button></th>
                 </tr>
             </thead>
-            <tbody id="missing-resource-body"></tbody>
+            <tbody id="missing-resource-body" data-initial-record-count="{{ [data['resources']['missing_resources']['application']['records']|length, 50]|min }}">
+                {% for item in data["resources"]["missing_resources"]["application"]["records"][:50] %}
+                <tr data-missing-record>
+                    <td class="wrap-cell">{{ item["namespace"] }}</td>
+                    <td class="wrap-cell">{{ item["pod"] }}</td>
+                    <td class="wrap-cell">{{ item["container"] }}</td>
+                    {% for field in ["cpu_request", "cpu_limit", "memory_request", "memory_limit"] %}
+                    <td>{% if item[field] %}<span class="defined-mark" title="Defined">✓</span>{% else %}<span class="missing-badge">Missing</span>{% endif %}</td>
+                    {% endfor %}
+                    <td class="numeric"><strong>{{ item["missing_count"] }}</strong></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="empty-message">No missing resource definitions found</td></tr>
+                {% endfor %}
+            </tbody>
         </table>
     </div>
     <div class="pagination">
@@ -1150,6 +1164,11 @@
         const dashboardData = JSON.parse(
             document.getElementById("dashboard-data").textContent
         );
+        {% if page == "resources" %}
+        console.info(
+            `missing_resources_initialized application=${dashboardData.missingApplicationRecords.length} all=${dashboardData.missingAllRecords.length}`
+        );
+        {% endif %}
         const state = {
             activePopup: null,
             refreshTimer: null,
@@ -1455,7 +1474,7 @@
                 missingBody.innerHTML = `<tr><td colspan="8" class="empty-message">${message}</td></tr>`;
             } else {
                 missingBody.innerHTML = pageRecords.map((item) => `
-                    <tr>
+                    <tr data-missing-record>
                         <td class="wrap-cell">${escapeHtml(item.namespace)}</td>
                         <td class="wrap-cell">${escapeHtml(item.pod)}</td>
                         <td class="wrap-cell">${escapeHtml(item.container)}</td>

@@ -1,4 +1,4 @@
-from app.diagnostics import analyze_pod_diagnostics
+from app.diagnostics import analyze_pod_diagnostics, restart_severity
 
 
 def pod_with_container(**overrides: object) -> dict:
@@ -76,3 +76,47 @@ def test_unknown_reason_fallback() -> None:
     result = analyze_pod_diagnostics(pod_with_container(), [])
     assert result["cause"] == "Kesin neden belirlenemedi."
     assert result["severity"] == "info"
+
+
+def test_exit_code_one_repeated_failure_is_sidecar_aware() -> None:
+    pod = pod_with_container(
+        restart_count=546, terminated_reason="Error", exit_code=1,
+        last_terminated_reason="Error", last_exit_code=1,
+        last_started_at="2026-08-20T10:00:00Z",
+        last_finished_at="2026-08-20T10:00:02Z",
+    )
+    pod["containers"].append({
+        "name": "istio-proxy", "restart_count": 0, "ready": True,
+        "waiting_reason": None, "terminated_reason": None,
+        "last_terminated_reason": None, "exit_code": None,
+        "last_exit_code": None, "memory_limit": None,
+    })
+
+    result = analyze_pod_diagnostics(pod, [])
+
+    assert "hata koduyla" in result["cause"]
+    assert result["severity"] == "critical"
+    assert result["container_findings"][0]["container"] == "api"
+    assert all(item["container"] != "istio-proxy" for item in result["container_findings"])
+    assert any("code 1" in evidence for evidence in result["evidence"])
+
+
+def test_restart_severity_thresholds() -> None:
+    assert restart_severity(1) == "low"
+    assert restart_severity(6) == "warning"
+    assert restart_severity(20) == "high"
+    assert restart_severity(100) == "critical"
+
+
+def test_previous_log_signal_is_short_evidence() -> None:
+    result = analyze_pod_diagnostics(
+        pod_with_container(
+            restart_count=9, terminated_reason="Error", exit_code=1,
+        ),
+        [],
+        {"api": {"previous": "startup failed: connection refused to database"}},
+    )
+    signals = [item for item in result["evidence"] if item.startswith("Log signal")]
+    assert signals
+    assert "connection refused" in signals[0]
+    assert len(signals[0]) < 240

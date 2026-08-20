@@ -331,6 +331,24 @@ python -m pip install -r requirements-dev.txt
 pytest
 ```
 
+## Performans ve restart teşhisi
+
+Uygulama her Kubernetes API/işleme adımı için `cluster`, `op`, `duration_ms`,
+varsa `items` ve `cache_hit` alanlarını içeren yapılandırılmış INFO logları üretir.
+Bir saniyeyi aşan adımlar ayrıca `slow_operation` olarak WARNING seviyesinde
+yazılır. Snapshot cache loglarında hit/miss, stale fallback ve snapshot yaşı
+görülebilir. Bu ölçümler gerçek cluster ağ/API gecikmesini ancak deployment
+sonrasında gösterir.
+
+```bash
+POD=$(oc get pods -l app.kubernetes.io/name=kocc -o jsonpath='{.items[0].metadata.name}')
+oc get pod "$POD" -o wide
+oc describe pod "$POD"
+oc logs "$POD" --previous
+oc adm top pod "$POD"
+oc logs deployment/kocc | grep -E 'perf cluster=|slow_operation|cache\.|resources_page_payload|missing_resources_collected'
+```
+
 ## Production checklist
 
 - ServiceAccount ve minimum gerekli RBAC izinlerini doğrula.

@@ -26,6 +26,11 @@ from app.cluster_loader import (
 )
 from app.collector import ClusterCollector
 from app.diagnostics import analyze_pod_diagnostics
+from app.performance import (
+    log_performance,
+    reset_perf_cluster,
+    set_perf_cluster,
+)
 from app.resource_parser import format_cpu, format_memory
 
 logger = logging.getLogger("kocc")
@@ -52,6 +57,33 @@ logger.info(
     os.getpid(),
     datetime.now(timezone.utc).isoformat(),
 )
+
+
+@app.middleware("http")
+async def request_timing_middleware(request: Request, call_next: Any) -> Any:
+    started = time.perf_counter()
+    status = 500
+    cluster_key = request.query_params.get("cluster", DEFAULT_CLUSTER).lower()
+    perf_token = set_perf_cluster(cluster_key)
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        duration_ms = round((time.perf_counter() - started) * 1000)
+        logger.info(
+            "request path=%s status=%s duration_ms=%s",
+            request.url.path,
+            status,
+            duration_ms,
+        )
+        log_performance(
+            "total.request",
+            started,
+            item_count=1,
+            extra={"path": request.url.path, "status": status},
+        )
+        reset_perf_cluster(perf_token)
 
 
 @app.get("/health")
@@ -341,6 +373,7 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
 
     data["selected_cluster"] = cluster_key
     data["selected_cluster_name"] = definition.name
+    context_started = time.perf_counter()
 
     cluster_resources = data["resources"]["cluster"]
     cluster_resources["cpu_capacity_text"] = format_cpu(
@@ -483,7 +516,9 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
             rank_by="request",
         ),
     }
+    health_started = time.perf_counter()
     data["health"] = health_score(data)
+    log_performance("process.health_score", health_started, item_count=1)
     data["collected_at"] = format_istanbul_time(datetime.now(timezone.utc))
     data["collection_duration_seconds"] = round(
         time.perf_counter() - started_at, 2
@@ -491,6 +526,7 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
     data["collection_duration_severity"] = collection_time_severity(
         data["collection_duration_seconds"]
     )
+    log_performance("template.context_build", context_started, item_count=1)
 
     return data
 
@@ -501,9 +537,10 @@ def clear_dashboard_cache() -> None:
         _cluster_cache_locks.clear()
 
 
-def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
+def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
     """Return an isolated cluster snapshot with a short thread-safe TTL."""
     now = time.monotonic()
+    cache_started = time.perf_counter()
     with _dashboard_cache_lock:
         cached = _dashboard_cache.get(cluster_key)
         if cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
@@ -512,6 +549,10 @@ def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
                 "hit": True,
                 "age_seconds": round(now - cached[0], 2),
             }
+            log_performance(
+                "cache.snapshot", cache_started, cache_hit=True,
+                extra={"age_seconds": data["cache"]["age_seconds"]},
+            )
             return data
         cluster_lock = _cluster_cache_locks.setdefault(
             cluster_key, threading.Lock()
@@ -527,7 +568,12 @@ def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
                     "hit": True,
                     "age_seconds": round(now - cached[0], 2),
                 }
+                log_performance(
+                    "cache.snapshot", cache_started, cache_hit=True,
+                    extra={"age_seconds": data["cache"]["age_seconds"]},
+                )
                 return data
+        log_performance("cache.snapshot", cache_started, cache_hit=False)
         try:
             data = prepare_dashboard_data(cluster_key)
         except Exception:
@@ -542,12 +588,24 @@ def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
                     "stale": True,
                     "age_seconds": round(now - cached[0], 2),
                 }
+                log_performance(
+                    "cache.stale_fallback", cache_started, cache_hit=True,
+                    extra={"age_seconds": data["cache"]["age_seconds"]},
+                )
                 return data
             raise
         with _dashboard_cache_lock:
             _dashboard_cache[cluster_key] = (time.monotonic(), deepcopy(data))
     data["cache"] = {"hit": False, "age_seconds": 0.0}
     return data
+
+
+def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
+    token = set_perf_cluster(cluster_key)
+    try:
+        return _cached_dashboard_data(cluster_key)
+    finally:
+        reset_perf_cluster(token)
 
 
 def raise_http_error(exc: Exception) -> None:
@@ -691,6 +749,7 @@ def api_diagnostic_pods(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> dict[str, Any]:
     cluster_key = cluster.lower()
+    perf_token = set_perf_cluster(cluster_key)
     try:
         get_cluster_definition(cluster_key)
         api_client = new_cluster_client(cluster_key)
@@ -703,6 +762,8 @@ def api_diagnostic_pods(
             api_client.close()
     except Exception as exc:
         raise_http_error(exc)
+    finally:
+        reset_perf_cluster(perf_token)
 
 
 @app.get("/api/diagnostics/{namespace}/{pod_name}")
@@ -719,6 +780,7 @@ def api_pod_diagnostic(
             detail="tail must be one of 50, 100, 200 or 500",
         )
     cluster_key = cluster.lower()
+    perf_token = set_perf_cluster(cluster_key)
     try:
         get_cluster_definition(cluster_key)
         api_client = new_cluster_client(cluster_key)
@@ -726,14 +788,20 @@ def api_pod_diagnostic(
             result = ClusterCollector(api_client).get_pod_diagnostic(
                 namespace, pod_name, container, tail
             )
+            analysis_started = time.perf_counter()
             result["analysis"] = analyze_pod_diagnostics(
-                result["pod"], result["events"]
+                result["pod"], result["events"], result["logs"]
+            )
+            log_performance(
+                "diagnostics.analysis", analysis_started, item_count=1
             )
             return result
         finally:
             api_client.close()
     except Exception as exc:
         raise_http_error(exc)
+    finally:
+        reset_perf_cluster(perf_token)
 
 
 def diagnostics_template_context(
@@ -798,6 +866,13 @@ def render_dashboard_page(
 
     try:
         data = cached_dashboard_data(cluster_key)
+        if page == "resources":
+            missing = data["resources"]["missing_resources"]
+            logger.info(
+                "resources_page_payload missing_application=%s missing_all=%s",
+                len(missing["application"]["records"]),
+                len(missing["all"]["records"]),
+            )
         return templates.TemplateResponse(
             request=request,
             name="index.html",
