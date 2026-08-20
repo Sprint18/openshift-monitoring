@@ -2,10 +2,13 @@ from datetime import datetime, timezone
 import re
 from unittest.mock import Mock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import (
     app,
+    cached_dashboard_data,
+    clear_dashboard_cache,
     collection_time_severity,
     format_istanbul_time,
     health_score,
@@ -15,6 +18,11 @@ from app.main import (
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_dashboard_cache() -> None:
+    clear_dashboard_cache()
 
 
 def dashboard_payload() -> dict:
@@ -90,7 +98,7 @@ def test_dashboard_renders_nodes_items_key(
         dashboard_payload()
     )
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/health-overview?cluster=kkbtest")
 
     assert response.status_code == 200
     assert "master-0" in response.text
@@ -165,6 +173,9 @@ def test_top_cpu_and_memory_limits_are_sorted() -> None:
 
     cpu = top_resource_limits(namespaces, "cpu", 4000)
     memory = top_resource_limits(namespaces, "memory", 16_384)
+    cpu_requests = top_resource_limits(
+        namespaces, "cpu", 4000, rank_by="request"
+    )
 
     assert [item["namespace"] for item in cpu] == [
         "large-cpu",
@@ -178,6 +189,10 @@ def test_top_cpu_and_memory_limits_are_sorted() -> None:
     ]
     assert cpu[0]["capacity_percent"] == 50.0
     assert memory[0]["capacity_percent"] == 50.0
+    assert [item["namespace"] for item in cpu_requests] == [
+        "large-cpu", "large-memory", "small"
+    ]
+    assert cpu_requests[0]["capacity_percent"] == 10.0
 
 
 def test_top_resource_limits_handles_empty_namespaces() -> None:
@@ -216,7 +231,7 @@ def test_dashboard_renders_empty_node_list(
     data["nodes"] = {"items": []}
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/health-overview?cluster=kkbtest")
 
     assert response.status_code == 200
     assert "Node Detayları" in response.text
@@ -242,7 +257,7 @@ def test_template_renders_many_namespaces_and_filter_contract(
     ]
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/resources?cluster=kkbtest")
 
     assert response.status_code == 200
     assert '<option value="">All Namespaces</option>' in response.text
@@ -271,8 +286,8 @@ def test_namespace_combobox_rebuilds_from_selected_cluster_data(
         rmtest,
     ]
 
-    local_response = client.get("/?cluster=kkbtest")
-    remote_response = client.get("/?cluster=rmtest")
+    local_response = client.get("/resources?cluster=kkbtest")
+    remote_response = client.get("/resources?cluster=rmtest")
 
     assert local_response.status_code == 200
     assert local_response.text.index('value="alpha"') < local_response.text.index(
@@ -298,7 +313,7 @@ def test_namespace_combobox_handles_empty_namespace_list(
     data["resources"]["namespaces"] = []
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/resources?cluster=kkbtest")
 
     assert response.status_code == 200
     select = response.text.split('<select id="namespace-filter"', 1)[1].split(
@@ -358,7 +373,7 @@ def test_template_contains_popup_refresh_search_and_toggle_contract(
         dashboard_payload()
     )
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/resources?cluster=kkbtest")
 
     assert response.status_code == 200
     assert '<option value="15">15 sec</option>' in response.text
@@ -369,7 +384,9 @@ def test_template_contains_popup_refresh_search_and_toggle_contract(
     assert "!state.activePopup.contains(event.target)" in response.text
     assert "window.clearTimeout(state.refreshTimer)" in response.text
     assert "window.__koccDashboardInitialized" in response.text
-    assert "CPU requests: kapasitenin" in response.text
+    clear_dashboard_cache()
+    health_response = client.get("/health-overview?cluster=kkbtest")
+    assert "CPU requests: kapasitenin" in health_response.text
 
 
 @patch("app.main.ClusterCollector")
@@ -387,7 +404,7 @@ def test_namespace_resource_numeric_sort_contract_supports_mixed_units(
     ]
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/resources?cluster=kkbtest")
 
     assert response.status_code == 200
     cpu_values = [int(value) for value in re.findall(
@@ -438,7 +455,7 @@ def test_missing_resource_search_pagination_csv_and_single_flight_contract(
     }
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/?cluster=rmtest")
+    response = client.get("/resources?cluster=rmtest")
 
     assert response.status_code == 200
     assert "missingPageSize: 50" in response.text
@@ -464,6 +481,64 @@ def test_health_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+@patch("app.main.new_cluster_client")
+def test_health_probe_does_not_call_cluster_api(
+    new_cluster_client: Mock,
+) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    new_cluster_client.assert_not_called()
+
+    readiness = client.get("/ready")
+    assert readiness.status_code == 200
+    assert readiness.json()["status"] == "ready"
+    new_cluster_client.assert_not_called()
+
+
+@patch("app.main.prepare_dashboard_data")
+def test_cache_is_cluster_isolated(prepare_data: Mock) -> None:
+    prepare_data.side_effect = [
+        {"selected_cluster": "kkbtest"},
+        {"selected_cluster": "rmtest"},
+    ]
+
+    first = cached_dashboard_data("kkbtest")
+    second = cached_dashboard_data("kkbtest")
+    remote = cached_dashboard_data("rmtest")
+
+    assert first["cache"]["hit"] is False
+    assert second["cache"]["hit"] is True
+    assert remote["selected_cluster"] == "rmtest"
+    assert prepare_data.call_count == 2
+
+
+@patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)
+@patch("app.main.prepare_dashboard_data")
+def test_cache_expiry_recollects(prepare_data: Mock) -> None:
+    prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
+
+    assert cached_dashboard_data("kkbtest")["generation"] == 1
+    assert cached_dashboard_data("kkbtest")["generation"] == 2
+    assert prepare_data.call_count == 2
+
+
+@patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)
+@patch("app.main.prepare_dashboard_data")
+def test_cache_serves_marked_stale_snapshot_after_failure(
+    prepare_data: Mock,
+) -> None:
+    prepare_data.side_effect = [
+        {"generation": 1},
+        RuntimeError("temporary cluster failure"),
+    ]
+
+    cached_dashboard_data("kkbtest")
+    stale = cached_dashboard_data("kkbtest")
+
+    assert stale["generation"] == 1
+    assert stale["cache"]["stale"] is True
 
 
 @patch("app.main.prepare_dashboard_data")
@@ -571,20 +646,41 @@ def test_template_contains_p3_p4_contracts(
         dashboard_payload()
     )
 
+    pages = {
+        "/resources": "namespace-drilldown",
+        "/workloads": "Global Workload Search",
+        "/storage": "PVC / Storage",
+        "/routes": "Route Search",
+        "/health-overview": "Node Detayları",
+    }
+    for route, expected in pages.items():
+        clear_dashboard_cache()
+        response = client.get(f"{route}?cluster=kkbtest")
+        assert response.status_code == 200
+        assert expected in response.text
+        assert "dashboardTheme" in response.text
+        assert "Compare Clusters" not in response.text
+        assert "compare-clusters" not in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_overview_is_compact_and_lazy_apis_are_not_called(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector = collector_class.return_value
+    collector.collect_dashboard.return_value = dashboard_payload()
+
     response = client.get("/?cluster=kkbtest")
 
     assert response.status_code == 200
-    for expected in (
-        "namespace-drilldown",
-        "restart-ranking-size",
-        "Load PVC Summary",
-        "Route Search",
-        "Global Workload Search",
-        "Load Comparison",
-        "dashboardTheme",
-        'theme === "dark"',
-        "Promise.allSettled",
-        "Workload data unavailable",
-        "PVC data unavailable",
-    ):
-        assert expected in response.text
+    assert "Resource Capacity / Overcommit" in response.text
+    assert "Namespace Resource Özeti" not in response.text
+    assert "Missing Requests / Limits</h2>" not in response.text
+    assert "Route Search" not in response.text
+    assert 'href="/resources?cluster=kkbtest"' in response.text
+    assert 'href="/workloads?cluster=kkbtest"' in response.text
+    collector.get_workload_summary.assert_not_called()
+    collector.get_pvc_summary.assert_not_called()
+    collector.get_route_summary.assert_not_called()

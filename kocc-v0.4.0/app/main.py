@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,16 +40,25 @@ app.mount(
     name="static",
 )
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
+DASHBOARD_CACHE_TTL_SECONDS = 15
+_dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_dashboard_cache_lock = threading.Lock()
+_cluster_cache_locks: dict[str, threading.Lock] = {}
 logger.info("OpenShift Clusters Monitoring Platform %s started", app.version)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "application": "OpenShift Clusters Monitoring Platform",
         "version": app.version,
     }
+
+
+@app.get("/ready")
+async def ready() -> dict[str, str]:
+    return {"status": "ready", "version": app.version}
 
 
 def percentage(value: int, total: int) -> float:
@@ -163,17 +174,19 @@ def top_resource_limits(
     resource: str,
     capacity: int,
     limit: int = 20,
+    rank_by: str = "limit",
 ) -> list[dict[str, Any]]:
     limit_key = f"{resource}_limit"
     request_key = f"{resource}_request"
+    rank_key = request_key if rank_by == "request" else limit_key
     ranked = sorted(
         (
             namespace
             for namespace in namespaces
-            if namespace[limit_key] > 0
+            if namespace[rank_key] > 0
         ),
         key=lambda namespace: (
-            -namespace[limit_key],
+            -namespace[rank_key],
             namespace["namespace"],
         ),
     )[:limit]
@@ -193,7 +206,7 @@ def top_resource_limits(
                 if resource == "cpu"
                 else format_memory(namespace[limit_key]),
                 "capacity_percent": percentage(
-                    namespace[limit_key], capacity
+                    namespace[rank_key], capacity
                 ),
             }
         )
@@ -449,6 +462,20 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
             cluster_resources["memory_capacity"],
         ),
     }
+    data["resources"]["top_requests"] = {
+        "cpu": top_resource_limits(
+            namespaces,
+            "cpu",
+            cluster_resources["cpu_capacity"],
+            rank_by="request",
+        ),
+        "memory": top_resource_limits(
+            namespaces,
+            "memory",
+            cluster_resources["memory_capacity"],
+            rank_by="request",
+        ),
+    }
     data["health"] = health_score(data)
     data["collected_at"] = format_istanbul_time(datetime.now(timezone.utc))
     data["collection_duration_seconds"] = round(
@@ -458,6 +485,61 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
         data["collection_duration_seconds"]
     )
 
+    return data
+
+
+def clear_dashboard_cache() -> None:
+    with _dashboard_cache_lock:
+        _dashboard_cache.clear()
+        _cluster_cache_locks.clear()
+
+
+def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
+    """Return an isolated cluster snapshot with a short thread-safe TTL."""
+    now = time.monotonic()
+    with _dashboard_cache_lock:
+        cached = _dashboard_cache.get(cluster_key)
+        if cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+            data = deepcopy(cached[1])
+            data["cache"] = {
+                "hit": True,
+                "age_seconds": round(now - cached[0], 2),
+            }
+            return data
+        cluster_lock = _cluster_cache_locks.setdefault(
+            cluster_key, threading.Lock()
+        )
+
+    with cluster_lock:
+        now = time.monotonic()
+        with _dashboard_cache_lock:
+            cached = _dashboard_cache.get(cluster_key)
+            if cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+                data = deepcopy(cached[1])
+                data["cache"] = {
+                    "hit": True,
+                    "age_seconds": round(now - cached[0], 2),
+                }
+                return data
+        try:
+            data = prepare_dashboard_data(cluster_key)
+        except Exception:
+            if cached:
+                logger.warning(
+                    "Serving stale successful snapshot for cluster %s",
+                    cluster_key,
+                )
+                data = deepcopy(cached[1])
+                data["cache"] = {
+                    "hit": True,
+                    "stale": True,
+                    "age_seconds": round(now - cached[0], 2),
+                }
+                return data
+            raise
+        with _dashboard_cache_lock:
+            _dashboard_cache[cluster_key] = (time.monotonic(), deepcopy(data))
+    data["cache"] = {"hit": False, "age_seconds": 0.0}
     return data
 
 
@@ -512,7 +594,7 @@ def api_summary(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> dict[str, Any]:
     try:
-        return prepare_dashboard_data(cluster.lower())
+        return cached_dashboard_data(cluster.lower())
     except Exception as exc:
         raise_http_error(exc)
 
@@ -597,10 +679,10 @@ def api_routes(
         raise_http_error(exc)
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard(
+def render_dashboard_page(
     request: Request,
-    cluster: str = Query(default=DEFAULT_CLUSTER),
+    cluster: str,
+    page: str,
 ) -> HTMLResponse:
     cluster_key = cluster.lower()
     definitions = get_cluster_definitions()
@@ -610,7 +692,7 @@ def dashboard(
     }
 
     try:
-        data = prepare_dashboard_data(cluster_key)
+        data = cached_dashboard_data(cluster_key)
         return templates.TemplateResponse(
             request=request,
             name="index.html",
@@ -623,6 +705,7 @@ def dashboard(
                 "data": data,
                 "error": None,
                 "release": app.version,
+                "page": page,
             },
         )
     except Exception as exc:
@@ -644,5 +727,54 @@ def dashboard(
                 "data": None,
                 "error": dashboard_error_message(exc),
                 "release": app.version,
+                "page": page,
             },
         )
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "overview")
+
+
+@app.get("/resources", response_class=HTMLResponse)
+def resources_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "resources")
+
+
+@app.get("/workloads", response_class=HTMLResponse)
+def workloads_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "workloads")
+
+
+@app.get("/storage", response_class=HTMLResponse)
+def storage_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "storage")
+
+
+@app.get("/routes", response_class=HTMLResponse)
+def routes_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "routes")
+
+
+@app.get("/health-overview", response_class=HTMLResponse)
+def health_overview_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "health")

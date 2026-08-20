@@ -318,7 +318,9 @@ def test_cluster_operator_summary_counts_conditions(
 def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     core_api_class: Mock,
     custom_api_class: Mock,
+    caplog: object,
 ) -> None:
+    caplog.set_level("INFO", logger="kocc.collector")
     core_api = core_api_class.return_value
     core_api.list_node.return_value = item_list([])
     core_api.list_pod_for_all_namespaces.return_value = item_list([])
@@ -339,6 +341,15 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     core_api.list_namespace.assert_called_once_with(
         _request_timeout=API_REQUEST_TIMEOUT
     )
+    for step in (
+        "collect_nodes",
+        "collect_pods",
+        "collect_namespaces",
+        "resource_summary",
+        "collect_operators",
+        "collect_dashboard_total",
+    ):
+        assert step in caplog.text
 
 
 @patch("app.collector.client.AppsV1Api")
@@ -408,4 +419,6 @@ def test_pvc_and_route_parsing(
         "name": "portal",
         "host": "portal.example",
         "service": "web",
+        "tls": False,
+        "status": "Unknown",
     }]

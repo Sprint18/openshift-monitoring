@@ -14,11 +14,11 @@ Python içerisinde API host, token veya CA değeri tanımlanmaz.
 OpenShift API çağrıları, bağlantı sorunlarının portal worker'larını
 süresiz bloke etmemesi için connect/read timeout ile yapılır.
 
-Dashboard; problemli Pod, restart/CrashLoop, eksik request/limit ve namespace
-resource detaylarını aynı Pod/Node/Namespace listelerinden üretir. Eklenen tek
-OpenShift API çağrısı `config.openshift.io/clusteroperators` listesidir. Bu
-kaynağa erişim yoksa yalnız ClusterOperator widget'ı `Unavailable` gösterir;
-diğer dashboard bölümleri çalışmaya devam eder.
+Overview; problemli Pod, restart/CrashLoop, eksik request/limit ve namespace
+resource özetlerini aynı Pod/Node/Namespace snapshot'ından üretir. Workload,
+PVC ve Route çağrıları Overview sırasında yapılmaz; yalnız ilgili sayfa veya
+arama açıldığında lazy-load edilir. Bu kaynaklardan biri alınamazsa kendi
+bölümü `Unavailable` gösterir ve diğer sayfalar çalışmaya devam eder.
 
 KKBTEST in-cluster ServiceAccount için ClusterRole yalnız
 `config.openshift.io/clusteroperators` kaynağında `get` ve `list` yetkileri
@@ -59,6 +59,44 @@ bir navigation başlatılmasını engeller. Manuel refresh aynı single-flight y
 kullanır. Collector her request'te Pod, Node ve Namespace listelerini birer kez
 alır ve bütün widget'ları bu snapshot'tan üretir. `/health` hiçbir Kubernetes API
 çağrısı yapmaz.
+
+## Dashboard sayfaları ve performans
+
+- `/`: yüksek seviyeli Overview
+- `/resources`: namespace resources, Top CPU/Memory request/limit ve missing resources
+- `/workloads`: restart sıralaması ve Pod/Deployment/StatefulSet/DaemonSet araması
+- `/storage`: PVC requested capacity, durum ve StorageClass tablosu
+- `/routes`: Route/namespace/host arama tablosu
+- `/health-overview`: operator, node, pod ve collection diagnostics
+
+Teknik `/health` liveness endpoint'i değişmeden hızlı ve cluster API'sinden
+bağımsızdır. Readiness probe aynı özellikteki `/ready` endpoint'ini kullanır.
+Collector `collect_nodes`, `collect_pods`, `collect_namespaces`,
+`resource_summary`, `collect_version`, `collect_operators` ve toplam süreyi
+INFO seviyesinde ölçer; credential veya Secret loglamaz.
+
+Başarılı dashboard snapshot'ları cluster anahtarı bazında thread-safe 15 saniye
+cache'lenir. Eşzamanlı aynı-cluster talepleri tek collection üzerinde birleşir;
+KKBTEST ve RMTEST lock/cache alanları ayrıdır. Yeni collection hata verirse son
+başarılı snapshot `Stale snapshot` ve data age bilgisiyle sunulur. Tek Uvicorn
+worker korunur; böylece process başına cache kopyası ve ilave bellek baskısı
+oluşturulmaz. Mevcut 502/restart gözlemleri için gerçek pod event/log ve
+`OOMKilled` durumu cluster üzerinde ayrıca kontrol edilmelidir; kod tarafında
+uzun tekrar collection, büyük Overview HTML'i ve eşzamanlı refresh baskısı
+azaltılmıştır.
+
+Restart/502 kök nedenini cluster üzerinde doğrulamak için:
+
+```bash
+oc get pods -l app.kubernetes.io/name=kocc
+oc describe pod -l app.kubernetes.io/name=kocc
+oc get pod -l app.kubernetes.io/name=kocc -o jsonpath='{range .items[*]}{.metadata.name}{" reason="}{.status.containerStatuses[0].lastState.terminated.reason}{" exit="}{.status.containerStatuses[0].lastState.terminated.exitCode}{" restarts="}{.status.containerStatuses[0].restartCount}{"\n"}{end}'
+oc logs deployment/kocc --previous
+oc get events --sort-by=.lastTimestamp
+```
+
+`OOMKilled`, probe failure, process exit code ve Route/Service endpoint olayları
+görülmeden tek bir restart kök nedeni kesin kabul edilmemelidir.
 
 ## Cluster health score
 

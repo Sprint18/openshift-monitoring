@@ -68,6 +68,26 @@
             background: white;
             font-size: 14px;
         }
+        .primary-nav {
+            display: flex;
+            gap: 4px;
+            padding: 0 32px;
+            overflow-x: auto;
+            background: #0d213d;
+        }
+        .primary-nav a {
+            padding: 11px 14px;
+            border-bottom: 3px solid transparent;
+            color: #dbe5ef;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .primary-nav a:hover,
+        .primary-nav a.active {
+            border-bottom-color: var(--kkb-orange);
+            color: white;
+            background: rgba(255,255,255,.06);
+        }
         main { padding: 24px 32px 48px; }
         .selected {
             margin: 0 0 20px;
@@ -433,6 +453,9 @@
             grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
             gap: 16px;
         }
+        .page-grid { grid-template-columns: minmax(0, 1fr); }
+        .page-grid .panel { min-height: 360px; }
+        .page-grid .results-list { max-height: none; overflow: visible; }
         .panel {
             padding: 18px;
             border: 1px solid var(--surface-border);
@@ -476,7 +499,7 @@
                 </div>
             </div>
         </div>
-        <form class="cluster-form" method="get" action="/">
+        <form class="cluster-form" method="get" action="{{ request.url.path }}">
             <label for="cluster">Cluster</label>
             <select
                 id="cluster"
@@ -498,6 +521,18 @@
         </form>
     </div>
 </header>
+<nav class="primary-nav" aria-label="Dashboard navigation">
+    {% for route, label, page_key in [
+        ("/", "Overview", "overview"),
+        ("/resources", "Resources", "resources"),
+        ("/workloads", "Workloads", "workloads"),
+        ("/storage", "Storage", "storage"),
+        ("/routes", "Routes", "routes"),
+        ("/health-overview", "Health", "health")
+    ] %}
+    <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+</nav>
 
 <main>
     <div class="table-toolbar">
@@ -528,6 +563,10 @@
                     {% elif data["collection_duration_severity"] == "warning" %}Warning
                     {% else %}Normal{% endif %}
                 </span>
+                {% if data["cache"]["hit"] %}
+                <br>Data age: {{ data["cache"]["age_seconds"] }} sec
+                {% if "stale" in data["cache"] and data["cache"]["stale"] %}· <span class="warning">Stale snapshot</span>{% endif %}
+                {% endif %}
                 <div id="refresh-duration-warning" class="refresh-warning">
                     Refresh interval is close to collection duration
                 </div>
@@ -547,6 +586,7 @@
     </div>
     {% else %}
 
+    {% if page in ["overview", "workloads", "health"] %}
     <div class="cards">
         <div class="card">
             <h3>OpenShift Version</h3>
@@ -629,7 +669,9 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
+    {% if page in ["overview", "resources"] %}
     <h2>Resource Capacity / Overcommit</h2>
     <div class="resource-overview">
         {% for resource, label in [("cpu", "CPU"), ("memory", "Memory")] %}
@@ -663,7 +705,9 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
+    {% if page in ["overview", "workloads", "health"] %}
     <h2>Operational Health</h2>
     <div class="cards">
         <div class="card">
@@ -704,7 +748,9 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
+    {% if page == "resources" %}
     <h2>Missing Requests / Limits</h2>
     <div class="table-toolbar">
         <div class="field-group">
@@ -749,11 +795,31 @@
         <strong id="missing-page-number">1</strong>
         <button type="button" class="action-button" id="missing-next">Next</button>
     </div>
+    {% endif %}
 
-    <h2>Operational Inventory</h2>
-    <div class="operational-grid">
+    {% if page in ["workloads", "storage", "routes"] %}
+    <h2>{% if page == "workloads" %}Workloads{% elif page == "storage" %}PVC / Storage{% else %}Routes{% endif %}</h2>
+    <div class="operational-grid page-grid">
+        {% if page == "workloads" %}
+        <section class="panel">
+            <h3>Namespace Drill-down</h3>
+            <select id="workload-detail-namespace">
+                <option value="">Select namespace</option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}">{{ namespace }}</option>
+                {% endfor %}
+            </select>
+            <div id="workload-detail-results">Select a namespace.</div>
+        </section>
         <section class="panel">
             <h3>Top Restart Pods</h3>
+            <label for="workload-namespace-filter">Namespace</label>
+            <select id="workload-namespace-filter">
+                <option value="">All Namespaces</option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}">{{ namespace }}</option>
+                {% endfor %}
+            </select>
             <label for="restart-ranking-size">Ranking</label>
             <select id="restart-ranking-size">
                 <option value="5">Top 5</option>
@@ -762,29 +828,35 @@
             </select>
             <div id="restart-ranking" class="results-list"></div>
         </section>
+        {% endif %}
+        {% if page == "storage" %}
         <section class="panel">
             <h3>PVC / Storage</h3>
-            <button type="button" id="load-pvcs" class="action-button">Load PVC Summary</button>
-            <div id="pvc-results" class="results-list">Not loaded</div>
+            <div class="table-toolbar">
+                <input id="pvc-search" type="search" placeholder="Namespace, PVC veya storageClass ara...">
+                <select id="pvc-namespace-filter"><option value="">All Namespaces</option></select>
+            </div>
+            <div id="pvc-results" class="loading-inline">Loading PVC data</div>
         </section>
+        {% endif %}
+        {% if page == "routes" %}
         <section class="panel">
             <h3>Route Search</h3>
             <input id="route-search" type="search" placeholder="Route, namespace veya host ara...">
-            <div id="route-results" class="results-list">Type to search</div>
+            <div id="route-results" class="results-list loading-inline">Loading route data</div>
         </section>
+        {% endif %}
+        {% if page == "workloads" %}
         <section class="panel">
             <h3>Global Workload Search</h3>
             <input id="global-search" type="search" placeholder="Namespace, pod, workload veya route ara...">
             <div id="global-search-results" class="results-list">Type to search</div>
         </section>
+        {% endif %}
     </div>
+    {% endif %}
 
-    <h2>Compare Clusters</h2>
-    <section class="panel">
-        <button type="button" id="compare-clusters" class="action-button">Load Comparison</button>
-        <div id="comparison-results" class="results-list">Comparison is loaded on demand.</div>
-    </section>
-
+    {% if page == "health" %}
     <h2>Node Dağılımı</h2>
     <div class="cards">
         <div class="card">
@@ -850,7 +922,15 @@
             </tbody>
         </table>
     </div>
+    <div class="pagination">
+        <span id="namespace-page-range"></span>
+        <button type="button" id="namespace-previous" class="action-button">Previous</button>
+        <strong id="namespace-page-number">1</strong>
+        <button type="button" id="namespace-next" class="action-button">Next</button>
+    </div>
+    {% endif %}
 
+    {% if page == "resources" %}
     <h2>Top Resource Limits</h2>
     <div class="table-toolbar">
         <div class="field-group">
@@ -861,6 +941,21 @@
                 <option value="20">Top 20</option>
             </select>
         </div>
+    </div>
+    <div class="ranking-grid">
+        {% for resource, label in [("cpu", "Top CPU Requests"), ("memory", "Top Memory Requests")] %}
+        <div>
+            <h3>{{ label }}</h3>
+            <div class="table-wrapper"><table>
+                <thead><tr><th>Sıra</th><th>Namespace</th><th>Request</th><th>Capacity %</th></tr></thead>
+                <tbody class="ranking-body">
+                    {% for item in data["resources"]["top_requests"][resource] %}
+                    <tr data-rank="{{ item["rank"] }}"><td>{{ item["rank"] }}</td><td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td><td>{{ item["request_text"] }}</td><td>%{{ item["capacity_percent"] }}</td></tr>
+                    {% else %}<tr><td colspan="4">Request verisi yok.</td></tr>{% endfor %}
+                </tbody>
+            </table></div>
+        </div>
+        {% endfor %}
     </div>
     <div class="ranking-grid">
         <div>
@@ -1031,17 +1126,18 @@
         </table>
     </div>
     {% endif %}
+    {% endif %}
 </main>
 {% if not error %}
 <script id="dashboard-data" type="application/json">{{ {
     "cluster": selected_cluster,
-    "namespaces": data["resources"]["namespaces"],
-    "problemPods": data["pods"]["problem_by_namespace"],
-    "restartPods": data["restarts"]["by_namespace"],
-    "restartItems": data["restarts"]["items"],
-    "podSearchItems": data["search"]["pods"],
+    "namespaces": data["resources"]["namespaces"] if page in ["resources", "workloads"] else [],
+    "problemPods": data["pods"]["problem_by_namespace"] if page in ["resources", "workloads"] else {},
+    "restartPods": data["restarts"]["by_namespace"] if page in ["resources", "workloads"] else {},
+    "restartItems": data["restarts"]["items"] if page == "workloads" else [],
+    "podSearchItems": data["search"]["pods"] if page == "workloads" else [],
     "clusterOptions": cluster_options,
-    "missingResources": data["resources"]["missing_resources"],
+    "missingResources": data["resources"]["missing_resources"] if page in ["resources", "workloads"] else {},
     "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
 <script>
@@ -1056,11 +1152,26 @@
             refreshTimer: null,
             refreshInProgress: false,
             namespaceRows: [],
+            namespacePage: 1,
+            namespacePageSize: 100,
             missingPage: 1,
             missingPageSize: 50,
             missingSortKey: "namespace",
             missingSortDirection: "asc",
         };
+        const escapeHtml = (value) => String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        const optionalCache = {workloads: new Map(), routes: null, pvcs: null};
+        const fetchJson = async (url) => {
+            const response = await fetch(url, {headers: {"Accept": "application/json"}});
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        };
+        {% if page == "resources" %}
         const rankingSize = document.getElementById("ranking-size");
         const rankingKey = "dashboardRankingSize";
         rankingSize.value = localStorage.getItem(rankingKey) || "10";
@@ -1101,21 +1212,45 @@
         rebuildNamespaceOptions();
         const updateNamespaceFilter = () => {
             const selectedNamespace = filter.value;
-            let visible = 0;
-            rows.forEach((row) => {
-                const matches = selectedNamespace === "" ||
-                    row.dataset.namespace === selectedNamespace;
-                row.hidden = !matches;
-                if (matches) visible += 1;
-            });
-            count.textContent = `${visible} namespace gösteriliyor`;
+            const matchingRows = rows.filter((row) =>
+                selectedNamespace === "" ||
+                row.dataset.namespace === selectedNamespace
+            );
+            const pageCount = Math.max(
+                1, Math.ceil(matchingRows.length / state.namespacePageSize)
+            );
+            state.namespacePage = Math.min(state.namespacePage, pageCount);
+            const start = (state.namespacePage - 1) * state.namespacePageSize;
+            const visibleRows = new Set(matchingRows.slice(
+                start, start + state.namespacePageSize
+            ));
+            rows.forEach((row) => { row.hidden = !visibleRows.has(row); });
+            count.textContent = `${matchingRows.length} namespace`;
+            document.getElementById("namespace-page-range").textContent =
+                `${matchingRows.length ? start + 1 : 0}-${Math.min(start + state.namespacePageSize, matchingRows.length)} / ${matchingRows.length}`;
+            document.getElementById("namespace-page-number").textContent =
+                String(state.namespacePage);
+            document.getElementById("namespace-previous").disabled =
+                state.namespacePage <= 1;
+            document.getElementById("namespace-next").disabled =
+                state.namespacePage >= pageCount;
             localStorage.setItem(filterStorageKey, selectedNamespace);
         };
-        filter.addEventListener("change", updateNamespaceFilter);
+        filter.addEventListener("change", () => {
+            state.namespacePage = 1;
+            updateNamespaceFilter();
+        });
         search.addEventListener("input", () => {
+            state.namespacePage = 1;
             rebuildNamespaceOptions(search.value);
             updateNamespaceFilter();
         });
+        document.getElementById("namespace-previous").addEventListener(
+            "click", () => { state.namespacePage -= 1; updateNamespaceFilter(); }
+        );
+        document.getElementById("namespace-next").addEventListener(
+            "click", () => { state.namespacePage += 1; updateNamespaceFilter(); }
+        );
         updateNamespaceFilter();
 
         const compareValues = (left, right, numeric, direction) => {
@@ -1141,22 +1276,11 @@
                     );
                 });
                 rows.forEach((row) => body.appendChild(row));
+                updateNamespaceFilter();
             });
         });
 
-        const escapeHtml = (value) => String(value)
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#039;");
         const drilldown = document.getElementById("namespace-drilldown");
-        const optionalCache = {workloads: new Map(), routes: null, pvcs: null};
-        const fetchJson = async (url) => {
-            const response = await fetch(url, {headers: {"Accept": "application/json"}});
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return response.json();
-        };
         const renderWorkloads = (items) => items.length ? `
             <div class="table-wrapper"><table><thead><tr><th>Type</th><th>Name</th><th>Desired</th><th>Ready</th><th>Available</th><th>CPU Req/Limit</th><th>Memory Req/Limit</th></tr></thead><tbody>
             ${items.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.name)}</td><td>${item.desired_replicas}</td><td>${item.ready_replicas}</td><td>${item.available_replicas}</td><td>${escapeHtml(item.cpu_request_text)} / ${escapeHtml(item.cpu_limit_text)}</td><td>${escapeHtml(item.memory_request_text)} / ${escapeHtml(item.memory_limit_text)}</td></tr>`).join("")}
@@ -1213,10 +1337,12 @@
         document.querySelectorAll("[data-namespace-link]").forEach((link) => {
             link.addEventListener("click", () => {
                 filter.value = link.dataset.namespaceLink;
+                state.namespacePage = 1;
                 updateNamespaceFilter();
                 openDrilldown(link.dataset.namespaceLink);
             });
         });
+        {% endif %}
 
         const closePopup = () => {
             if (!state.activePopup) return;
@@ -1268,6 +1394,7 @@
             if (event.key === "Escape") closePopup();
         });
 
+        {% if page == "resources" %}
         const includeOpenShift = document.getElementById(
             "include-openshift-namespaces"
         );
@@ -1393,8 +1520,10 @@
             const headers = Array.from(
                 document.querySelectorAll("#namespace-resource-table thead th")
             ).map((cell) => cell.textContent.trim().replace("↕", "").trim());
-            const visibleRows = rows.filter((row) => !row.hidden);
-            const csvRows = [headers, ...visibleRows.map((row) =>
+            const filteredRows = rows.filter((row) =>
+                !filter.value || row.dataset.namespace === filter.value
+            );
+            const csvRows = [headers, ...filteredRows.map((row) =>
                 Array.from(row.cells).map((cell) => cell.textContent.trim())
             )];
             downloadCsv(
@@ -1423,36 +1552,72 @@
                 );
             }
         );
+        {% endif %}
 
+        {% if page == "workloads" %}
+        const workloadDetailNamespace = document.getElementById(
+            "workload-detail-namespace"
+        );
+        workloadDetailNamespace.addEventListener("change", async () => {
+            const target = document.getElementById("workload-detail-results");
+            const namespaceName = workloadDetailNamespace.value;
+            if (!namespaceName) { target.textContent = "Select a namespace."; return; }
+            target.classList.add("loading-inline");
+            const namespace = dashboardData.namespaces.find(
+                (item) => item.namespace === namespaceName
+            );
+            const problemPods = dashboardData.problemPods[namespaceName] || [];
+            const restartPods = dashboardData.restartPods[namespaceName] || [];
+            const missingCount = dashboardData.missingResources.all.records
+                .filter((item) => item.namespace === namespaceName)
+                .reduce((total, item) => total + item.missing_count, 0);
+            const summary = `<p><strong>${escapeHtml(namespaceName)}</strong> · ${namespace.pod_count} pods · ${namespace.container_count} containers · ${problemPods.length} non-ready · ${restartPods.filter((item) => item.reason === "CrashLoopBackOff").length} CrashLoopBackOff · ${missingCount} missing fields</p>`;
+            try {
+                const data = await fetchJson(
+                    `/api/workloads?cluster=${encodeURIComponent(dashboardData.cluster)}&namespace=${encodeURIComponent(namespaceName)}`
+                );
+                target.innerHTML = summary + (data.available && data.items.length
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Name</th><th>Desired</th><th>Ready</th><th>Available</th><th>CPU Request / Limit</th><th>Memory Request / Limit</th></tr></thead><tbody>${data.items.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.name)}</td><td>${item.desired_replicas}</td><td>${item.ready_replicas}</td><td>${item.available_replicas}</td><td>${escapeHtml(item.cpu_request_text)} / ${escapeHtml(item.cpu_limit_text)}</td><td>${escapeHtml(item.memory_request_text)} / ${escapeHtml(item.memory_limit_text)}</td></tr>`).join("")}</tbody></table></div>`
+                    : data.available ? "No workload data" : "Workload data unavailable");
+            } catch (_error) { target.textContent = "Workload data unavailable"; }
+            target.classList.remove("loading-inline");
+        });
         const restartSize = document.getElementById("restart-ranking-size");
         const restartSizeKey = "restartRankingSize";
         restartSize.value = localStorage.getItem(restartSizeKey) || "10";
         const renderRestartRanking = () => {
-            const selectedNamespace = filter.value;
+            const selectedNamespace = document.getElementById(
+                "workload-namespace-filter"
+            ).value;
             const limit = Number(restartSize.value);
             const items = dashboardData.restartItems
                 .filter((item) => !selectedNamespace || item.namespace === selectedNamespace)
                 .slice(0, limit);
             document.getElementById("restart-ranking").innerHTML = items.length
-                ? `<ol>${items.map((item) => `<li><strong>${escapeHtml(item.namespace)} / ${escapeHtml(item.name)}</strong> — ${item.restart_count} restarts — ${escapeHtml(item.reason || "")}</li>`).join("")}</ol>`
+                ? `<div class="table-wrapper"><table><thead><tr><th>#</th><th>Namespace</th><th>Pod</th><th>Restarts</th><th>Reason</th></tr></thead><tbody>${items.map((item, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${item.restart_count}</td><td>${escapeHtml(item.reason || "")}</td></tr>`).join("")}</tbody></table></div>`
                 : "No restart data";
             localStorage.setItem(restartSizeKey, restartSize.value);
         };
         restartSize.addEventListener("change", renderRestartRanking);
-        filter.addEventListener("change", renderRestartRanking);
+        document.getElementById("workload-namespace-filter").addEventListener(
+            "change", renderRestartRanking
+        );
         renderRestartRanking();
+        {% endif %}
 
+        {% if page in ["workloads", "routes"] %}
         const loadRoutes = async () => {
             if (!optionalCache.routes) optionalCache.routes = await fetchJson(
                 `/api/routes?cluster=${encodeURIComponent(dashboardData.cluster)}`
             );
             return optionalCache.routes;
         };
+        {% endif %}
+        {% if page == "routes" %}
         const routeSearch = document.getElementById("route-search");
         const routeResults = document.getElementById("route-results");
         const renderRouteResults = async () => {
             const query = routeSearch.value.trim().toLocaleLowerCase("tr");
-            if (!query) { routeResults.textContent = "Type to search"; return; }
             routeResults.classList.add("loading-inline");
             try {
                 const data = await loadRoutes();
@@ -1460,28 +1625,46 @@
                     item.namespace, item.name, item.host
                 ].some((value) => value.toLocaleLowerCase("tr").includes(query))).slice(0, 50);
                 routeResults.innerHTML = data.available && items.length
-                    ? `<ul>${items.map((item) => `<li><strong>${escapeHtml(item.namespace)} / ${escapeHtml(item.name)}</strong> — <a href="https://${escapeHtml(item.host)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.host)}</a> → ${escapeHtml(item.service)}</li>`).join("")}</ul>`
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Namespace</th><th>Route</th><th>Host</th><th>Service</th><th>TLS</th><th>Status</th></tr></thead><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td><a href="https://${escapeHtml(item.host)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.host)}</a></td><td>${escapeHtml(item.service)}</td><td>${item.tls ? "Yes" : "No"}</td><td>${escapeHtml(item.status)}</td></tr>`).join("")}</tbody></table></div>`
                     : data.available ? "No matching routes" : "Route data unavailable";
             } catch (_error) { routeResults.textContent = "Route data unavailable"; }
             routeResults.classList.remove("loading-inline");
         };
         routeSearch.addEventListener("input", renderRouteResults);
+        renderRouteResults();
+        {% endif %}
 
-        document.getElementById("load-pvcs").addEventListener("click", async (event) => {
+        {% if page == "storage" %}
+        const pvcSearch = document.getElementById("pvc-search");
+        const pvcNamespace = document.getElementById("pvc-namespace-filter");
+        const renderPvcs = async () => {
             const target = document.getElementById("pvc-results");
             target.classList.add("loading-inline");
-            event.currentTarget.disabled = true;
             try {
                 optionalCache.pvcs ||= await fetchJson(
                     `/api/pvcs?cluster=${encodeURIComponent(dashboardData.cluster)}`
                 );
                 const data = optionalCache.pvcs;
-                target.innerHTML = data.available ? `<p><strong>${data.total}</strong> PVC · ${escapeHtml(data.requested_capacity_text)} requested · ${data.bound} Bound · ${data.pending} Pending</p><ol>${data.items.map((item) => `<li>${escapeHtml(item.namespace)} / ${escapeHtml(item.name)} — ${escapeHtml(item.requested_capacity_text)} — ${escapeHtml(item.status)} — ${escapeHtml(item.storage_class)}</li>`).join("")}</ol>` : "PVC data unavailable";
+                if (pvcNamespace.options.length === 1) {
+                    [...new Set(data.items.map((item) => item.namespace))].sort()
+                        .forEach((name) => pvcNamespace.add(new Option(name, name)));
+                }
+                const query = pvcSearch.value.trim().toLocaleLowerCase("tr");
+                const items = data.items.filter((item) =>
+                    (!pvcNamespace.value || item.namespace === pvcNamespace.value) &&
+                    (!query || [item.namespace, item.name, item.storage_class]
+                        .some((value) => value.toLocaleLowerCase("tr").includes(query)))
+                );
+                target.innerHTML = data.available ? `<p><strong>${data.total}</strong> PVC · ${escapeHtml(data.requested_capacity_text)} requested · ${data.bound} Bound · ${data.pending} Pending</p><div class="table-wrapper"><table><thead><tr><th>Namespace</th><th>PVC</th><th>Requested</th><th>Status</th><th>StorageClass</th></tr></thead><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.requested_capacity_text)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.storage_class)}</td></tr>`).join("")}</tbody></table></div>` : "PVC data unavailable";
             } catch (_error) { target.textContent = "PVC data unavailable"; }
             target.classList.remove("loading-inline");
-            event.currentTarget.disabled = false;
-        });
+        };
+        pvcSearch.addEventListener("input", renderPvcs);
+        pvcNamespace.addEventListener("change", renderPvcs);
+        renderPvcs();
+        {% endif %}
 
+        {% if page == "workloads" %}
         const globalSearch = document.getElementById("global-search");
         const globalResults = document.getElementById("global-search-results");
         globalSearch.addEventListener("input", async () => {
@@ -1504,29 +1687,12 @@
                     .some((value) => value.toLocaleLowerCase("tr").includes(query)))
                     .slice(0, 50);
                 globalResults.innerHTML = allItems.length
-                    ? `<ul>${allItems.map((item) => `<li><strong>${escapeHtml(item.type)}</strong> · ${escapeHtml(item.namespace)} / ${escapeHtml(item.name)}</li>`).join("")}</ul>`
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Namespace</th><th>Name</th><th>Status / Ready</th><th>Restarts / Replicas</th></tr></thead><tbody>${allItems.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${item.ready_replicas === undefined ? "N/A" : `${item.ready_replicas} Ready`}</td><td>${item.desired_replicas === undefined ? "N/A" : `${item.desired_replicas} desired`}</td></tr>`).join("")}</tbody></table></div>`
                     : "No matching resources";
             } catch (_error) { globalResults.textContent = "Optional search data unavailable"; }
             globalResults.classList.remove("loading-inline");
         });
-
-        document.getElementById("compare-clusters").addEventListener("click", async (event) => {
-            const target = document.getElementById("comparison-results");
-            target.classList.add("loading-inline");
-            event.currentTarget.disabled = true;
-            const keys = Object.keys(dashboardData.clusterOptions);
-            const results = await Promise.allSettled(keys.map((key) =>
-                fetchJson(`/api/summary?cluster=${encodeURIComponent(key)}`)
-            ));
-            target.innerHTML = `<div class="table-wrapper"><table><thead><tr><th>Cluster</th><th>Nodes</th><th>Pods</th><th>Namespaces</th><th>CPU Capacity</th><th>Memory Capacity</th><th>CPU Overcommit</th><th>Memory Overcommit</th><th>Non-ready Pods</th><th>Degraded Operators</th></tr></thead><tbody>${results.map((result, index) => {
-                const name = dashboardData.clusterOptions[keys[index]].name;
-                if (result.status === "rejected") return `<tr><td>${escapeHtml(name)}</td><td colspan="9">Data unavailable</td></tr>`;
-                const item = result.value;
-                return `<tr><td>${escapeHtml(name)}</td><td>${item.nodes.total}</td><td>${item.pods.total}</td><td>${item.namespace_count}</td><td>${escapeHtml(item.resources.cluster.cpu_capacity_text)}</td><td>${escapeHtml(item.resources.cluster.memory_capacity_text)}</td><td>${item.resources.cluster.cpu_overcommit_ratio}x</td><td>${item.resources.cluster.memory_overcommit_ratio}x</td><td>${item.pods.problem_count}</td><td>${item.cluster_operators.available ? item.cluster_operators.degraded : "N/A"}</td></tr>`;
-            }).join("")}</tbody></table></div>`;
-            target.classList.remove("loading-inline");
-            event.currentTarget.disabled = false;
-        });
+        {% endif %}
 
         const root = document.documentElement;
         const themeToggle = document.getElementById("theme-toggle");
@@ -1546,7 +1712,7 @@
         if (!new URLSearchParams(window.location.search).has("cluster") &&
                 storedCluster && dashboardData.clusterOptions[storedCluster] &&
                 storedCluster !== dashboardData.cluster) {
-            window.location.replace(`/?cluster=${encodeURIComponent(storedCluster)}`);
+            window.location.replace(`${window.location.pathname}?cluster=${encodeURIComponent(storedCluster)}`);
             return;
         }
         localStorage.setItem("selectedCluster", dashboardData.cluster);

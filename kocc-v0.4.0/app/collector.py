@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -117,10 +118,10 @@ class ClusterCollector:
             "requested_capacity": sum(item["requested_capacity"] for item in items),
             "bound": sum(item["status"] == "Bound" for item in items),
             "pending": sum(item["status"] == "Pending" for item in items),
-            "items": ranked[:10],
+            "items": ranked,
         }
 
-    def get_route_summary(self) -> list[dict[str, str]]:
+    def get_route_summary(self) -> list[dict[str, Any]]:
         response = self.custom_api.list_cluster_custom_object(
             group="route.openshift.io",
             version="v1",
@@ -136,6 +137,13 @@ class ClusterCollector:
                 "name": metadata.get("name", "unknown"),
                 "host": spec.get("host", ""),
                 "service": spec.get("to", {}).get("name", ""),
+                "tls": bool(spec.get("tls")),
+                "status": "Admitted" if any(
+                    condition.get("type") == "Admitted"
+                    and condition.get("status") == "True"
+                    for ingress in route.get("status", {}).get("ingress", [])
+                    for condition in ingress.get("conditions", [])
+                ) else "Unknown",
             })
         return sorted(routes, key=lambda item: (item["namespace"], item["name"]))
 
@@ -712,28 +720,53 @@ class ClusterCollector:
         }
 
     def collect_dashboard(self) -> dict[str, Any]:
+        collection_started = time.perf_counter()
+        step_started = collection_started
         nodes = self.core_api.list_node(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        logger.info("collect_nodes: %.2fs", time.perf_counter() - step_started)
+        step_started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        logger.info("collect_pods: %.2fs", time.perf_counter() - step_started)
+        step_started = time.perf_counter()
         namespaces = self.core_api.list_namespace(
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
+        logger.info(
+            "collect_namespaces: %.2fs", time.perf_counter() - step_started
+        )
 
+        step_started = time.perf_counter()
         resource_summary = self.get_resource_summary(
             nodes,
             pods,
             namespaces,
         )
+        logger.info(
+            "resource_summary: %.2fs", time.perf_counter() - step_started
+        )
+
+        step_started = time.perf_counter()
+        version = self.get_cluster_version()
+        logger.info("collect_version: %.2fs", time.perf_counter() - step_started)
+        step_started = time.perf_counter()
+        operators = self.get_cluster_operator_summary()
+        logger.info(
+            "collect_operators: %.2fs", time.perf_counter() - step_started
+        )
+        logger.info(
+            "collect_dashboard_total: %.2fs", time.perf_counter() - collection_started
+        )
 
         return {
-            "version": self.get_cluster_version(),
+            "version": version,
             "nodes": self.get_node_summary(nodes),
             "pods": self.get_pod_summary(pods),
             "restarts": self.get_restart_summary(pods),
-            "cluster_operators": self.get_cluster_operator_summary(),
+            "cluster_operators": operators,
             "namespace_count": self.get_namespace_count(namespaces),
             "resources": resource_summary,
             "search": {
