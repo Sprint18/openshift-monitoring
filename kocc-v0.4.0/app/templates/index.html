@@ -587,7 +587,7 @@
     </div>
     {% else %}
 
-    {% if page in ["overview", "workloads", "health"] %}
+    {% if page in ["overview", "health"] %}
     <div class="cards">
         <div class="card">
             <h3>OpenShift Version</h3>
@@ -708,7 +708,7 @@
     </div>
     {% endif %}
 
-    {% if page in ["overview", "workloads", "health"] %}
+    {% if page in ["overview", "health"] %}
     <h2>Operational Health</h2>
     <div class="cards">
         <div class="card">
@@ -1157,6 +1157,7 @@
     "missingAllRecords": data["resources"]["missing_resources"]["all"]["records"] if page == "resources" else [],
     "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
+<script src="/static/missing_resources.js"></script>
 <script>
     const initializeDashboard = () => {
         if (window.__koccDashboardInitialized) return;
@@ -1164,6 +1165,11 @@
         const dashboardData = JSON.parse(
             document.getElementById("dashboard-data").textContent
         );
+        const loadedUrl = new URL(window.location.href);
+        if (loadedUrl.searchParams.has("refresh")) {
+            loadedUrl.searchParams.delete("refresh");
+            window.history.replaceState({}, "", loadedUrl.toString());
+        }
         {% if page == "resources" %}
         console.info(
             `missing_resources_initialized application=${dashboardData.missingApplicationRecords.length} all=${dashboardData.missingAllRecords.length}`
@@ -1194,6 +1200,7 @@
             return response.json();
         };
         {% if page == "resources" %}
+        try {
         const rankingSize = document.getElementById("ranking-size");
         const rankingKey = "dashboardRankingSize";
         rankingSize.value = localStorage.getItem(rankingKey) || "10";
@@ -1363,6 +1370,9 @@
                 openDrilldown(link.dataset.namespaceLink);
             });
         });
+        } catch (error) {
+            console.error("NamespaceResources init failed:", error);
+        }
         {% endif %}
 
         const closePopup = () => {
@@ -1416,6 +1426,7 @@
         });
 
         {% if page == "resources" %}
+        try {
         const includeOpenShift = document.getElementById(
             "include-openshift-namespaces"
         );
@@ -1427,27 +1438,24 @@
         const missingPageNumber = document.getElementById("missing-page-number");
         const missingPrevious = document.getElementById("missing-previous");
         const missingNext = document.getElementById("missing-next");
-        const getFilteredMissingRecords = () => {
-            const sourceRecords = includeOpenShift.checked
-                ? dashboardData.missingAllRecords
-                : dashboardData.missingApplicationRecords;
-            const query = missingSearch.value.trim().toLocaleLowerCase("tr");
-            return sourceRecords
-                .filter((item) => !query || [
-                    item.namespace, item.pod, item.container
-                ].some((value) => value.toLocaleLowerCase("tr").includes(query)))
-                .sort((left, right) => compareValues(
-                    left[state.missingSortKey],
-                    right[state.missingSortKey],
-                    state.missingSortKey === "missing_count",
-                    state.missingSortDirection
-                ));
-        };
+        const getMissingView = () => KoccMissingResources.buildMissingResourcesView(
+            dashboardData.missingAllRecords,
+            {
+                includeOpenShift: includeOpenShift.checked,
+                query: missingSearch.value,
+                sortKey: state.missingSortKey,
+                sortDirection: state.missingSortDirection,
+                page: state.missingPage,
+                pageSize: state.missingPageSize,
+            }
+        );
+        const getFilteredMissingRecords = () => getMissingView().records;
         const missingStatus = (defined) => defined
             ? '<span class="defined-mark" title="Defined">✓</span>'
             : '<span class="missing-badge">Missing</span>';
         const renderMissingResources = () => {
-            const records = getFilteredMissingRecords();
+            const view = getMissingView();
+            const records = view.records;
             const missingCount = records.reduce(
                 (total, item) => total + item.missing_count, 0
             );
@@ -1459,14 +1467,10 @@
             document.getElementById("missing-resource-impact").textContent =
                 `${namespaceCount} namespace · ${records.length} container`;
 
-            const pageCount = Math.max(
-                1, Math.ceil(records.length / state.missingPageSize)
-            );
-            state.missingPage = Math.min(state.missingPage, pageCount);
-            const start = (state.missingPage - 1) * state.missingPageSize;
-            const pageRecords = records.slice(
-                start, start + state.missingPageSize
-            );
+            const pageCount = view.pageCount;
+            state.missingPage = view.page;
+            const start = view.start;
+            const pageRecords = view.pageRecords;
             if (!pageRecords.length) {
                 const message = missingSearch.value.trim()
                     ? "No matching records"
@@ -1579,6 +1583,9 @@
                 );
             }
         );
+        } catch (error) {
+            console.error("MissingResources init failed:", error);
+        }
         {% endif %}
 
         {% if page == "workloads" %}
@@ -1630,6 +1637,32 @@
             "change", renderRestartRanking
         );
         renderRestartRanking();
+        const hydrateWorkloadSnapshot = async () => {
+            try {
+                const snapshot = await fetchJson(
+                    `/api/summary?cluster=${encodeURIComponent(dashboardData.cluster)}`
+                );
+                dashboardData.namespaces = snapshot.resources.namespaces || [];
+                dashboardData.problemPods = snapshot.pods.problem_by_namespace || {};
+                dashboardData.restartPods = snapshot.restarts.by_namespace || {};
+                dashboardData.restartItems = snapshot.restarts.items || [];
+                dashboardData.podSearchItems = snapshot.search.pods || [];
+                dashboardData.missingResources = snapshot.resources.missing_resources || {all: {records: []}};
+                const names = (snapshot.resources.namespace_options || []).slice().sort(
+                    (left, right) => left.localeCompare(right, "tr")
+                );
+                [workloadDetailNamespace, document.getElementById("workload-namespace-filter")]
+                    .forEach((select) => names.forEach((name) =>
+                        select.add(new Option(name, name))
+                    ));
+                renderRestartRanking();
+            } catch (error) {
+                console.error("Workload snapshot load failed:", error);
+                document.getElementById("restart-ranking").textContent =
+                    "Cluster pod data unavailable";
+            }
+        };
+        hydrateWorkloadSnapshot();
         {% endif %}
 
         {% if page in ["workloads", "routes"] %}
@@ -1755,7 +1788,7 @@
         );
         const refreshKey = "dashboardRefreshSeconds";
         refresh.value = localStorage.getItem(refreshKey) || "0";
-        const refreshPage = () => {
+        const refreshPage = (forceRefresh = false) => {
             if (state.refreshInProgress) return;
             state.refreshInProgress = true;
             if (state.refreshTimer) {
@@ -1769,7 +1802,13 @@
             sessionStorage.setItem(
                 "dashboardScrollY", String(window.scrollY)
             );
-            window.location.reload();
+            if (forceRefresh) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("refresh", "true");
+                window.location.assign(url.toString());
+            } else {
+                window.location.reload();
+            }
         };
         const scheduleRefresh = () => {
             if (state.refreshTimer) {
@@ -1784,13 +1823,13 @@
             );
             if (seconds > 0) {
                 state.refreshTimer = window.setTimeout(
-                    refreshPage,
+                    () => refreshPage(false),
                     seconds * 1000
                 );
             }
         };
         refresh.addEventListener("change", scheduleRefresh);
-        manualRefresh.addEventListener("click", refreshPage);
+        manualRefresh.addEventListener("click", () => refreshPage(true));
         scheduleRefresh();
         const savedScrollY = Number(
             sessionStorage.getItem("dashboardScrollY") || "0"

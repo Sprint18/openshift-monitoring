@@ -211,25 +211,14 @@ class ClusterCollector:
         total_started = time.perf_counter()
         started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
+            resource_version="0",
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
-        log_performance("diagnostics.list_pods", started, item_count=len(pods))
-        started = time.perf_counter()
-        try:
-            events = self.core_api.list_event_for_all_namespaces(
-                _request_timeout=API_REQUEST_TIMEOUT,
-            ).items
-        except Exception as exc:
-            logger.warning("Diagnostic event list unavailable: %s", exc)
-            events = []
-        log_performance("diagnostics.list_events", started, item_count=len(events))
+        log_performance(
+            "diagnostics.list_pods", started, item_count=len(pods),
+            extra={"resource_version_mode": "cache"},
+        )
         filter_started = time.perf_counter()
-        unhealthy_uids = {
-            getattr(event.involved_object, "uid", None)
-            for event in events
-            if event.reason == "Unhealthy"
-            and getattr(event.involved_object, "uid", None)
-        }
         result = []
         now = datetime.now(timezone.utc)
         for pod in pods:
@@ -257,7 +246,6 @@ class ClusterCollector:
                 phase in {"Pending", "Failed", "Unknown"}
                 or ready < total
                 or bool(reasons & DIAGNOSTIC_REASONS)
-                or pod.metadata.uid in unhealthy_uids
             )
             if not problem:
                 continue
@@ -302,10 +290,12 @@ class ClusterCollector:
         started = time.perf_counter()
         events = self.core_api.list_namespaced_event(
             namespace=namespace,
-            field_selector=f"involvedObject.name={pod_name}",
+            field_selector=(
+                f"involvedObject.name={pod_name},involvedObject.kind=Pod"
+            ),
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
-        log_performance("diagnostics.list_events", started, item_count=len(events))
+        log_performance("diagnostics.pod_events", started, item_count=len(events))
         statuses = list(pod.status.container_statuses or [])
         status_by_name = {status.name: status for status in statuses}
         containers = [
@@ -961,9 +951,13 @@ class ClusterCollector:
         logger.info("collect_nodes: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
+            resource_version="0",
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
-        log_performance("api.list_pods", step_started, item_count=len(pods))
+        log_performance(
+            "api.list_pods", step_started, item_count=len(pods),
+            extra={"resource_version_mode": "cache"},
+        )
         logger.info("collect_pods: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         namespaces = self.core_api.list_namespace(

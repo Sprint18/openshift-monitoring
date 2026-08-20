@@ -340,6 +340,19 @@ yazılır. Snapshot cache loglarında hit/miss, stale fallback ve snapshot yaş�
 görülebilir. Bu ölçümler gerçek cluster ağ/API gecikmesini ancak deployment
 sonrasında gösterir.
 
+Dashboard snapshot'ı cluster başına 30 saniye tutulur; Overview ve Resources
+aynı snapshot'ı paylaşır. Manuel Refresh cache'i bir kez bypass eder. Workloads,
+Storage ve Routes HTML kabukları full dashboard collection beklemeden render
+edilir ve kendi read-only API verilerini lazy-load eder. Diagnostics problem-pod
+listesi de 30 saniyelik ayrı bir sonuç cache'i kullanır.
+
+Cluster-wide Pod listelerinde `resource_version="0"` kullanılır. Kubernetes list
+semantiğinde bu değer API server watch cache'inden cevap verilmesine izin verir;
+monitoring snapshot'ı için uygundur ve herhangi bir nesneyi değiştirmez.
+Diagnostics ana listesi Event API çağrısı yapmaz. Eventler yalnız pod detayında
+namespace-scoped ve `involvedObject.name`/`involvedObject.kind=Pod`
+selector'larıyla alınır.
+
 ```bash
 POD=$(oc get pods -l app.kubernetes.io/name=kocc -o jsonpath='{.items[0].metadata.name}')
 oc get pod "$POD" -o wide

@@ -29,7 +29,9 @@ from app.diagnostics import analyze_pod_diagnostics
 from app.performance import (
     log_performance,
     reset_perf_cluster,
+    reset_perf_path,
     set_perf_cluster,
+    set_perf_path,
 )
 from app.resource_parser import format_cpu, format_memory
 
@@ -47,8 +49,10 @@ app.mount(
     name="static",
 )
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
-DASHBOARD_CACHE_TTL_SECONDS = 15
+DASHBOARD_CACHE_TTL_SECONDS = 30
+DIAGNOSTIC_CACHE_TTL_SECONDS = 30
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_diagnostic_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
 logger.info(
@@ -65,6 +69,7 @@ async def request_timing_middleware(request: Request, call_next: Any) -> Any:
     status = 500
     cluster_key = request.query_params.get("cluster", DEFAULT_CLUSTER).lower()
     perf_token = set_perf_cluster(cluster_key)
+    path_token = set_perf_path(request.url.path)
     try:
         response = await call_next(request)
         status = response.status_code
@@ -84,6 +89,7 @@ async def request_timing_middleware(request: Request, call_next: Any) -> Any:
             extra={"path": request.url.path, "status": status},
         )
         reset_perf_cluster(perf_token)
+        reset_perf_path(path_token)
 
 
 @app.get("/health")
@@ -535,15 +541,18 @@ def clear_dashboard_cache() -> None:
     with _dashboard_cache_lock:
         _dashboard_cache.clear()
         _cluster_cache_locks.clear()
+        _diagnostic_cache.clear()
 
 
-def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
+def _cached_dashboard_data(
+    cluster_key: str, force_refresh: bool = False
+) -> dict[str, Any]:
     """Return an isolated cluster snapshot with a short thread-safe TTL."""
     now = time.monotonic()
     cache_started = time.perf_counter()
     with _dashboard_cache_lock:
         cached = _dashboard_cache.get(cluster_key)
-        if cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+        if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
             data = deepcopy(cached[1])
             data["cache"] = {
                 "hit": True,
@@ -551,7 +560,7 @@ def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
             }
             log_performance(
                 "cache.snapshot", cache_started, cache_hit=True,
-                extra={"age_seconds": data["cache"]["age_seconds"]},
+                extra={"snapshot_age_ms": round((now - cached[0]) * 1000)},
             )
             return data
         cluster_lock = _cluster_cache_locks.setdefault(
@@ -562,7 +571,7 @@ def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
         now = time.monotonic()
         with _dashboard_cache_lock:
             cached = _dashboard_cache.get(cluster_key)
-            if cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+            if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
                 data = deepcopy(cached[1])
                 data["cache"] = {
                     "hit": True,
@@ -570,7 +579,7 @@ def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
                 }
                 log_performance(
                     "cache.snapshot", cache_started, cache_hit=True,
-                    extra={"age_seconds": data["cache"]["age_seconds"]},
+                    extra={"snapshot_age_ms": round((now - cached[0]) * 1000)},
                 )
                 return data
         log_performance("cache.snapshot", cache_started, cache_hit=False)
@@ -590,7 +599,7 @@ def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
                 }
                 log_performance(
                     "cache.stale_fallback", cache_started, cache_hit=True,
-                    extra={"age_seconds": data["cache"]["age_seconds"]},
+                    extra={"snapshot_age_ms": round((now - cached[0]) * 1000)},
                 )
                 return data
             raise
@@ -600,10 +609,12 @@ def _cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
     return data
 
 
-def cached_dashboard_data(cluster_key: str) -> dict[str, Any]:
+def cached_dashboard_data(
+    cluster_key: str, force_refresh: bool = False
+) -> dict[str, Any]:
     token = set_perf_cluster(cluster_key)
     try:
-        return _cached_dashboard_data(cluster_key)
+        return _cached_dashboard_data(cluster_key, force_refresh)
     finally:
         reset_perf_cluster(token)
 
@@ -657,9 +668,10 @@ def api_clusters() -> dict[str, Any]:
 @app.get("/api/summary")
 def api_summary(
     cluster: str = Query(default=DEFAULT_CLUSTER),
+    refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     try:
-        return cached_dashboard_data(cluster.lower())
+        return cached_dashboard_data(cluster.lower(), force_refresh=refresh)
     except Exception as exc:
         raise_http_error(exc)
 
@@ -747,17 +759,34 @@ def api_routes(
 @app.get("/api/diagnostics/pods")
 def api_diagnostic_pods(
     cluster: str = Query(default=DEFAULT_CLUSTER),
+    refresh: bool = Query(default=False),
 ) -> dict[str, Any]:
     cluster_key = cluster.lower()
     perf_token = set_perf_cluster(cluster_key)
     try:
         get_cluster_definition(cluster_key)
+        now = time.monotonic()
+        with _dashboard_cache_lock:
+            cached = _diagnostic_cache.get(cluster_key)
+            if not refresh and cached and now - cached[0] < DIAGNOSTIC_CACHE_TTL_SECONDS:
+                age_ms = round((now - cached[0]) * 1000)
+                log_performance(
+                    "cache.diagnostics", time.perf_counter(),
+                    item_count=len(cached[1]), cache_hit=True,
+                    extra={"snapshot_age_ms": age_ms},
+                )
+                return {"available": True, "items": deepcopy(cached[1])}
+        log_performance(
+            "cache.diagnostics", time.perf_counter(), cache_hit=False
+        )
         api_client = new_cluster_client(cluster_key)
         try:
-            return {
-                "available": True,
-                "items": ClusterCollector(api_client).get_problem_pods(),
-            }
+            items = ClusterCollector(api_client).get_problem_pods()
+            with _dashboard_cache_lock:
+                _diagnostic_cache[cluster_key] = (
+                    time.monotonic(), deepcopy(items)
+                )
+            return {"available": True, "items": items}
         finally:
             api_client.close()
     except Exception as exc:
@@ -856,6 +885,7 @@ def render_dashboard_page(
     request: Request,
     cluster: str,
     page: str,
+    force_refresh: bool = False,
 ) -> HTMLResponse:
     cluster_key = cluster.lower()
     definitions = get_cluster_definitions()
@@ -865,7 +895,25 @@ def render_dashboard_page(
     }
 
     try:
-        data = cached_dashboard_data(cluster_key)
+        if page in {"workloads", "storage", "routes"}:
+            data = {
+                "selected_cluster_name": definitions[cluster_key].name,
+                "collected_at": format_istanbul_time(datetime.now(timezone.utc)),
+                "collection_duration_seconds": 0,
+                "collection_duration_severity": "normal",
+                "cache": {"hit": False, "age_seconds": 0},
+                "resources": {
+                    "namespaces": [], "namespace_options": [],
+                    "missing_resources": {"application": {"records": []}, "all": {"records": []}},
+                },
+                "pods": {"problem_by_namespace": {}},
+                "restarts": {"by_namespace": {}, "items": []},
+                "search": {"pods": []},
+            }
+        else:
+            data = cached_dashboard_data(
+                cluster_key, force_refresh=force_refresh
+            )
         if page == "resources":
             missing = data["resources"]["missing_resources"]
             logger.info(
@@ -916,16 +964,18 @@ def render_dashboard_page(
 def dashboard(
     request: Request,
     cluster: str = Query(default=DEFAULT_CLUSTER),
+    refresh: bool = Query(default=False),
 ) -> HTMLResponse:
-    return render_dashboard_page(request, cluster, "overview")
+    return render_dashboard_page(request, cluster, "overview", refresh)
 
 
 @app.get("/resources", response_class=HTMLResponse)
 def resources_page(
     request: Request,
     cluster: str = Query(default=DEFAULT_CLUSTER),
+    refresh: bool = Query(default=False),
 ) -> HTMLResponse:
-    return render_dashboard_page(request, cluster, "resources")
+    return render_dashboard_page(request, cluster, "resources", refresh)
 
 
 @app.get("/workloads", response_class=HTMLResponse)

@@ -25,4 +25,4 @@ def test_slow_operation_threshold(monkeypatch, caplog) -> None:
     monkeypatch.setattr(performance.time, "perf_counter", lambda: 3.01)
     with caplog.at_level(logging.INFO, logger="kocc.performance"):
         performance.log_performance("api.list_nodes", 2.0)
-    assert "slow_operation cluster=unknown op=api.list_nodes duration_ms=1010" in caplog.text
+    assert "slow_operation cluster=unknown path=unknown op=api.list_nodes duration_ms=1010" in caplog.text

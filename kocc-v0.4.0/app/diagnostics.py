@@ -101,6 +101,7 @@ def analyze_pod_diagnostics(
             effective_exit = exit_code if exit_code not in (None, 0) else last_exit_code
             evidence = [
                 f'Container: {container.get("name", "N/A")}',
+                f'{container.get("name", "N/A")} container Ready değil',
                 f"Restart count: {restarts}",
                 f"Application process exited with code {effective_exit}",
                 f'Terminated reason: {terminated_reason or last_reason or "N/A"}',
@@ -117,6 +118,12 @@ def analyze_pod_diagnostics(
                 "severity": restart_severity(restarts),
                 "evidence": evidence,
             })
+
+    healthy_sidecars = [
+        item.get("name", "N/A") for item in containers
+        if item.get("ready") and int(item.get("restart_count", 0) or 0) == 0
+        and item not in failed_containers
+    ]
 
     if "OOMKilled" in reasons or 137 in exit_codes:
         limits = [
@@ -183,6 +190,7 @@ def analyze_pod_diagnostics(
         analysis = result(
             "Uygulama container'ı hata koduyla kapanıp tekrar başlatılıyor.",
             [item for finding in failed_containers for item in finding["evidence"]]
+            + [f"Sağlıklı sidecar: {name}" for name in healthy_sidecars]
             + log_signals,
             [
                 "Previous container loglarını inceleyin.",

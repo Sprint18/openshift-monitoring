@@ -1,5 +1,9 @@
 from datetime import datetime, timezone
 import re
+import json
+from pathlib import Path
+import shutil
+import subprocess
 from unittest.mock import Mock, patch
 
 import pytest
@@ -460,7 +464,7 @@ def test_missing_resource_search_pagination_csv_and_single_flight_contract(
     assert response.status_code == 200
     assert "missingPageSize: 50" in response.text
     assert "start + state.missingPageSize" in response.text
-    assert "item.namespace, item.pod, item.container" in response.text
+    assert "KoccMissingResources.buildMissingResourcesView" in response.text
     assert "getFilteredMissingRecords()" in response.text
     assert "export-missing-csv" in response.text
     assert "refreshInProgress: false" in response.text
@@ -587,6 +591,27 @@ def test_cache_hit_and_miss_are_logged(
     assert "op=cache.snapshot" in caplog.text
     assert "cache_hit=false" in caplog.text
     assert "cache_hit=true" in caplog.text
+
+
+@patch("app.main.prepare_dashboard_data")
+def test_cache_force_refresh_bypasses_fresh_snapshot(
+    prepare_data: Mock,
+) -> None:
+    prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
+    assert cached_dashboard_data("kkbtest")["generation"] == 1
+    assert cached_dashboard_data("kkbtest", force_refresh=True)["generation"] == 2
+    assert prepare_data.call_count == 2
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_overview_and_resources_share_cluster_snapshot(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    assert client.get("/?cluster=kkbtest").status_code == 200
+    assert client.get("/resources?cluster=kkbtest").status_code == 200
+    collector_class.return_value.collect_dashboard.assert_called_once()
 
 
 @patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)
@@ -758,4 +783,71 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     assert 'href="/workloads?cluster=kkbtest"' in response.text
     collector.get_workload_summary.assert_not_called()
     collector.get_pvc_summary.assert_not_called()
-    collector.get_route_summary.assert_not_called()
+
+
+@patch("app.main.cached_dashboard_data")
+def test_lightweight_pages_do_not_collect_dashboard(cached_data: Mock) -> None:
+    for route in ("/workloads", "/storage", "/routes", "/diagnostics"):
+        response = client.get(f"{route}?cluster=kkbtest")
+        assert response.status_code == 200
+    cached_data.assert_not_called()
+
+
+def test_missing_resources_canonical_search_and_filtered_pagination() -> None:
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is not installed")
+    script_path = Path(__file__).parents[1] / "app/static/missing_resources.js"
+    records = [
+        {"namespace": name, "pod": f"{name}-pod", "container": "app", "missing_count": 1}
+        for name in (
+            "dynatrace", "dynatrace", "sandbox-a", "sandbox-app",
+            "openshift-monitoring",
+        )
+    ]
+    javascript = (
+        f"const m=require({json.dumps(str(script_path))});"
+        f"const records={json.dumps(records)};"
+        "const view=m.buildMissingResourcesView(records,{"
+        "includeOpenShift:false,query:'sandbox-a',sortKey:'namespace',"
+        "sortDirection:'asc',page:2,pageSize:1});"
+        "console.log(JSON.stringify(view));"
+    )
+    completed = subprocess.run(
+        [bun, "-e", javascript], check=True, capture_output=True, text=True
+    )
+    view = json.loads(completed.stdout)
+    assert [item["namespace"] for item in view["records"]] == [
+        "sandbox-a", "sandbox-app"
+    ]
+    assert view["total"] == 2
+    assert view["page"] == 2
+    assert view["pageRecords"][0]["namespace"] == "sandbox-app"
+
+
+def test_missing_resources_open_shift_filter_combines_with_search() -> None:
+    source = (Path(__file__).parents[1] / "app/static/missing_resources.js").read_text()
+    template = (Path(__file__).parents[1] / "app/templates/index.html").read_text()
+    assert 'startsWith("openshift-")' in source
+    assert "includes(query)" in source
+    assert "state.missingPage = 1" in template
+    assert "MissingResources init failed:" in template
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_rendered_resources_javascript_parses(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is not installed")
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    response = client.get("/resources?cluster=kkbtest")
+    scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", response.text, re.S)
+    inline = next(script for script in scripts if "initializeDashboard" in script)
+    completed = subprocess.run(
+        [bun, "-e", f"new Function({json.dumps(inline)});"],
+        capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr

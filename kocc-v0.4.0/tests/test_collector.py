@@ -336,6 +336,7 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
         _request_timeout=API_REQUEST_TIMEOUT
     )
     core_api.list_pod_for_all_namespaces.assert_called_once_with(
+        resource_version="0",
         _request_timeout=API_REQUEST_TIMEOUT
     )
     core_api.list_namespace.assert_called_once_with(
@@ -450,6 +451,10 @@ def test_diagnostics_excludes_succeeded_pods_and_handles_empty_events(
 
     assert [item["name"] for item in result] == ["waiting"]
     assert result[0]["reason"] == "Pending"
+    core_api.list_event_for_all_namespaces.assert_not_called()
+    core_api.list_pod_for_all_namespaces.assert_called_once_with(
+        resource_version="0", _request_timeout=API_REQUEST_TIMEOUT
+    )
 
 
 @patch("app.collector.client.AppsV1Api")
@@ -497,3 +502,10 @@ def test_pod_diagnostic_previous_log_is_optional(
     assert result["logs"]["current"] == "current log"
     assert result["logs"]["previous_available"] is False
     assert result["pod"]["containers"][0]["last_exit_code"] == 1
+    core_api.list_namespaced_event.assert_called_once_with(
+        namespace="apps",
+        field_selector=(
+            "involvedObject.name=crashing,involvedObject.kind=Pod"
+        ),
+        _request_timeout=API_REQUEST_TIMEOUT,
+    )
