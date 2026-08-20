@@ -19,7 +19,125 @@ logger = logging.getLogger("kocc.collector")
 class ClusterCollector:
     def __init__(self, api_client: ApiClient) -> None:
         self.core_api = client.CoreV1Api(api_client)
+        self.apps_api = client.AppsV1Api(api_client)
         self.custom_api = client.CustomObjectsApi(api_client)
+
+    @staticmethod
+    def workload_resources(containers: list[Any]) -> dict[str, int]:
+        totals = {
+            "cpu_request": 0,
+            "cpu_limit": 0,
+            "memory_request": 0,
+            "memory_limit": 0,
+        }
+        for container_item in containers:
+            resources = getattr(container_item, "resources", None)
+            requests = getattr(resources, "requests", None) or {}
+            limits = getattr(resources, "limits", None) or {}
+            totals["cpu_request"] += cpu_to_millicores(requests.get("cpu"))
+            totals["cpu_limit"] += cpu_to_millicores(limits.get("cpu"))
+            totals["memory_request"] += memory_to_bytes(
+                requests.get("memory")
+            )
+            totals["memory_limit"] += memory_to_bytes(limits.get("memory"))
+        return totals
+
+    def get_workload_summary(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        calls = (
+            ("Deployment", self.apps_api.list_namespaced_deployment
+             if namespace else self.apps_api.list_deployment_for_all_namespaces),
+            ("StatefulSet", self.apps_api.list_namespaced_stateful_set
+             if namespace else self.apps_api.list_stateful_set_for_all_namespaces),
+            ("DaemonSet", self.apps_api.list_namespaced_daemon_set
+             if namespace else self.apps_api.list_daemon_set_for_all_namespaces),
+        )
+        result: list[dict[str, Any]] = []
+        for kind, method in calls:
+            kwargs: dict[str, Any] = {"_request_timeout": API_REQUEST_TIMEOUT}
+            if namespace:
+                kwargs["namespace"] = namespace
+            for workload in method(**kwargs).items:
+                template = workload.spec.template.spec
+                resources = self.workload_resources(
+                    list(template.containers or [])
+                    + list(template.init_containers or [])
+                )
+                desired = (
+                    workload.status.desired_number_scheduled
+                    if kind == "DaemonSet"
+                    else workload.spec.replicas or 0
+                )
+                for key in resources:
+                    resources[key] *= desired or 0
+                ready = (
+                    workload.status.number_ready
+                    if kind == "DaemonSet"
+                    else workload.status.ready_replicas or 0
+                ) or 0
+                available = getattr(
+                    workload.status, "number_available", None
+                )
+                if available is None:
+                    available = getattr(
+                        workload.status, "available_replicas", 0
+                    ) or 0
+                result.append({
+                    "type": kind,
+                    "namespace": workload.metadata.namespace or namespace,
+                    "name": workload.metadata.name,
+                    "desired_replicas": desired or 0,
+                    "ready_replicas": ready,
+                    "available_replicas": available,
+                    **resources,
+                })
+        return sorted(
+            result,
+            key=lambda item: (item["namespace"], item["type"], item["name"]),
+        )
+
+    def get_pvc_summary(self) -> dict[str, Any]:
+        items: list[dict[str, Any]] = []
+        for pvc in self.core_api.list_persistent_volume_claim_for_all_namespaces(
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items:
+            requests = getattr(pvc.spec.resources, "requests", None) or {}
+            items.append({
+                "namespace": pvc.metadata.namespace or "default",
+                "name": pvc.metadata.name,
+                "requested_capacity": memory_to_bytes(requests.get("storage")),
+                "status": pvc.status.phase or "Unknown",
+                "storage_class": pvc.spec.storage_class_name or "N/A",
+            })
+        ranked = sorted(
+            items,
+            key=lambda item: (-item["requested_capacity"], item["namespace"], item["name"]),
+        )
+        return {
+            "total": len(items),
+            "requested_capacity": sum(item["requested_capacity"] for item in items),
+            "bound": sum(item["status"] == "Bound" for item in items),
+            "pending": sum(item["status"] == "Pending" for item in items),
+            "items": ranked[:10],
+        }
+
+    def get_route_summary(self) -> list[dict[str, str]]:
+        response = self.custom_api.list_cluster_custom_object(
+            group="route.openshift.io",
+            version="v1",
+            plural="routes",
+            _request_timeout=API_REQUEST_TIMEOUT,
+        )
+        routes = []
+        for route in response.get("items", []):
+            metadata = route.get("metadata", {})
+            spec = route.get("spec", {})
+            routes.append({
+                "namespace": metadata.get("namespace", "default"),
+                "name": metadata.get("name", "unknown"),
+                "host": spec.get("host", ""),
+                "service": spec.get("to", {}).get("name", ""),
+            })
+        return sorted(routes, key=lambda item: (item["namespace"], item["name"]))
 
     def get_cluster_version(self) -> str:
         result = self.custom_api.get_cluster_custom_object(
@@ -618,4 +736,15 @@ class ClusterCollector:
             "cluster_operators": self.get_cluster_operator_summary(),
             "namespace_count": self.get_namespace_count(namespaces),
             "resources": resource_summary,
+            "search": {
+                "pods": [
+                    {
+                        "type": "Pod",
+                        "namespace": pod.metadata.namespace or "default",
+                        "name": pod.metadata.name,
+                    }
+                    for pod in pods
+                    if pod.status.phase != "Succeeded"
+                ],
+            },
         }

@@ -271,3 +271,18 @@ https://ROUTE/?cluster=rmtest
 python -m pip install -r requirements-dev.txt
 pytest
 ```
+
+## Production checklist
+
+- ServiceAccount ve minimum gerekli RBAC izinlerini doğrula.
+- RMTEST kubeconfig Secret mount'unu ve Secret rotasyon prosedürünü doğrula.
+- EgressIP, firewall kuralları ve remote cluster bağlantısını test et.
+- Kurumsal Nexus `PIP_INDEX_URL` erişimini secret/config üzerinden sağla; kimlik bilgisini image'a yazma.
+- BuildConfig output ImageStreamTag ve internal registry image akışını doğrula.
+- Route TLS termination, sertifika zinciri ve kurum DNS kaydını doğrula.
+- Resource request/limit, replica sayısı, readiness ve liveness probe değerlerini kapasiteye göre ayarla.
+- Uygulama loglarının merkezi log platformuna aktarıldığını doğrula.
+- Kubeconfig ve diğer Secret'ların sahiplik ve rotasyon tarihlerini takip et.
+- KKBTEST ve RMTEST network/API erişimini release öncesi doğrula.
+- Önceki ImageStreamTag/digest'e dönüşü içeren rollback adımını release kaydına ekle.
+- Manifest, image tag ve uygulama sürümünün aynı release numarasını kullandığını doğrula.

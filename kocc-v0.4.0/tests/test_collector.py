@@ -32,6 +32,33 @@ def container_status(
     )
 
 
+def workload(
+    kind: str,
+    name: str = "api",
+    namespace: str = "app-ns",
+) -> SimpleNamespace:
+    status = SimpleNamespace(
+        ready_replicas=2,
+        available_replicas=2,
+        desired_number_scheduled=3,
+        number_ready=2,
+        number_available=2,
+    )
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name, namespace=namespace),
+        spec=SimpleNamespace(
+            replicas=3,
+            template=SimpleNamespace(spec=SimpleNamespace(
+                containers=[container(SimpleNamespace(
+                    requests={"cpu": "250m", "memory": "128Mi"},
+                    limits={"cpu": "1", "memory": "1Gi"},
+                ))],
+                init_containers=[],
+            )),
+        ),
+        status=status,
+        kind=kind,
+    )
 def pod(
     namespace: str,
     phase: str,
@@ -312,3 +339,73 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     core_api.list_namespace.assert_called_once_with(
         _request_timeout=API_REQUEST_TIMEOUT
     )
+
+
+@patch("app.collector.client.AppsV1Api")
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_workload_summary_parses_replicas_and_resources(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+    apps_api_class: Mock,
+) -> None:
+    apps_api = apps_api_class.return_value
+    apps_api.list_namespaced_deployment.return_value = item_list([
+        workload("Deployment")
+    ])
+    apps_api.list_namespaced_stateful_set.return_value = item_list([])
+    apps_api.list_namespaced_daemon_set.return_value = item_list([])
+
+    result = ClusterCollector(Mock()).get_workload_summary("app-ns")
+
+    assert result[0] == {
+        "type": "Deployment",
+        "namespace": "app-ns",
+        "name": "api",
+        "desired_replicas": 3,
+        "ready_replicas": 2,
+        "available_replicas": 2,
+        "cpu_request": 750,
+        "cpu_limit": 3000,
+        "memory_request": 3 * 128 * 1024**2,
+        "memory_limit": 3 * 1024**3,
+    }
+
+
+@patch("app.collector.client.AppsV1Api")
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_pvc_and_route_parsing(
+    core_api_class: Mock,
+    custom_api_class: Mock,
+    _apps_api_class: Mock,
+) -> None:
+    pvc = SimpleNamespace(
+        metadata=SimpleNamespace(namespace="data", name="db"),
+        spec=SimpleNamespace(
+            resources=SimpleNamespace(requests={"storage": "20Gi"}),
+            storage_class_name="fast",
+        ),
+        status=SimpleNamespace(phase="Bound"),
+    )
+    core_api_class.return_value.list_persistent_volume_claim_for_all_namespaces.return_value = item_list([pvc])
+    custom_api_class.return_value.list_cluster_custom_object.return_value = {
+        "items": [{
+            "metadata": {"namespace": "app", "name": "portal"},
+            "spec": {"host": "portal.example", "to": {"name": "web"}},
+        }]
+    }
+    collector = ClusterCollector(Mock())
+
+    pvc_result = collector.get_pvc_summary()
+    routes = collector.get_route_summary()
+
+    assert pvc_result["total"] == 1
+    assert pvc_result["requested_capacity"] == 20 * 1024**3
+    assert pvc_result["bound"] == 1
+    assert routes == [{
+        "namespace": "app",
+        "name": "portal",
+        "host": "portal.example",
+        "service": "web",
+    }]

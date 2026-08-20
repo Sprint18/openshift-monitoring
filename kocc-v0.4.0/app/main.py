@@ -234,6 +234,9 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     restarts.setdefault("items", [])
     restarts.setdefault("by_namespace", {})
 
+    search = data.setdefault("search", {})
+    search.setdefault("pods", [])
+
     operators = data.setdefault("cluster_operators", {})
     operators.setdefault("available", False)
     for key in ("healthy", "degraded", "progressing", "unavailable"):
@@ -510,6 +513,86 @@ def api_summary(
 ) -> dict[str, Any]:
     try:
         return prepare_dashboard_data(cluster.lower())
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+def optional_cluster_data(
+    cluster_key: str,
+    loader: str,
+    namespace: str | None = None,
+) -> dict[str, Any]:
+    """Load an optional widget without failing the main dashboard."""
+    get_cluster_definition(cluster_key)
+    api_client = new_cluster_client(cluster_key)
+    try:
+        collector = ClusterCollector(api_client)
+        try:
+            if loader == "workloads":
+                items = collector.get_workload_summary(namespace)
+                for item in items:
+                    item["cpu_request_text"] = format_cpu(item["cpu_request"])
+                    item["cpu_limit_text"] = format_cpu(item["cpu_limit"])
+                    item["memory_request_text"] = format_memory(
+                        item["memory_request"]
+                    )
+                    item["memory_limit_text"] = format_memory(
+                        item["memory_limit"]
+                    )
+                return {"available": True, "items": items}
+            if loader == "pvc":
+                result = collector.get_pvc_summary()
+                result["requested_capacity_text"] = format_memory(
+                    result["requested_capacity"]
+                )
+                for item in result["items"]:
+                    item["requested_capacity_text"] = format_memory(
+                        item["requested_capacity"]
+                    )
+                return {"available": True, **result}
+            return {
+                "available": True,
+                "items": collector.get_route_summary(),
+            }
+        except Exception as exc:
+            logger.warning(
+                "%s data unavailable for cluster %s: %s",
+                loader,
+                cluster_key,
+                exc,
+            )
+            return {"available": False, "items": []}
+    finally:
+        api_client.close()
+
+
+@app.get("/api/workloads")
+def api_workloads(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+    namespace: str | None = Query(default=None),
+) -> dict[str, Any]:
+    try:
+        return optional_cluster_data(cluster.lower(), "workloads", namespace)
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/pvcs")
+def api_pvcs(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> dict[str, Any]:
+    try:
+        return optional_cluster_data(cluster.lower(), "pvc")
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/routes")
+def api_routes(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> dict[str, Any]:
+    try:
+        return optional_cluster_data(cluster.lower(), "routes")
     except Exception as exc:
         raise_http_error(exc)
 

@@ -494,3 +494,97 @@ def test_unexpected_errors_do_not_leak_details(new_cluster_client: Mock) -> None
 
     assert response.status_code == 500
     assert "sensitive internal detail" not in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_optional_workload_api_isolated_failure(
+    new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_workload_summary.side_effect = (
+        PermissionError("forbidden")
+    )
+
+    response = client.get(
+        "/api/workloads?cluster=kkbtest&namespace=empty"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False, "items": []}
+    new_cluster_client.return_value.close.assert_called_once_with()
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_pvc_api_formats_requested_capacity(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_pvc_summary.return_value = {
+        "total": 1,
+        "requested_capacity": 1024**3,
+        "bound": 1,
+        "pending": 0,
+        "items": [{
+            "namespace": "data",
+            "name": "db",
+            "requested_capacity": 1024**3,
+            "status": "Bound",
+            "storage_class": "fast",
+        }],
+    }
+
+    response = client.get("/api/pvcs?cluster=kkbtest")
+
+    assert response.status_code == 200
+    assert response.json()["requested_capacity_text"] == "1 GiB"
+    assert response.json()["items"][0]["requested_capacity_text"] == "1 GiB"
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_route_api_contract(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_route_summary.return_value = [{
+        "namespace": "app",
+        "name": "portal",
+        "host": "portal.example",
+        "service": "web",
+    }]
+
+    response = client.get("/api/routes?cluster=rmtest")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["host"] == "portal.example"
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_template_contains_p3_p4_contracts(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = (
+        dashboard_payload()
+    )
+
+    response = client.get("/?cluster=kkbtest")
+
+    assert response.status_code == 200
+    for expected in (
+        "namespace-drilldown",
+        "restart-ranking-size",
+        "Load PVC Summary",
+        "Route Search",
+        "Global Workload Search",
+        "Load Comparison",
+        "dashboardTheme",
+        'theme === "dark"',
+        "Promise.allSettled",
+        "Workload data unavailable",
+        "PVC data unavailable",
+    ):
+        assert expected in response.text

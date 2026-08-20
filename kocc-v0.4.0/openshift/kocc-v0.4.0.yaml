@@ -21,6 +21,7 @@ rules:
       - nodes
       - namespaces
       - pods
+      - persistentvolumeclaims
     verbs:
       - get
       - list
@@ -33,6 +34,22 @@ rules:
       - get
       - list
       - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes
+    verbs:
+      - get
+      - list
   - apiGroups:
       - config.openshift.io
     resources:
