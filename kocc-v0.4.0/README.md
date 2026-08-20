@@ -20,6 +20,22 @@ OpenShift API çağrısı `config.openshift.io/clusteroperators` listesidir. Bu
 kaynağa erişim yoksa yalnız ClusterOperator widget'ı `Unavailable` gösterir;
 diğer dashboard bölümleri çalışmaya devam eder.
 
+KKBTEST in-cluster ServiceAccount için ClusterRole yalnız
+`config.openshift.io/clusteroperators` kaynağında `get` ve `list` yetkileri
+verir. RMTEST aynı çağrıyı remote kubeconfig'ten oluşturulan ApiClient ile yapar.
+Collector cluster adını veya authentication yöntemini bilmez.
+
+Missing Requests / Limits özeti varsayılan olarak yalnız adı `openshift-` ile
+başlayan namespace'leri hariç tutar. UI'daki `Include OpenShift namespaces`
+seçeneği açıldığında aynı, önceden toplanmış Pod verisinin tümü gösterilir; bu
+seçim yeni bir Kubernetes API çağrısı oluşturmaz ve diğer resource toplamlarını
+değiştirmez.
+
+`Last Refresh` değeri backend'de açıkça `Europe/Istanbul` timezone'una çevrilir.
+Auto refresh Manual, 15 saniye, 30 saniye, 1 dakika ve 5 dakika seçeneklerini
+destekler; cluster URL'de, namespace/ranking/OpenShift tercihleri browser
+storage'da ve scroll konumu session storage'da korunur.
+
 ## Cluster health score
 
 Health score açıklanabilir 100 puanlık bir modeldir:
@@ -122,7 +138,8 @@ oc create secret generic kocc-remote-clusters \
 ```
 
 RMTEST kubeconfig içindeki kullanıcı veya ServiceAccount; `nodes`, `namespaces`,
-`pods` ve `config.openshift.io/clusterversions` kaynaklarında read yetkisine sahip
+`pods`, `config.openshift.io/clusterversions` ve isteğe bağlı operator widget'ı
+için `config.openshift.io/clusteroperators` kaynaklarında read yetkisine sahip
 olmalıdır.
 
 ### 3. Binary Build başlat

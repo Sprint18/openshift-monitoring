@@ -221,7 +221,11 @@ class ClusterCollector:
             terminated = getattr(state, "terminated", None)
             if terminated and terminated.reason:
                 return terminated.reason
-        return getattr(pod.status, "reason", None) or ""
+        return (
+            getattr(pod.status, "reason", None)
+            or getattr(pod.status, "phase", None)
+            or ""
+        )
 
     def get_restart_summary(
         self,
@@ -512,14 +516,43 @@ class ClusterCollector:
             key=lambda item: item["namespace"],
         )
 
+        application_missing = self.summarize_missing_details(
+            [
+                item
+                for item in missing_details
+                if not item["namespace"].startswith("openshift-")
+            ]
+        )
+        all_missing = self.summarize_missing_details(missing_details)
+
         return {
             "cluster": cluster,
             "namespaces": namespace_items,
-            "missing_details": missing_details[:DETAIL_LIMIT],
-            "missing_detail_count": len(missing_details),
-            "missing_detail_more_count": max(
-                0, len(missing_details) - DETAIL_LIMIT
+            "missing_resources": {
+                "application": application_missing,
+                "all": all_missing,
+            },
+            "missing_details": application_missing["items"],
+            "missing_detail_count": application_missing["count"],
+            "missing_detail_more_count": application_missing["more_count"],
+        }
+
+    @staticmethod
+    def summarize_missing_details(
+        details: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        affected_containers = {
+            (item["namespace"], item["pod"], item["container"])
+            for item in details
+        }
+        return {
+            "count": len(details),
+            "namespace_count": len(
+                {item["namespace"] for item in details}
             ),
+            "container_count": len(affected_containers),
+            "items": details[:DETAIL_LIMIT],
+            "more_count": max(0, len(details) - DETAIL_LIMIT),
         }
 
     @staticmethod

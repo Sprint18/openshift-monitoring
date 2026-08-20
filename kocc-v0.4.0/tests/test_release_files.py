@@ -34,6 +34,23 @@ def test_namespaced_resources_target_the_deployment_project() -> None:
     assert binding["subjects"][0]["namespace"] == TARGET_NAMESPACE
 
 
+def test_cluster_operator_rbac_is_read_only_and_minimal() -> None:
+    role = manifest_resources()["ClusterRole"]
+    operator_rules = [
+        rule
+        for rule in role["rules"]
+        if "clusteroperators" in rule.get("resources", [])
+    ]
+
+    assert operator_rules == [
+        {
+            "apiGroups": ["config.openshift.io"],
+            "resources": ["clusteroperators"],
+            "verbs": ["get", "list"],
+        }
+    ]
+
+
 def test_build_and_deployment_use_the_same_image_stream_tag() -> None:
     resources = manifest_resources()
     build_output = resources["BuildConfig"]["spec"]["output"]["to"]

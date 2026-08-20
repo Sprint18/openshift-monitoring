@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -30,6 +31,7 @@ app = FastAPI(
 )
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
 
 
 @app.get("/health")
@@ -54,6 +56,20 @@ def resource_severity(value: int, capacity: int) -> str:
     if ratio >= 20:
         return "high"
     if ratio >= 10:
+        return "warning"
+    return "normal"
+
+
+def format_istanbul_time(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(ISTANBUL_TIMEZONE).strftime("%H:%M:%S")
+
+
+def collection_time_severity(seconds: float) -> str:
+    if seconds >= 10:
+        return "slow"
+    if seconds >= 5:
         return "warning"
     return "normal"
 
@@ -236,6 +252,12 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     resources.setdefault("missing_details", [])
     resources.setdefault("missing_detail_count", 0)
     resources.setdefault("missing_detail_more_count", 0)
+    missing_resources = resources.setdefault("missing_resources", {})
+    for scope in ("application", "all"):
+        summary = missing_resources.setdefault(scope, {})
+        for key in ("count", "namespace_count", "container_count", "more_count"):
+            summary.setdefault(key, 0)
+        summary.setdefault("items", [])
 
     for node in nodes["items"]:
         node.setdefault("name", "N/A")
@@ -417,9 +439,12 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
         ),
     }
     data["health"] = health_score(data)
-    data["collected_at"] = datetime.now().astimezone().strftime("%H:%M:%S")
+    data["collected_at"] = format_istanbul_time(datetime.now(timezone.utc))
     data["collection_duration_seconds"] = round(
         time.perf_counter() - started_at, 2
+    )
+    data["collection_duration_severity"] = collection_time_severity(
+        data["collection_duration_seconds"]
     )
 
     return data

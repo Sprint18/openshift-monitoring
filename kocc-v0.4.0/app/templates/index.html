@@ -79,7 +79,12 @@
             color: #6a6e73;
             font-size: 14px;
         }
-        .interactive-card { cursor: help; }
+        .interactive-card { cursor: pointer; }
+        .interactive-card h3::after {
+            content: " ⓘ";
+            color: #6a6e73;
+            font-weight: normal;
+        }
         .interactive-card:focus {
             outline: 3px solid #73bcf7;
             outline-offset: 2px;
@@ -101,13 +106,21 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
             cursor: default;
         }
-        .interactive-card:hover .popover,
-        .interactive-card:focus .popover,
-        .interactive-card:focus-within .popover,
         .interactive-card.is-open .popover { display: block; }
         .popover ul { margin: 0; padding-left: 20px; }
         .popover li { margin: 0 0 8px; }
-        .popover-title { margin: 0 0 10px; font-weight: bold; }
+        .popover-title {
+            position: sticky;
+            top: -14px;
+            z-index: 1;
+            margin: -14px -14px 10px;
+            padding: 12px 14px;
+            background: white;
+            border-bottom: 1px solid #d2d2d2;
+            font-weight: bold;
+        }
+        .popover li,
+        .popover p { overflow-wrap: anywhere; }
         .value { font-size: 27px; font-weight: bold; }
         .subvalue {
             margin-top: 7px;
@@ -279,6 +292,9 @@
         .health-Healthy { color: #3e8635; }
         .health-Warning { color: #f0ab00; }
         .health-Critical { color: #c9190b; }
+        .collection-normal { color: #3e8635; }
+        .collection-warning { color: #8a6d00; }
+        .collection-slow { color: #c9190b; }
         .action-button,
         .namespace-link {
             border: 0;
@@ -309,6 +325,13 @@
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
         }
         .drilldown.is-open { display: block; }
+        footer {
+            padding: 24px 8px 12px;
+            color: #999;
+            font-size: 11px;
+            text-align: center;
+            opacity: .75;
+        }
         @media (max-width: 600px) {
             main { padding: 18px 14px 40px; }
             header { padding: 16px 14px; }
@@ -365,6 +388,7 @@
                 <label for="refresh-interval">Auto Refresh</label>
                 <select id="refresh-interval">
                     <option value="0">Manual</option>
+                    <option value="15">15 sec</option>
                     <option value="30">30 sec</option>
                     <option value="60">1 min</option>
                     <option value="300">5 min</option>
@@ -374,6 +398,12 @@
                 Last Refresh: <strong>{{ data["collected_at"] }}</strong><br>
                 Collection Time:
                 <strong>{{ data["collection_duration_seconds"] }} sec</strong>
+                ·
+                <span class="collection-{{ data["collection_duration_severity"] }}">
+                    {% if data["collection_duration_severity"] == "slow" %}Slow
+                    {% elif data["collection_duration_severity"] == "warning" %}Warning
+                    {% else %}Normal{% endif %}
+                </span>
             </div>
         </div>
         {% endif %}
@@ -454,16 +484,16 @@
             </div>
             <div class="subvalue">{{ data["health"]["status"] }}</div>
             <div class="popover">
-                <p class="popover-title">Health Score Deductions</p>
+                <p class="popover-title">Health Score Açıklaması</p>
                 <ul>
-                    <li>Nodes Ready: -{{ data["health"]["node_penalty"] }}</li>
-                    <li>Non-ready Pods: -{{ data["health"]["pod_penalty"] }}</li>
-                    <li>CPU Request / Capacity: %{{ data["health"]["signals"]["cpu_request"] }}</li>
-                    <li>CPU Limit / Capacity: %{{ data["health"]["signals"]["cpu_limit"] }}</li>
-                    <li>Memory Request / Capacity: %{{ data["health"]["signals"]["memory_request"] }}</li>
-                    <li>Memory Limit / Capacity: %{{ data["health"]["signals"]["memory_limit"] }}</li>
-                    <li>Resource Pressure deduction: -{{ data["health"]["resource_penalty"] }}</li>
-                    <li>ClusterOperators deduction: -{{ data["health"]["operator_penalty"] }}</li>
+                    <li>Hazır olmayan node etkisi: -{{ data["health"]["node_penalty"] }} puan</li>
+                    <li>Hazır olmayan pod etkisi: -{{ data["health"]["pod_penalty"] }} puan</li>
+                    <li>CPU requests: kapasitenin %{{ data["health"]["signals"]["cpu_request"] }} değeri</li>
+                    <li>CPU limits: kapasitenin %{{ data["health"]["signals"]["cpu_limit"] }} değeri</li>
+                    <li>Memory requests: kapasitenin %{{ data["health"]["signals"]["memory_request"] }} değeri</li>
+                    <li>Memory limits: kapasitenin %{{ data["health"]["signals"]["memory_limit"] }} değeri</li>
+                    <li>Resource baskısı etkisi: -{{ data["health"]["resource_penalty"] }} puan</li>
+                    <li>ClusterOperator etkisi: -{{ data["health"]["operator_penalty"] }} puan</li>
                 </ul>
             </div>
         </div>
@@ -507,15 +537,18 @@
     <div class="cards">
         <div class="card interactive-card" tabindex="0" role="button" aria-label="Eksik resource alanlarını göster">
             <h3>Missing Requests / Limits</h3>
-            <div class="value">{{ data["resources"]["missing_detail_count"] }}</div>
+            <div class="value" id="missing-resource-count">{{ data["resources"]["missing_resources"]["application"]["count"] }}</div>
+            <div class="subvalue" id="missing-resource-impact">
+                {{ data["resources"]["missing_resources"]["application"]["namespace_count"] }} namespace ·
+                {{ data["resources"]["missing_resources"]["application"]["container_count"] }} container
+            </div>
+            <label class="subvalue">
+                <input type="checkbox" id="include-openshift-namespaces">
+                Include OpenShift namespaces
+            </label>
             <div class="popover">
                 <p class="popover-title">Missing Resource Fields</p>
-                {% if data["resources"]["missing_details"] %}<ul>
-                    {% for item in data["resources"]["missing_details"] %}
-                    <li>{{ item["namespace"] }} / {{ item["pod"] }} / {{ item["container"] }} — {{ item["field"] }} missing</li>
-                    {% endfor %}
-                </ul>{% else %}<p>No missing resource fields</p>{% endif %}
-                {% if data["resources"]["missing_detail_more_count"] %}<strong>+ {{ data["resources"]["missing_detail_more_count"] }} more</strong>{% endif %}
+                <div id="missing-resource-details"></div>
             </div>
         </div>
         <div class="card interactive-card" tabindex="0" role="button" aria-label="ClusterOperator detaylarını göster">
@@ -523,7 +556,10 @@
             {% if data["cluster_operators"]["available"] %}
             <div class="value">{{ data["cluster_operators"]["healthy"] }} Healthy</div>
             <div class="subvalue">{{ data["cluster_operators"]["degraded"] }} Degraded · {{ data["cluster_operators"]["progressing"] }} Progressing · {{ data["cluster_operators"]["unavailable"] }} Unavailable</div>
-            {% else %}<div class="value warning">Unavailable</div>{% endif %}
+            {% else %}
+            <div class="value warning" title="ClusterOperator API unavailable">Unavailable</div>
+            <div class="subvalue">ClusterOperator API unavailable</div>
+            {% endif %}
             <div class="popover">
                 <p class="popover-title">ClusterOperator Health</p>
                 {% if data["cluster_operators"]["available"] %}<ul>
@@ -687,6 +723,15 @@
     <h2>Namespace Resource Özeti</h2>
     <div class="table-toolbar">
         <div class="field-group">
+            <label for="namespace-search">Search namespace</label>
+            <input
+                id="namespace-search"
+                type="search"
+                placeholder="Namespace ara..."
+                autocomplete="off"
+            >
+        </div>
+        <div class="field-group">
             <label for="namespace-filter">Namespace</label>
             <select id="namespace-filter" aria-controls="namespace-resource-table">
                 <option value="">All Namespaces</option>
@@ -789,16 +834,27 @@
     "cluster": selected_cluster,
     "namespaces": data["resources"]["namespaces"],
     "problemPods": data["pods"]["problem_by_namespace"],
-    "restartPods": data["restarts"]["by_namespace"]
+    "restartPods": data["restarts"]["by_namespace"],
+    "missingResources": data["resources"]["missing_resources"]
 }|tojson }}</script>
 <script>
     const initializeDashboard = () => {
+        if (window.__koccDashboardInitialized) return;
+        window.__koccDashboardInitialized = true;
         const dashboardData = JSON.parse(
             document.getElementById("dashboard-data").textContent
         );
+        const state = {
+            activePopup: null,
+            refreshTimer: null,
+            namespaceRows: [],
+        };
         const rankingSize = document.getElementById("ranking-size");
+        const rankingKey = "dashboardRankingSize";
+        rankingSize.value = localStorage.getItem(rankingKey) || "10";
         const updateRankings = () => {
             const limit = Number(rankingSize.value);
+            localStorage.setItem(rankingKey, rankingSize.value);
             document.querySelectorAll(".ranking-body tr[data-rank]")
                 .forEach((row) => {
                     row.hidden = Number(row.dataset.rank) > limit;
@@ -808,14 +864,29 @@
         updateRankings();
 
         const filter = document.getElementById("namespace-filter");
+        const search = document.getElementById("namespace-search");
         const body = document.getElementById("namespace-resource-body");
         const count = document.getElementById("namespace-result-count");
         const rows = Array.from(body.querySelectorAll("tr[data-namespace]"));
+        state.namespaceRows = rows;
+        const namespaceNames = dashboardData.namespaces
+            .map((item) => item.namespace)
+            .sort((left, right) => left.localeCompare(right, "tr"));
         const filterStorageKey = `namespaceFilter:${dashboardData.cluster}`;
         const storedNamespace = sessionStorage.getItem(filterStorageKey) || "";
-        filter.value = Array.from(filter.options)
-            .some((option) => option.value === storedNamespace)
-            ? storedNamespace : "";
+        const rebuildNamespaceOptions = (query = "") => {
+            const previousValue = filter.value || storedNamespace;
+            const normalizedQuery = query.trim().toLocaleLowerCase("tr");
+            filter.replaceChildren(new Option("All Namespaces", ""));
+            namespaceNames
+                .filter((name) => name.toLocaleLowerCase("tr")
+                    .includes(normalizedQuery))
+                .forEach((name) => filter.add(new Option(name, name)));
+            filter.value = Array.from(filter.options)
+                .some((option) => option.value === previousValue)
+                ? previousValue : "";
+        };
+        rebuildNamespaceOptions();
         const updateNamespaceFilter = () => {
             const selectedNamespace = filter.value;
             let visible = 0;
@@ -829,6 +900,10 @@
             sessionStorage.setItem(filterStorageKey, selectedNamespace);
         };
         filter.addEventListener("change", updateNamespaceFilter);
+        search.addEventListener("input", () => {
+            rebuildNamespaceOptions(search.value);
+            updateNamespaceFilter();
+        });
         updateNamespaceFilter();
 
         document.querySelectorAll(".sort-button").forEach((button) => {
@@ -894,18 +969,81 @@
             });
         });
 
+        const closePopup = () => {
+            if (!state.activePopup) return;
+            state.activePopup.classList.remove("is-open");
+            state.activePopup.setAttribute("aria-expanded", "false");
+            state.activePopup = null;
+        };
+        const openPopup = (card) => {
+            if (state.activePopup === card) return;
+            closePopup();
+            state.activePopup = card;
+            card.classList.add("is-open");
+            card.setAttribute("aria-expanded", "true");
+        };
+        const togglePopup = (card) => {
+            if (state.activePopup === card) closePopup();
+            else openPopup(card);
+        };
         document.querySelectorAll(".interactive-card").forEach((card) => {
-            card.addEventListener("click", () => {
-                card.classList.toggle("is-open");
+            card.setAttribute("aria-expanded", "false");
+            card.addEventListener("mouseenter", () => openPopup(card));
+            card.addEventListener("mouseleave", () => closePopup());
+            card.addEventListener("focusin", () => openPopup(card));
+            card.addEventListener("focusout", () => {
+                window.setTimeout(() => {
+                    if (!card.contains(document.activeElement)) closePopup();
+                }, 0);
+            });
+            card.addEventListener("click", (event) => {
+                if (event.target.closest("input, select, button, a, label, .popover")) {
+                    return;
+                }
+                togglePopup(card);
             });
             card.addEventListener("keydown", (event) => {
                 if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    card.classList.toggle("is-open");
+                    togglePopup(card);
                 }
-                if (event.key === "Escape") card.classList.remove("is-open");
+                if (event.key === "Escape") closePopup();
             });
         });
+        document.addEventListener("click", (event) => {
+            if (state.activePopup && !state.activePopup.contains(event.target)) {
+                closePopup();
+            }
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closePopup();
+        });
+
+        const includeOpenShift = document.getElementById(
+            "include-openshift-namespaces"
+        );
+        const includeOpenShiftKey = "includeOpenShiftNamespaces";
+        includeOpenShift.checked = localStorage.getItem(includeOpenShiftKey) === "true";
+        const renderMissingResources = () => {
+            const scope = includeOpenShift.checked ? "all" : "application";
+            const summary = dashboardData.missingResources[scope];
+            document.getElementById("missing-resource-count").textContent =
+                summary.count;
+            document.getElementById("missing-resource-impact").textContent =
+                `${summary.namespace_count} namespace · ${summary.container_count} container`;
+            const details = document.getElementById("missing-resource-details");
+            if (!summary.items.length) {
+                details.innerHTML = "<p>No missing resource fields</p>";
+            } else {
+                details.innerHTML = `<ul>${summary.items.map((item) =>
+                    `<li>${escapeHtml(item.namespace)} / ${escapeHtml(item.pod)} / ${escapeHtml(item.container)} — ${escapeHtml(item.field)} missing</li>`
+                ).join("")}</ul>${summary.more_count
+                    ? `<strong>+ ${summary.more_count} more</strong>` : ""}`;
+            }
+            localStorage.setItem(includeOpenShiftKey, includeOpenShift.checked);
+        };
+        includeOpenShift.addEventListener("change", renderMissingResources);
+        renderMissingResources();
 
         document.getElementById("export-csv").addEventListener("click", () => {
             const headers = Array.from(
@@ -931,19 +1069,35 @@
         const refresh = document.getElementById("refresh-interval");
         const refreshKey = "dashboardRefreshSeconds";
         refresh.value = localStorage.getItem(refreshKey) || "0";
-        let refreshTimer = null;
         const scheduleRefresh = () => {
-            if (refreshTimer) window.clearTimeout(refreshTimer);
+            if (state.refreshTimer) {
+                window.clearTimeout(state.refreshTimer);
+                state.refreshTimer = null;
+            }
             localStorage.setItem(refreshKey, refresh.value);
             const seconds = Number(refresh.value);
             if (seconds > 0) {
-                refreshTimer = window.setTimeout(
-                    () => window.location.reload(), seconds * 1000
+                state.refreshTimer = window.setTimeout(
+                    () => {
+                        closePopup();
+                        sessionStorage.setItem(
+                            "dashboardScrollY", String(window.scrollY)
+                        );
+                        window.location.reload();
+                    },
+                    seconds * 1000
                 );
             }
         };
         refresh.addEventListener("change", scheduleRefresh);
         scheduleRefresh();
+        const savedScrollY = Number(
+            sessionStorage.getItem("dashboardScrollY") || "0"
+        );
+        if (savedScrollY > 0) {
+            window.requestAnimationFrame(() => window.scrollTo(0, savedScrollY));
+            sessionStorage.removeItem("dashboardScrollY");
+        }
     };
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", initializeDashboard);
@@ -952,5 +1106,8 @@
     }
 </script>
 {% endif %}
+<footer>
+    Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.
+</footer>
 </body>
 </html>

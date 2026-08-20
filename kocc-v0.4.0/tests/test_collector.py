@@ -102,6 +102,35 @@ def test_resource_summary_handles_missing_resources_and_terminal_pods(
 
 @patch("app.collector.client.CustomObjectsApi")
 @patch("app.collector.client.CoreV1Api")
+def test_missing_resources_excludes_only_openshift_namespaces_by_default(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+) -> None:
+    collector = ClusterCollector(Mock())
+    pods = [
+        pod("app-ns", "Running", [container()], name="app-pod"),
+        pod(
+            "openshift-monitoring",
+            "Running",
+            [container()],
+            name="platform-pod",
+        ),
+    ]
+
+    result = collector.get_resource_summary([], pods, [])
+    missing = result["missing_resources"]
+
+    assert missing["application"]["count"] == 4
+    assert missing["application"]["namespace_count"] == 1
+    assert missing["application"]["container_count"] == 1
+    assert missing["application"]["items"][0]["namespace"] == "app-ns"
+    assert missing["all"]["count"] == 8
+    assert missing["all"]["namespace_count"] == 2
+    assert missing["all"]["container_count"] == 2
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
 def test_pod_summary_detects_non_ready_and_ignores_succeeded(
     _core_api_class: Mock,
     _custom_api_class: Mock,
@@ -184,6 +213,7 @@ def test_restart_summary_detects_crashloop_and_ranks_restarts(
     ]
 
     result = collector.get_restart_summary(pods)
+    pod_summary = collector.get_pod_summary(pods)
 
     assert result["crashloop_count"] == 1
     assert [item["name"] for item in result["items"]] == [
@@ -191,6 +221,7 @@ def test_restart_summary_detects_crashloop_and_ranks_restarts(
         "restarted",
     ]
     assert result["items"][0]["reason"] == "CrashLoopBackOff"
+    assert pod_summary["problem_items"][0]["reason"] == "CrashLoopBackOff"
 
 
 @patch("app.collector.client.CustomObjectsApi")

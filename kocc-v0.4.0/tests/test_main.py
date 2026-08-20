@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
 from app.main import (
     app,
+    collection_time_severity,
+    format_istanbul_time,
     health_score,
     prepare_dashboard_data,
     resource_severity,
@@ -65,6 +68,14 @@ def test_summary_contract_handles_missing_optional_metrics(
     assert data["resources"]["namespaces"][0]["cpu_request"] == 0
     assert data["resources"]["namespace_options"] == ["default"]
     assert data["resources"]["top_limits"] == {"cpu": [], "memory": []}
+    assert data["cluster_operators"] == {
+        "available": False,
+        "healthy": 0,
+        "degraded": 0,
+        "progressing": 0,
+        "unavailable": 0,
+        "items": [],
+    }
     new_cluster_client.return_value.close.assert_called_once_with()
 
 
@@ -270,7 +281,7 @@ def test_namespace_combobox_rebuilds_from_selected_cluster_data(
     assert remote_response.status_code == 200
     assert 'value="remote-only"' in remote_response.text
     assert 'value="alpha"' not in remote_response.text
-    assert "some((option) => option.value === storedNamespace)" in (
+    assert "some((option) => option.value === previousValue)" in (
         remote_response.text
     )
 
@@ -321,6 +332,43 @@ def test_overcommit_calculation_uses_capacity(
     assert result["cpu_overcommitted"] is True
     assert result["memory_limit_percent"] == 50.0
     assert result["memory_overcommitted"] is False
+
+
+def test_istanbul_timestamp_formatting_is_explicit() -> None:
+    utc_time = datetime(2026, 1, 15, 7, 47, 31, tzinfo=timezone.utc)
+
+    assert format_istanbul_time(utc_time) == "10:47:31"
+
+
+def test_collection_time_severity_thresholds() -> None:
+    assert collection_time_severity(4.99) == "normal"
+    assert collection_time_severity(5) == "warning"
+    assert collection_time_severity(9.99) == "warning"
+    assert collection_time_severity(10) == "slow"
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_template_contains_popup_refresh_search_and_toggle_contract(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = (
+        dashboard_payload()
+    )
+
+    response = client.get("/?cluster=kkbtest")
+
+    assert response.status_code == 200
+    assert '<option value="15">15 sec</option>' in response.text
+    assert 'id="namespace-search"' in response.text
+    assert 'id="include-openshift-namespaces"' in response.text
+    assert "activePopup: null" in response.text
+    assert 'event.key === "Escape"' in response.text
+    assert "!state.activePopup.contains(event.target)" in response.text
+    assert "window.clearTimeout(state.refreshTimer)" in response.text
+    assert "window.__koccDashboardInitialized" in response.text
+    assert "CPU requests: kapasitenin" in response.text
 
 
 def test_health_returns_200() -> None:
