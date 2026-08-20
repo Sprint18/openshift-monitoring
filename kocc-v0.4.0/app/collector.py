@@ -437,6 +437,7 @@ class ClusterCollector:
             }
         )
         missing_details: list[dict[str, str]] = []
+        missing_records: list[dict[str, Any]] = []
 
         for namespace in namespace_list:
             namespace_name = namespace.metadata.name
@@ -511,6 +512,24 @@ class ClusterCollector:
                 if missing == 4:
                     namespace_item["completely_undefined"] += 1
 
+                if missing:
+                    missing_records.append(
+                        {
+                            "namespace": namespace,
+                            "pod": getattr(
+                                pod.metadata, "name", "unknown"
+                            ),
+                            "container": getattr(
+                                container_item, "name", "unknown"
+                            ),
+                            "cpu_request": "cpu" in requests,
+                            "cpu_limit": "cpu" in limits,
+                            "memory_request": "memory" in requests,
+                            "memory_limit": "memory" in limits,
+                            "missing_count": missing,
+                        }
+                    )
+
         namespace_items = sorted(
             namespaces.values(),
             key=lambda item: item["namespace"],
@@ -521,9 +540,17 @@ class ClusterCollector:
                 item
                 for item in missing_details
                 if not item["namespace"].startswith("openshift-")
-            ]
+            ],
+            [
+                item
+                for item in missing_records
+                if not item["namespace"].startswith("openshift-")
+            ],
         )
-        all_missing = self.summarize_missing_details(missing_details)
+        all_missing = self.summarize_missing_details(
+            missing_details,
+            missing_records,
+        )
 
         return {
             "cluster": cluster,
@@ -540,19 +567,17 @@ class ClusterCollector:
     @staticmethod
     def summarize_missing_details(
         details: list[dict[str, str]],
+        records: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        affected_containers = {
-            (item["namespace"], item["pod"], item["container"])
-            for item in details
-        }
         return {
             "count": len(details),
             "namespace_count": len(
                 {item["namespace"] for item in details}
             ),
-            "container_count": len(affected_containers),
+            "container_count": len(records),
             "items": details[:DETAIL_LIMIT],
             "more_count": max(0, len(details) - DETAIL_LIMIT),
+            "records": records,
         }
 
     @staticmethod

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
 
@@ -31,7 +32,13 @@ app = FastAPI(
 )
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
+logger.info("OpenShift Clusters Monitoring Platform %s started", app.version)
 
 
 @app.get("/health")
@@ -258,6 +265,7 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
         for key in ("count", "namespace_count", "container_count", "more_count"):
             summary.setdefault(key, 0)
         summary.setdefault("items", [])
+        summary.setdefault("records", [])
 
     for node in nodes["items"]:
         node.setdefault("name", "N/A")

@@ -36,6 +36,30 @@ Auto refresh Manual, 15 saniye, 30 saniye, 1 dakika ve 5 dakika seçeneklerini
 destekler; cluster URL'de, namespace/ranking/OpenShift tercihleri browser
 storage'da ve scroll konumu session storage'da korunur.
 
+## Kurumsal görünüm ve operasyon tabloları
+
+Header'da KKB'nin resmi görsel galerisindeki `KKB TURUNCU - LACİVERT LOGO`
+kullanılır. PNG dosyası `app/static/kkb-turuncu-lacivert-logo.png` altında local
+serve edilir; public siteye runtime hotlink yapılmaz. Görsel kaynak:
+`https://www.kkb.com.tr/Content/img/logos/kkb-turuncu-lacivert-logo.png`.
+Dashboard paleti lacivert header, turuncu vurgu ve düşük kontrastlı açık yüzeyler
+üzerine kuruludur.
+
+Missing Requests / Limits verisi container başına tek canonical kayıt olarak
+sunulur. Kayıt; namespace, Pod, container, dört resource alanının defined/missing
+durumu ve `missing_count` değerini içerir. UI mevcut snapshot üzerinde arama,
+numeric/text sorting, sayfa başına 50 kayıt pagination ve filtrelenmiş tüm veri
+için CSV export uygular. Namespace Resource Summary sıralaması görüntülenen
+`mCPU/Core` veya `MiB/GiB` metnini değil raw millicore/byte data attribute'larını
+kullanır.
+
+Auto refresh `setInterval` kullanmaz. Dashboard response'u tamamlandıktan sonra
+tek recursive `setTimeout` kurulur; `refreshInProgress` guard aynı sayfadan ikinci
+bir navigation başlatılmasını engeller. Manuel refresh aynı single-flight yolu
+kullanır. Collector her request'te Pod, Node ve Namespace listelerini birer kez
+alır ve bütün widget'ları bu snapshot'tan üretir. `/health` hiçbir Kubernetes API
+çağrısı yapmaz.
+
 ## Cluster health score
 
 Health score açıklanabilir 100 puanlık bir modeldir:

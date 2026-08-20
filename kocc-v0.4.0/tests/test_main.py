@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
@@ -369,6 +370,93 @@ def test_template_contains_popup_refresh_search_and_toggle_contract(
     assert "window.clearTimeout(state.refreshTimer)" in response.text
     assert "window.__koccDashboardInitialized" in response.text
     assert "CPU requests: kapasitenin" in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_namespace_resource_numeric_sort_contract_supports_mixed_units(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    data["resources"]["namespaces"] = [
+        {"namespace": "ten-core", "cpu_request": 10_000, "memory_request": 10 * 1024**3},
+        {"namespace": "milli", "cpu_request": 900, "memory_request": 50 * 1024**2},
+        {"namespace": "one-core", "cpu_request": 1000, "memory_request": 1024**3},
+        {"namespace": "zero", "cpu_request": 0, "memory_request": 0},
+    ]
+    collector_class.return_value.collect_dashboard.return_value = data
+
+    response = client.get("/?cluster=kkbtest")
+
+    assert response.status_code == 200
+    cpu_values = [int(value) for value in re.findall(
+        r'data-cpu-request="(\d+)"', response.text
+    )]
+    memory_values = [int(value) for value in re.findall(
+        r'data-memory-request="(\d+)"', response.text
+    )]
+    assert sorted(cpu_values) == [0, 900, 1000, 10_000]
+    assert sorted(cpu_values, reverse=True) == [10_000, 1000, 900, 0]
+    assert sorted(memory_values) == [0, 50 * 1024**2, 1024**3, 10 * 1024**3]
+    assert "Number(left) - Number(right)" in response.text
+    assert "left.getAttribute(`data-${key}`)" in response.text
+    assert 'data-sort="namespace" data-type="text"' in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_missing_resource_search_pagination_csv_and_single_flight_contract(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    records = [
+        {
+            "namespace": "app-a" if index < 60 else "app-b",
+            "pod": f"pod-{index:03}",
+            "container": "api",
+            "cpu_request": False,
+            "cpu_limit": True,
+            "memory_request": True,
+            "memory_limit": True,
+            "missing_count": 1,
+        }
+        for index in range(73)
+    ]
+    summary = {
+        "count": 73,
+        "namespace_count": 2,
+        "container_count": 73,
+        "items": [],
+        "more_count": 53,
+        "records": records,
+    }
+    data["resources"]["missing_resources"] = {
+        "application": summary,
+        "all": summary,
+    }
+    collector_class.return_value.collect_dashboard.return_value = data
+
+    response = client.get("/?cluster=rmtest")
+
+    assert response.status_code == 200
+    assert "missingPageSize: 50" in response.text
+    assert "start + state.missingPageSize" in response.text
+    assert "item.namespace, item.pod, item.container" in response.text
+    assert "getFilteredMissingRecords()" in response.text
+    assert "export-missing-csv" in response.text
+    assert "refreshInProgress: false" in response.text
+    assert "if (state.refreshInProgress) return" in response.text
+    assert "seconds === 15 && dashboardData.collectionDuration > 10" in response.text
+
+
+def test_official_kkb_logo_is_served_locally() -> None:
+    response = client.get("/static/kkb-turuncu-lacivert-logo.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_health_returns_200() -> None:

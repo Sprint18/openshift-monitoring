@@ -12,6 +12,13 @@
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23c9190b'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-size='30' fill='white'%3EO%3C/text%3E%3C/svg%3E"
     >
     <style>
+        :root {
+            --kkb-navy: #132b4f;
+            --kkb-blue: #1d4f7a;
+            --kkb-orange: #f58220;
+            --kkb-orange-soft: #fff3e8;
+            --surface-border: #d8dee6;
+        }
         * { box-sizing: border-box; }
         body {
             margin: 0;
@@ -20,9 +27,10 @@
             font-family: Arial, Helvetica, sans-serif;
         }
         header {
-            background: #151515;
+            background: var(--kkb-navy);
             color: white;
             padding: 18px 32px;
+            border-bottom: 4px solid var(--kkb-orange);
         }
         .header-row {
             display: flex;
@@ -32,6 +40,19 @@
             flex-wrap: wrap;
         }
         header h1 { margin: 0; font-size: 24px; }
+        .brand-block {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+        .brand-logo {
+            width: 62px;
+            height: 58px;
+            padding: 4px;
+            border-radius: 6px;
+            background: white;
+            object-fit: contain;
+        }
         .subtitle { margin-top: 5px; color: #d2d2d2; }
         .cluster-form {
             display: flex;
@@ -70,7 +91,9 @@
         .card {
             position: relative;
             background: white;
-            border-radius: 6px;
+            border: 1px solid var(--surface-border);
+            border-top: 3px solid var(--kkb-orange);
+            border-radius: 8px;
             padding: 18px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
         }
@@ -141,7 +164,8 @@
             width: 100%;
             overflow-x: auto;
             background: white;
-            border-radius: 6px;
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
         }
         .namespace-table-wrapper {
@@ -166,7 +190,18 @@
             text-align: left;
             font-size: 14px;
         }
-        th { background: #f0f0f0; }
+        th {
+            border-right: 1px solid #e5e8ec;
+            background: #eef2f6;
+        }
+        tbody tr:nth-child(even) > td { background-color: #fafbfc; }
+        tbody tr:hover > td { background-color: var(--kkb-orange-soft); }
+        td.numeric, th.numeric { text-align: right; }
+        td.wrap-cell {
+            max-width: 320px;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
         .table-toolbar {
             display: flex;
             align-items: end;
@@ -205,6 +240,14 @@
             cursor: pointer;
         }
         .sort-button::after { content: " ↕"; color: #6a6e73; }
+        .sort-button[data-direction="asc"]::after {
+            content: " ↑";
+            color: var(--kkb-orange);
+        }
+        .sort-button[data-direction="desc"]::after {
+            content: " ↓";
+            color: var(--kkb-orange);
+        }
         .severity-badge {
             display: inline-block;
             margin: 3px 4px 0 0;
@@ -306,10 +349,36 @@
         }
         .action-button {
             padding: 9px 12px;
-            border: 1px solid #0066cc;
+            border: 1px solid var(--kkb-blue);
             border-radius: 4px;
             text-decoration: none;
         }
+        .action-button:disabled { opacity: .55; cursor: wait; }
+        .missing-badge {
+            display: inline-block;
+            min-width: 26px;
+            padding: 3px 6px;
+            border-radius: 10px;
+            color: #7d1007;
+            background: #faeae8;
+            font-size: 11px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .defined-mark { color: #3e8635; font-weight: bold; }
+        .pagination {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 12px;
+        }
+        .refresh-warning {
+            display: none;
+            color: #8a6d00;
+            font-size: 12px;
+        }
+        .refresh-warning.is-visible { display: block; }
         .refresh-meta {
             display: flex;
             align-items: end;
@@ -337,6 +406,8 @@
             header { padding: 16px 14px; }
             .ranking-grid { grid-template-columns: 1fr; }
             .popover { width: calc(100vw - 56px); left: 0; }
+            .brand-logo { width: 50px; height: 48px; }
+            header h1 { font-size: 19px; }
         }
         .resource-cell { min-width: 210px; }
         .resource-cell small {
@@ -349,10 +420,17 @@
 <body>
 <header>
     <div class="header-row">
-        <div>
-            <h1>OpenShift Clusters Monitoring Platform</h1>
-            <div class="subtitle">
-                Multi Cluster OpenShift Operations &amp; Monitoring Platform
+        <div class="brand-block">
+            <img
+                class="brand-logo"
+                src="/static/kkb-turuncu-lacivert-logo.png"
+                alt="KKB"
+            >
+            <div>
+                <h1>OpenShift Clusters Monitoring Platform</h1>
+                <div class="subtitle">
+                    Multi Cluster OpenShift Operations &amp; Monitoring Platform
+                </div>
             </div>
         </div>
         <form class="cluster-form" method="get" action="/">
@@ -404,7 +482,14 @@
                     {% elif data["collection_duration_severity"] == "warning" %}Warning
                     {% else %}Normal{% endif %}
                 </span>
+                <div id="refresh-duration-warning" class="refresh-warning">
+                    Refresh interval is close to collection duration
+                </div>
             </div>
+            <button type="button" id="manual-refresh" class="action-button">
+                Refresh
+            </button>
+            <span id="refresh-status" aria-live="polite"></span>
         </div>
         {% endif %}
     </div>
@@ -535,20 +620,12 @@
 
     <h2>Operational Health</h2>
     <div class="cards">
-        <div class="card interactive-card" tabindex="0" role="button" aria-label="Eksik resource alanlarını göster">
+        <div class="card">
             <h3>Missing Requests / Limits</h3>
             <div class="value" id="missing-resource-count">{{ data["resources"]["missing_resources"]["application"]["count"] }}</div>
             <div class="subvalue" id="missing-resource-impact">
                 {{ data["resources"]["missing_resources"]["application"]["namespace_count"] }} namespace ·
                 {{ data["resources"]["missing_resources"]["application"]["container_count"] }} container
-            </div>
-            <label class="subvalue">
-                <input type="checkbox" id="include-openshift-namespaces">
-                Include OpenShift namespaces
-            </label>
-            <div class="popover">
-                <p class="popover-title">Missing Resource Fields</p>
-                <div id="missing-resource-details"></div>
             </div>
         </div>
         <div class="card interactive-card" tabindex="0" role="button" aria-label="ClusterOperator detaylarını göster">
@@ -580,6 +657,51 @@
                 </ul>{% else %}<p>No pod restarts</p>{% endif %}
             </div>
         </div>
+    </div>
+
+    <h2>Missing Requests / Limits</h2>
+    <div class="table-toolbar">
+        <div class="field-group">
+            <label for="missing-resource-search">
+                Search namespace / pod / container
+            </label>
+            <input
+                id="missing-resource-search"
+                type="search"
+                placeholder="Namespace, pod veya container ara..."
+                autocomplete="off"
+            >
+        </div>
+        <label>
+            <input type="checkbox" id="include-openshift-namespaces">
+            Include OpenShift namespaces
+        </label>
+        <button type="button" class="action-button" id="export-missing-csv">
+            Export CSV
+        </button>
+    </div>
+    <div class="table-wrapper namespace-table-wrapper">
+        <table id="missing-resource-table">
+            <thead>
+                <tr>
+                    <th><button class="sort-button missing-sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
+                    <th><button class="sort-button missing-sort-button" data-sort="pod" data-type="text">Pod</button></th>
+                    <th><button class="sort-button missing-sort-button" data-sort="container" data-type="text">Container</button></th>
+                    <th>CPU Request</th>
+                    <th>CPU Limit</th>
+                    <th>Memory Request</th>
+                    <th>Memory Limit</th>
+                    <th class="numeric"><button class="sort-button missing-sort-button" data-sort="missing_count" data-type="number">Missing Count</button></th>
+                </tr>
+            </thead>
+            <tbody id="missing-resource-body"></tbody>
+        </table>
+    </div>
+    <div class="pagination">
+        <span id="missing-resource-range" aria-live="polite"></span>
+        <button type="button" class="action-button" id="missing-previous">Previous</button>
+        <strong id="missing-page-number">1</strong>
+        <button type="button" class="action-button" id="missing-next">Next</button>
     </div>
 
     <h2>Node Dağılımı</h2>
@@ -750,18 +872,18 @@
         <table id="namespace-resource-table">
             <thead>
                 <tr>
-                    <th><button class="sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
-                    <th><button class="sort-button" data-sort="pod-count" data-type="number">Pod</button></th>
-                    <th><button class="sort-button" data-sort="container-count" data-type="number">Container</button></th>
-                    <th><button class="sort-button" data-sort="cpu-request" data-type="number">CPU Request</button></th>
-                    <th><button class="sort-button" data-sort="cpu-limit" data-type="number">CPU Limit</button></th>
-                    <th><button class="sort-button" data-sort="memory-request" data-type="number">Memory Request</button></th>
-                    <th><button class="sort-button" data-sort="memory-limit" data-type="number">Memory Limit</button></th>
-                    <th><button class="sort-button" data-sort="missing-cpu-request" data-type="number">Eksik CPU Req.</button></th>
-                    <th><button class="sort-button" data-sort="missing-cpu-limit" data-type="number">Eksik CPU Limit</button></th>
-                    <th><button class="sort-button" data-sort="missing-memory-request" data-type="number">Eksik Mem. Req.</button></th>
-                    <th><button class="sort-button" data-sort="missing-memory-limit" data-type="number">Eksik Mem. Limit</button></th>
-                    <th><button class="sort-button" data-sort="completely-undefined" data-type="number">Tamamen Tanımsız</button></th>
+                    <th><button class="sort-button namespace-sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="pod-count" data-type="number">Pod</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="container-count" data-type="number">Container</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="cpu-request" data-type="number">CPU Request</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="cpu-limit" data-type="number">CPU Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="memory-request" data-type="number">Memory Request</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="memory-limit" data-type="number">Memory Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-cpu-request" data-type="number">Eksik CPU Req.</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-cpu-limit" data-type="number">Eksik CPU Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-memory-request" data-type="number">Eksik Mem. Req.</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-memory-limit" data-type="number">Eksik Mem. Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="completely-undefined" data-type="number">Tamamen Tanımsız</button></th>
                 </tr>
             </thead>
             <tbody id="namespace-resource-body">
@@ -793,10 +915,10 @@
                     data-completely-undefined="{{ namespace["completely_undefined"] }}"
                 >
                     <td><button class="namespace-link" data-namespace-link="{{ namespace["namespace"] }}">{{ namespace["namespace"] }}</button></td>
-                    <td>{{ namespace["pod_count"] }}</td>
-                    <td>{{ namespace["container_count"] }}</td>
-                    <td>{{ namespace["cpu_request_text"] }}</td>
-                    <td>
+                    <td class="numeric">{{ namespace["pod_count"] }}</td>
+                    <td class="numeric">{{ namespace["container_count"] }}</td>
+                    <td class="numeric">{{ namespace["cpu_request_text"] }}</td>
+                    <td class="numeric">
                         {{ namespace["cpu_limit_text"] }}
                         {% if cpu_severity != "normal" %}
                         <span class="severity-badge severity-{{ cpu_severity }}">
@@ -805,8 +927,8 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td>{{ namespace["memory_request_text"] }}</td>
-                    <td>
+                    <td class="numeric">{{ namespace["memory_request_text"] }}</td>
+                    <td class="numeric">
                         {{ namespace["memory_limit_text"] }}
                         {% if memory_severity != "normal" %}
                         <span class="severity-badge severity-{{ memory_severity }}">
@@ -815,11 +937,11 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td>{{ namespace["missing_cpu_request"] }}</td>
-                    <td>{{ namespace["missing_cpu_limit"] }}</td>
-                    <td>{{ namespace["missing_memory_request"] }}</td>
-                    <td>{{ namespace["missing_memory_limit"] }}</td>
-                    <td>{{ namespace["completely_undefined"] }}</td>
+                    <td class="numeric">{{ namespace["missing_cpu_request"] }}</td>
+                    <td class="numeric">{{ namespace["missing_cpu_limit"] }}</td>
+                    <td class="numeric">{{ namespace["missing_memory_request"] }}</td>
+                    <td class="numeric">{{ namespace["missing_memory_limit"] }}</td>
+                    <td class="numeric">{{ namespace["completely_undefined"] }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="12" class="empty-message">Namespace verisi yok.</td></tr>
@@ -835,7 +957,8 @@
     "namespaces": data["resources"]["namespaces"],
     "problemPods": data["pods"]["problem_by_namespace"],
     "restartPods": data["restarts"]["by_namespace"],
-    "missingResources": data["resources"]["missing_resources"]
+    "missingResources": data["resources"]["missing_resources"],
+    "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
 <script>
     const initializeDashboard = () => {
@@ -847,7 +970,12 @@
         const state = {
             activePopup: null,
             refreshTimer: null,
+            refreshInProgress: false,
             namespaceRows: [],
+            missingPage: 1,
+            missingPageSize: 50,
+            missingSortKey: "namespace",
+            missingSortDirection: "asc",
         };
         const rankingSize = document.getElementById("ranking-size");
         const rankingKey = "dashboardRankingSize";
@@ -906,22 +1034,27 @@
         });
         updateNamespaceFilter();
 
-        document.querySelectorAll(".sort-button").forEach((button) => {
+        const compareValues = (left, right, numeric, direction) => {
+            const comparison = numeric
+                ? Number(left) - Number(right)
+                : String(left).localeCompare(String(right), "tr");
+            return direction === "asc" ? comparison : -comparison;
+        };
+        document.querySelectorAll(".namespace-sort-button").forEach((button) => {
             button.addEventListener("click", () => {
                 const key = button.dataset.sort;
                 const numeric = button.dataset.type === "number";
                 const direction = button.dataset.direction === "asc"
                     ? "desc" : "asc";
-                document.querySelectorAll(".sort-button")
+                document.querySelectorAll(".namespace-sort-button")
                     .forEach((item) => delete item.dataset.direction);
                 button.dataset.direction = direction;
                 rows.sort((left, right) => {
-                    const leftValue = left.dataset[key];
-                    const rightValue = right.dataset[key];
-                    const comparison = numeric
-                        ? Number(leftValue) - Number(rightValue)
-                        : leftValue.localeCompare(rightValue, "tr");
-                    return direction === "asc" ? comparison : -comparison;
+                    const leftValue = left.getAttribute(`data-${key}`);
+                    const rightValue = right.getAttribute(`data-${key}`);
+                    return compareValues(
+                        leftValue, rightValue, numeric, direction
+                    );
                 });
                 rows.forEach((row) => body.appendChild(row));
             });
@@ -1024,27 +1157,122 @@
         );
         const includeOpenShiftKey = "includeOpenShiftNamespaces";
         includeOpenShift.checked = localStorage.getItem(includeOpenShiftKey) === "true";
-        const renderMissingResources = () => {
+        const missingSearch = document.getElementById("missing-resource-search");
+        const missingBody = document.getElementById("missing-resource-body");
+        const missingRange = document.getElementById("missing-resource-range");
+        const missingPageNumber = document.getElementById("missing-page-number");
+        const missingPrevious = document.getElementById("missing-previous");
+        const missingNext = document.getElementById("missing-next");
+        const getFilteredMissingRecords = () => {
             const scope = includeOpenShift.checked ? "all" : "application";
-            const summary = dashboardData.missingResources[scope];
+            const query = missingSearch.value.trim().toLocaleLowerCase("tr");
+            return dashboardData.missingResources[scope].records
+                .filter((item) => !query || [
+                    item.namespace, item.pod, item.container
+                ].some((value) => value.toLocaleLowerCase("tr").includes(query)))
+                .sort((left, right) => compareValues(
+                    left[state.missingSortKey],
+                    right[state.missingSortKey],
+                    state.missingSortKey === "missing_count",
+                    state.missingSortDirection
+                ));
+        };
+        const missingStatus = (defined) => defined
+            ? '<span class="defined-mark" title="Defined">✓</span>'
+            : '<span class="missing-badge">Missing</span>';
+        const renderMissingResources = () => {
+            const records = getFilteredMissingRecords();
+            const missingCount = records.reduce(
+                (total, item) => total + item.missing_count, 0
+            );
+            const namespaceCount = new Set(
+                records.map((item) => item.namespace)
+            ).size;
             document.getElementById("missing-resource-count").textContent =
-                summary.count;
+                missingCount;
             document.getElementById("missing-resource-impact").textContent =
-                `${summary.namespace_count} namespace · ${summary.container_count} container`;
-            const details = document.getElementById("missing-resource-details");
-            if (!summary.items.length) {
-                details.innerHTML = "<p>No missing resource fields</p>";
+                `${namespaceCount} namespace · ${records.length} container`;
+
+            const pageCount = Math.max(
+                1, Math.ceil(records.length / state.missingPageSize)
+            );
+            state.missingPage = Math.min(state.missingPage, pageCount);
+            const start = (state.missingPage - 1) * state.missingPageSize;
+            const pageRecords = records.slice(
+                start, start + state.missingPageSize
+            );
+            if (!pageRecords.length) {
+                const message = missingSearch.value.trim()
+                    ? "No matching records"
+                    : "No missing resource definitions found";
+                missingBody.innerHTML = `<tr><td colspan="8" class="empty-message">${message}</td></tr>`;
             } else {
-                details.innerHTML = `<ul>${summary.items.map((item) =>
-                    `<li>${escapeHtml(item.namespace)} / ${escapeHtml(item.pod)} / ${escapeHtml(item.container)} — ${escapeHtml(item.field)} missing</li>`
-                ).join("")}</ul>${summary.more_count
-                    ? `<strong>+ ${summary.more_count} more</strong>` : ""}`;
+                missingBody.innerHTML = pageRecords.map((item) => `
+                    <tr>
+                        <td class="wrap-cell">${escapeHtml(item.namespace)}</td>
+                        <td class="wrap-cell">${escapeHtml(item.pod)}</td>
+                        <td class="wrap-cell">${escapeHtml(item.container)}</td>
+                        <td>${missingStatus(item.cpu_request)}</td>
+                        <td>${missingStatus(item.cpu_limit)}</td>
+                        <td>${missingStatus(item.memory_request)}</td>
+                        <td>${missingStatus(item.memory_limit)}</td>
+                        <td class="numeric"><strong>${item.missing_count}</strong></td>
+                    </tr>
+                `).join("");
             }
+            const rangeStart = records.length ? start + 1 : 0;
+            const rangeEnd = Math.min(start + state.missingPageSize, records.length);
+            missingRange.textContent = `${rangeStart}-${rangeEnd} / ${records.length} records`;
+            missingPageNumber.textContent = String(state.missingPage);
+            missingPrevious.disabled = state.missingPage <= 1;
+            missingNext.disabled = state.missingPage >= pageCount;
             localStorage.setItem(includeOpenShiftKey, includeOpenShift.checked);
         };
-        includeOpenShift.addEventListener("change", renderMissingResources);
+        includeOpenShift.addEventListener("change", () => {
+            state.missingPage = 1;
+            renderMissingResources();
+        });
+        missingSearch.addEventListener("input", () => {
+            state.missingPage = 1;
+            renderMissingResources();
+        });
+        missingPrevious.addEventListener("click", () => {
+            if (state.missingPage > 1) state.missingPage -= 1;
+            renderMissingResources();
+        });
+        missingNext.addEventListener("click", () => {
+            state.missingPage += 1;
+            renderMissingResources();
+        });
+        document.querySelectorAll(".missing-sort-button").forEach((button) => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.sort;
+                const direction = state.missingSortKey === key &&
+                    state.missingSortDirection === "asc" ? "desc" : "asc";
+                document.querySelectorAll(".missing-sort-button")
+                    .forEach((item) => delete item.dataset.direction);
+                state.missingSortKey = key;
+                state.missingSortDirection = direction;
+                state.missingPage = 1;
+                button.dataset.direction = direction;
+                renderMissingResources();
+            });
+        });
         renderMissingResources();
 
+        const downloadCsv = (filename, csvRows) => {
+            const csv = csvRows.map((row) => row.map((value) =>
+                `"${String(value).replaceAll('"', '""')}"`
+            ).join(",")).join("\n");
+            const url = URL.createObjectURL(
+                new Blob([csv], {type: "text/csv;charset=utf-8"})
+            );
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(url);
+        };
         document.getElementById("export-csv").addEventListener("click", () => {
             const headers = Array.from(
                 document.querySelectorAll("#namespace-resource-table thead th")
@@ -1053,22 +1281,57 @@
             const csvRows = [headers, ...visibleRows.map((row) =>
                 Array.from(row.cells).map((cell) => cell.textContent.trim())
             )];
-            const csv = csvRows.map((row) => row.map((value) =>
-                `"${value.replaceAll('"', '""')}"`
-            ).join(",")).join("\n");
-            const url = URL.createObjectURL(
-                new Blob([csv], {type: "text/csv;charset=utf-8"})
+            downloadCsv(
+                `${dashboardData.cluster}-namespace-resources.csv`, csvRows
             );
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = `${dashboardData.cluster}-namespace-resources.csv`;
-            link.click();
-            URL.revokeObjectURL(url);
         });
+        document.getElementById("export-missing-csv").addEventListener(
+            "click", () => {
+                const records = getFilteredMissingRecords();
+                const csvRows = [[
+                    "Namespace", "Pod", "Container", "CPU Request",
+                    "CPU Limit", "Memory Request", "Memory Limit",
+                    "Missing Count"
+                ], ...records.map((item) => [
+                    item.namespace,
+                    item.pod,
+                    item.container,
+                    item.cpu_request ? "Defined" : "Missing",
+                    item.cpu_limit ? "Defined" : "Missing",
+                    item.memory_request ? "Defined" : "Missing",
+                    item.memory_limit ? "Defined" : "Missing",
+                    item.missing_count,
+                ])];
+                downloadCsv(
+                    `${dashboardData.cluster}-missing-resources.csv`, csvRows
+                );
+            }
+        );
 
         const refresh = document.getElementById("refresh-interval");
+        const manualRefresh = document.getElementById("manual-refresh");
+        const refreshStatus = document.getElementById("refresh-status");
+        const refreshWarning = document.getElementById(
+            "refresh-duration-warning"
+        );
         const refreshKey = "dashboardRefreshSeconds";
         refresh.value = localStorage.getItem(refreshKey) || "0";
+        const refreshPage = () => {
+            if (state.refreshInProgress) return;
+            state.refreshInProgress = true;
+            if (state.refreshTimer) {
+                window.clearTimeout(state.refreshTimer);
+                state.refreshTimer = null;
+            }
+            closePopup();
+            manualRefresh.disabled = true;
+            refresh.disabled = true;
+            refreshStatus.textContent = "Refreshing...";
+            sessionStorage.setItem(
+                "dashboardScrollY", String(window.scrollY)
+            );
+            window.location.reload();
+        };
         const scheduleRefresh = () => {
             if (state.refreshTimer) {
                 window.clearTimeout(state.refreshTimer);
@@ -1076,20 +1339,19 @@
             }
             localStorage.setItem(refreshKey, refresh.value);
             const seconds = Number(refresh.value);
+            refreshWarning.classList.toggle(
+                "is-visible",
+                seconds === 15 && dashboardData.collectionDuration > 10
+            );
             if (seconds > 0) {
                 state.refreshTimer = window.setTimeout(
-                    () => {
-                        closePopup();
-                        sessionStorage.setItem(
-                            "dashboardScrollY", String(window.scrollY)
-                        );
-                        window.location.reload();
-                    },
+                    refreshPage,
                     seconds * 1000
                 );
             }
         };
         refresh.addEventListener("change", scheduleRefresh);
+        manualRefresh.addEventListener("click", refreshPage);
         scheduleRefresh();
         const savedScrollY = Number(
             sessionStorage.getItem("dashboardScrollY") || "0"

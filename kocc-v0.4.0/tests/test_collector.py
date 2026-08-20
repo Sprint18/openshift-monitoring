@@ -124,9 +124,22 @@ def test_missing_resources_excludes_only_openshift_namespaces_by_default(
     assert missing["application"]["namespace_count"] == 1
     assert missing["application"]["container_count"] == 1
     assert missing["application"]["items"][0]["namespace"] == "app-ns"
+    assert missing["application"]["records"] == [
+        {
+            "namespace": "app-ns",
+            "pod": "app-pod",
+            "container": "app",
+            "cpu_request": False,
+            "cpu_limit": False,
+            "memory_request": False,
+            "memory_limit": False,
+            "missing_count": 4,
+        }
+    ]
     assert missing["all"]["count"] == 8
     assert missing["all"]["namespace_count"] == 2
     assert missing["all"]["container_count"] == 2
+    assert len(missing["all"]["records"]) == 2
 
 
 @patch("app.collector.client.CustomObjectsApi")
