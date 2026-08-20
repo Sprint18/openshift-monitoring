@@ -101,6 +101,17 @@
             border-radius: 6px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
         }
+        .namespace-table-wrapper {
+            max-height: 70vh;
+            overflow: auto;
+        }
+        .namespace-table-wrapper thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #f0f0f0;
+            box-shadow: inset 0 -1px 0 #8a8d90;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -113,6 +124,72 @@
             font-size: 14px;
         }
         th { background: #f0f0f0; }
+        .table-toolbar {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 16px;
+            margin: 0 0 12px;
+            flex-wrap: wrap;
+        }
+        .field-group {
+            display: grid;
+            gap: 6px;
+        }
+        .field-group label { font-weight: bold; }
+        .field-group input,
+        .field-group select {
+            min-width: 220px;
+            padding: 9px 12px;
+            border: 1px solid #8a8d90;
+            border-radius: 4px;
+            background: white;
+            font-size: 14px;
+        }
+        .ranking-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 16px;
+        }
+        .ranking-grid h3 { margin: 0 0 10px; }
+        .sort-button {
+            padding: 0;
+            border: 0;
+            color: inherit;
+            background: transparent;
+            font: inherit;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .sort-button::after { content: " ↕"; color: #6a6e73; }
+        .severity-badge {
+            display: inline-block;
+            margin: 3px 4px 0 0;
+            padding: 3px 7px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .severity-warning {
+            color: #5f4700;
+            background: #fff4cc;
+        }
+        .severity-high {
+            color: #7d3a00;
+            background: #fce3c3;
+        }
+        .severity-critical {
+            color: #7d1007;
+            background: #faeae8;
+        }
+        tr.row-warning > td { background: #fffdf4; }
+        tr.row-high > td { background: #fff7ed; }
+        tr.row-critical > td { background: #fdf1f0; }
+        .empty-message {
+            padding: 20px;
+            color: #6a6e73;
+            text-align: center;
+        }
         .status, .role {
             display: inline-block;
             padding: 4px 9px;
@@ -364,46 +441,238 @@
         </table>
     </div>
 
+    <h2>Top Resource Limits</h2>
+    <div class="table-toolbar">
+        <div class="field-group">
+            <label for="ranking-size">Ranking boyutu</label>
+            <select id="ranking-size">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+            </select>
+        </div>
+    </div>
+    <div class="ranking-grid">
+        <div>
+            <h3>Top CPU Limits</h3>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sıra</th>
+                            <th>Namespace</th>
+                            <th>CPU Request</th>
+                            <th>CPU Limit</th>
+                            <th>Capacity %</th>
+                        </tr>
+                    </thead>
+                    <tbody class="ranking-body">
+                        {% for item in data["resources"]["top_limits"]["cpu"] %}
+                        <tr data-rank="{{ item["rank"] }}">
+                            <td>{{ item["rank"] }}</td>
+                            <td>{{ item["namespace"] }}</td>
+                            <td>{{ item["request_text"] }}</td>
+                            <td>{{ item["limit_text"] }}</td>
+                            <td>%{{ item["capacity_percent"] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="empty-message">CPU limit verisi yok.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div>
+            <h3>Top Memory Limits</h3>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sıra</th>
+                            <th>Namespace</th>
+                            <th>Memory Request</th>
+                            <th>Memory Limit</th>
+                            <th>Capacity %</th>
+                        </tr>
+                    </thead>
+                    <tbody class="ranking-body">
+                        {% for item in data["resources"]["top_limits"]["memory"] %}
+                        <tr data-rank="{{ item["rank"] }}">
+                            <td>{{ item["rank"] }}</td>
+                            <td>{{ item["namespace"] }}</td>
+                            <td>{{ item["request_text"] }}</td>
+                            <td>{{ item["limit_text"] }}</td>
+                            <td>%{{ item["capacity_percent"] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="empty-message">Memory limit verisi yok.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <h2>Namespace Resource Özeti</h2>
-    <div class="table-wrapper">
-        <table>
+    <div class="table-toolbar">
+        <div class="field-group">
+            <label for="namespace-filter">Namespace</label>
+            <input
+                id="namespace-filter"
+                list="namespace-options"
+                value="All Namespaces"
+                autocomplete="off"
+                aria-controls="namespace-resource-table"
+            >
+            <datalist id="namespace-options">
+                <option value="All Namespaces"></option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}"></option>
+                {% endfor %}
+            </datalist>
+        </div>
+        <div id="namespace-result-count" aria-live="polite"></div>
+    </div>
+    <div class="table-wrapper namespace-table-wrapper">
+        <table id="namespace-resource-table">
             <thead>
                 <tr>
-                    <th>Namespace</th>
-                    <th>Pod</th>
-                    <th>Container</th>
-                    <th>CPU Request</th>
-                    <th>CPU Limit</th>
-                    <th>Memory Request</th>
-                    <th>Memory Limit</th>
-                    <th>Eksik CPU Req.</th>
-                    <th>Eksik CPU Limit</th>
-                    <th>Eksik Mem. Req.</th>
-                    <th>Eksik Mem. Limit</th>
-                    <th>Tamamen Tanımsız</th>
+                    <th><button class="sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
+                    <th><button class="sort-button" data-sort="pod-count" data-type="number">Pod</button></th>
+                    <th><button class="sort-button" data-sort="container-count" data-type="number">Container</button></th>
+                    <th><button class="sort-button" data-sort="cpu-request" data-type="number">CPU Request</button></th>
+                    <th><button class="sort-button" data-sort="cpu-limit" data-type="number">CPU Limit</button></th>
+                    <th><button class="sort-button" data-sort="memory-request" data-type="number">Memory Request</button></th>
+                    <th><button class="sort-button" data-sort="memory-limit" data-type="number">Memory Limit</button></th>
+                    <th><button class="sort-button" data-sort="missing-cpu-request" data-type="number">Eksik CPU Req.</button></th>
+                    <th><button class="sort-button" data-sort="missing-cpu-limit" data-type="number">Eksik CPU Limit</button></th>
+                    <th><button class="sort-button" data-sort="missing-memory-request" data-type="number">Eksik Mem. Req.</button></th>
+                    <th><button class="sort-button" data-sort="missing-memory-limit" data-type="number">Eksik Mem. Limit</button></th>
+                    <th><button class="sort-button" data-sort="completely-undefined" data-type="number">Tamamen Tanımsız</button></th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="namespace-resource-body">
                 {% for namespace in data["resources"]["namespaces"] %}
-                <tr>
+                {% set cpu_severity = namespace["cpu_limit_severity"] %}
+                {% set memory_severity = namespace["memory_limit_severity"] %}
+                {% if "critical" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "critical" %}
+                {% elif "high" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "high" %}
+                {% elif "warning" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "warning" %}
+                {% else %}
+                    {% set row_severity = "normal" %}
+                {% endif %}
+                <tr
+                    class="row-{{ row_severity }}"
+                    data-namespace="{{ namespace["namespace"] }}"
+                    data-pod-count="{{ namespace["pod_count"] }}"
+                    data-container-count="{{ namespace["container_count"] }}"
+                    data-cpu-request="{{ namespace["cpu_request"] }}"
+                    data-cpu-limit="{{ namespace["cpu_limit"] }}"
+                    data-memory-request="{{ namespace["memory_request"] }}"
+                    data-memory-limit="{{ namespace["memory_limit"] }}"
+                    data-missing-cpu-request="{{ namespace["missing_cpu_request"] }}"
+                    data-missing-cpu-limit="{{ namespace["missing_cpu_limit"] }}"
+                    data-missing-memory-request="{{ namespace["missing_memory_request"] }}"
+                    data-missing-memory-limit="{{ namespace["missing_memory_limit"] }}"
+                    data-completely-undefined="{{ namespace["completely_undefined"] }}"
+                >
                     <td>{{ namespace["namespace"] }}</td>
                     <td>{{ namespace["pod_count"] }}</td>
                     <td>{{ namespace["container_count"] }}</td>
                     <td>{{ namespace["cpu_request_text"] }}</td>
-                    <td>{{ namespace["cpu_limit_text"] }}</td>
+                    <td>
+                        {{ namespace["cpu_limit_text"] }}
+                        {% if cpu_severity != "normal" %}
+                        <span class="severity-badge severity-{{ cpu_severity }}">
+                            {{ cpu_severity|title }} CPU Limit
+                            (%{{ namespace["cpu_limit_capacity_percent"] }})
+                        </span>
+                        {% endif %}
+                    </td>
                     <td>{{ namespace["memory_request_text"] }}</td>
-                    <td>{{ namespace["memory_limit_text"] }}</td>
+                    <td>
+                        {{ namespace["memory_limit_text"] }}
+                        {% if memory_severity != "normal" %}
+                        <span class="severity-badge severity-{{ memory_severity }}">
+                            {{ memory_severity|title }} Memory Limit
+                            (%{{ namespace["memory_limit_capacity_percent"] }})
+                        </span>
+                        {% endif %}
+                    </td>
                     <td>{{ namespace["missing_cpu_request"] }}</td>
                     <td>{{ namespace["missing_cpu_limit"] }}</td>
                     <td>{{ namespace["missing_memory_request"] }}</td>
                     <td>{{ namespace["missing_memory_limit"] }}</td>
                     <td>{{ namespace["completely_undefined"] }}</td>
                 </tr>
+                {% else %}
+                <tr><td colspan="12" class="empty-message">Namespace verisi yok.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% endif %}
 </main>
+{% if not error %}
+<script>
+    (() => {
+        const rankingSize = document.getElementById("ranking-size");
+        const updateRankings = () => {
+            const limit = Number(rankingSize.value);
+            document.querySelectorAll(".ranking-body tr[data-rank]")
+                .forEach((row) => {
+                    row.hidden = Number(row.dataset.rank) > limit;
+                });
+        };
+        rankingSize.addEventListener("change", updateRankings);
+        updateRankings();
+
+        const filter = document.getElementById("namespace-filter");
+        const body = document.getElementById("namespace-resource-body");
+        const count = document.getElementById("namespace-result-count");
+        const rows = Array.from(body.querySelectorAll("tr[data-namespace]"));
+        const updateNamespaceFilter = () => {
+            const query = filter.value.trim().toLocaleLowerCase("tr");
+            let visible = 0;
+            rows.forEach((row) => {
+                const namespace = row.dataset.namespace
+                    .toLocaleLowerCase("tr");
+                const matches = query === "" ||
+                    query === "all namespaces" ||
+                    namespace.includes(query);
+                row.hidden = !matches;
+                if (matches) visible += 1;
+            });
+            count.textContent = `${visible} namespace gösteriliyor`;
+        };
+        filter.addEventListener("input", updateNamespaceFilter);
+        updateNamespaceFilter();
+
+        document.querySelectorAll(".sort-button").forEach((button) => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.sort;
+                const numeric = button.dataset.type === "number";
+                const direction = button.dataset.direction === "asc"
+                    ? "desc" : "asc";
+                document.querySelectorAll(".sort-button")
+                    .forEach((item) => delete item.dataset.direction);
+                button.dataset.direction = direction;
+                rows.sort((left, right) => {
+                    const leftValue = left.dataset[key];
+                    const rightValue = right.dataset[key];
+                    const comparison = numeric
+                        ? Number(leftValue) - Number(rightValue)
+                        : leftValue.localeCompare(rightValue, "tr");
+                    return direction === "asc" ? comparison : -comparison;
+                });
+                rows.forEach((row) => body.appendChild(row));
+            });
+        });
+    })();
+</script>
+{% endif %}
 </body>
 </html>

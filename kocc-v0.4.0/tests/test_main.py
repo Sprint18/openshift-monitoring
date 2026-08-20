@@ -2,7 +2,12 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from app.main import app, prepare_dashboard_data
+from app.main import (
+    app,
+    prepare_dashboard_data,
+    resource_severity,
+    top_resource_limits,
+)
 
 client = TestClient(app)
 
@@ -57,71 +62,81 @@ def test_summary_contract_handles_missing_optional_metrics(
     assert data["pods"]["pending"] == 0
     assert data["resources"]["cluster"]["memory_request"] == 0
     assert data["resources"]["namespaces"][0]["cpu_request"] == 0
+    assert data["resources"]["namespace_options"] == ["default"]
+    assert data["resources"]["top_limits"] == {"cpu": [], "memory": []}
     new_cluster_client.return_value.close.assert_called_once_with()
 
 
-@patch("app.main.prepare_dashboard_data")
-def test_dashboard_renders_nodes_items_key(prepare_data: Mock) -> None:
-    data = dashboard_payload()
-    data["selected_cluster_name"] = "KKBTEST"
-    data["nodes"]["role_counts"].update(
-        {"infra": 0, "worker": 0, "other": 0}
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_dashboard_renders_nodes_items_key(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = (
+        dashboard_payload()
     )
-    data["pods"].update({"pending": 0, "failed": 0})
-    cluster = data["resources"]["cluster"]
-    for key in (
-        "cpu_capacity_text",
-        "cpu_allocatable_text",
-        "cpu_request_text",
-        "cpu_limit_text",
-        "memory_capacity_text",
-        "memory_allocatable_text",
-        "memory_request_text",
-        "memory_limit_text",
-        "storage_capacity_text",
-        "storage_allocatable_text",
-    ):
-        cluster[key] = "0"
-    for key in (
-        "cpu_request_percent",
-        "cpu_limit_percent",
-        "memory_request_percent",
-        "memory_limit_percent",
-    ):
-        cluster[key] = 0
-    node = data["nodes"]["items"][0]
-    for key in (
-        "cpu_capacity_text",
-        "cpu_allocatable_text",
-        "memory_capacity_text",
-        "memory_allocatable_text",
-        "storage_capacity_text",
-        "storage_allocatable_text",
-    ):
-        node[key] = "0"
-    namespace = data["resources"]["namespaces"][0]
-    namespace.update(
-        {
-            "pod_count": 0,
-            "container_count": 0,
-            "cpu_request_text": "0",
-            "cpu_limit_text": "0",
-            "memory_request_text": "0",
-            "memory_limit_text": "0",
-            "missing_cpu_request": 0,
-            "missing_cpu_limit": 0,
-            "missing_memory_request": 0,
-            "missing_memory_limit": 0,
-            "completely_undefined": 0,
-        }
-    )
-    prepare_data.return_value = data
 
     response = client.get("/?cluster=kkbtest")
 
     assert response.status_code == 200
     assert "master-0" in response.text
     assert "OpenShift Clusters Monitoring Platform" in response.text
+
+
+def test_resource_severity_uses_capacity_thresholds() -> None:
+    assert resource_severity(999, 10_000) == "normal"
+    assert resource_severity(1000, 10_000) == "warning"
+    assert resource_severity(2000, 10_000) == "high"
+    assert resource_severity(3000, 10_000) == "critical"
+    assert resource_severity(1000, 0) == "normal"
+
+
+def test_top_cpu_and_memory_limits_are_sorted() -> None:
+    namespaces = [
+        {
+            "namespace": "small",
+            "cpu_request": 100,
+            "cpu_limit": 500,
+            "memory_request": 1024,
+            "memory_limit": 4096,
+        },
+        {
+            "namespace": "large-memory",
+            "cpu_request": 200,
+            "cpu_limit": 1000,
+            "memory_request": 2048,
+            "memory_limit": 8192,
+        },
+        {
+            "namespace": "large-cpu",
+            "cpu_request": 400,
+            "cpu_limit": 2000,
+            "memory_request": 512,
+            "memory_limit": 2048,
+        },
+    ]
+
+    cpu = top_resource_limits(namespaces, "cpu", 4000)
+    memory = top_resource_limits(namespaces, "memory", 16_384)
+
+    assert [item["namespace"] for item in cpu] == [
+        "large-cpu",
+        "large-memory",
+        "small",
+    ]
+    assert [item["namespace"] for item in memory] == [
+        "large-memory",
+        "small",
+        "large-cpu",
+    ]
+    assert cpu[0]["capacity_percent"] == 50.0
+    assert memory[0]["capacity_percent"] == 50.0
+
+
+def test_top_resource_limits_handles_empty_namespaces() -> None:
+    assert top_resource_limits([], "cpu", 4000) == []
+    assert top_resource_limits([], "memory", 1024**3) == []
 
 
 @patch("app.main.ClusterCollector")
@@ -138,6 +153,36 @@ def test_dashboard_renders_empty_node_list(
 
     assert response.status_code == 200
     assert "Node Detayları" in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_template_renders_many_namespaces_and_filter_contract(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    data["resources"]["cluster"].update(
+        {"cpu_capacity": 10_000, "memory_capacity": 100 * 1024**3}
+    )
+    data["resources"]["namespaces"] = [
+        {
+            "namespace": f"namespace-{index:03}",
+            "cpu_limit": index * 100,
+            "memory_limit": index * 1024**3,
+        }
+        for index in range(50)
+    ]
+    collector_class.return_value.collect_dashboard.return_value = data
+
+    response = client.get("/?cluster=kkbtest")
+
+    assert response.status_code == 200
+    assert 'value="All Namespaces"' in response.text
+    assert 'value="namespace-049"' in response.text
+    assert 'data-namespace="namespace-025"' in response.text
+    assert "Critical CPU Limit" in response.text
+    assert "Critical Memory Limit" in response.text
 
 
 def test_health_returns_200() -> None:

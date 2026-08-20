@@ -45,6 +45,59 @@ def percentage(value: int, total: int) -> float:
     return round((value / total) * 100, 2)
 
 
+def resource_severity(value: int, capacity: int) -> str:
+    ratio = percentage(value, capacity)
+    if ratio >= 30:
+        return "critical"
+    if ratio >= 20:
+        return "high"
+    if ratio >= 10:
+        return "warning"
+    return "normal"
+
+
+def top_resource_limits(
+    namespaces: list[dict[str, Any]],
+    resource: str,
+    capacity: int,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    limit_key = f"{resource}_limit"
+    request_key = f"{resource}_request"
+    ranked = sorted(
+        (
+            namespace
+            for namespace in namespaces
+            if namespace[limit_key] > 0
+        ),
+        key=lambda namespace: (
+            -namespace[limit_key],
+            namespace["namespace"],
+        ),
+    )[:limit]
+
+    result: list[dict[str, Any]] = []
+    for rank, namespace in enumerate(ranked, start=1):
+        result.append(
+            {
+                "rank": rank,
+                "namespace": namespace["namespace"],
+                "request": namespace[request_key],
+                "request_text": format_cpu(namespace[request_key])
+                if resource == "cpu"
+                else format_memory(namespace[request_key]),
+                "limit": namespace[limit_key],
+                "limit_text": format_cpu(namespace[limit_key])
+                if resource == "cpu"
+                else format_memory(namespace[limit_key]),
+                "capacity_percent": percentage(
+                    namespace[limit_key], capacity
+                ),
+            }
+        )
+    return result
+
+
 def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     """Fill optional dashboard fields without changing the API contract."""
     data.setdefault("version", "N/A")
@@ -111,6 +164,9 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     for namespace in resources["namespaces"]:
         for key, default in namespace_defaults.items():
             namespace.setdefault(key, default)
+    resources["namespaces"].sort(
+        key=lambda namespace: namespace["namespace"]
+    )
 
     return data
 
@@ -207,6 +263,39 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
         namespace["memory_limit_text"] = format_memory(
             namespace["memory_limit"]
         )
+        namespace["cpu_limit_capacity_percent"] = percentage(
+            namespace["cpu_limit"],
+            cluster_resources["cpu_capacity"],
+        )
+        namespace["memory_limit_capacity_percent"] = percentage(
+            namespace["memory_limit"],
+            cluster_resources["memory_capacity"],
+        )
+        namespace["cpu_limit_severity"] = resource_severity(
+            namespace["cpu_limit"],
+            cluster_resources["cpu_capacity"],
+        )
+        namespace["memory_limit_severity"] = resource_severity(
+            namespace["memory_limit"],
+            cluster_resources["memory_capacity"],
+        )
+
+    namespaces = data["resources"]["namespaces"]
+    data["resources"]["namespace_options"] = [
+        namespace["namespace"] for namespace in namespaces
+    ]
+    data["resources"]["top_limits"] = {
+        "cpu": top_resource_limits(
+            namespaces,
+            "cpu",
+            cluster_resources["cpu_capacity"],
+        ),
+        "memory": top_resource_limits(
+            namespaces,
+            "memory",
+            cluster_resources["memory_capacity"],
+        ),
+    }
 
     return data
 
