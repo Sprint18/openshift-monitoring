@@ -41,7 +41,6 @@ def test_cluster_operator_rbac_is_read_only_and_minimal() -> None:
         for rule in role["rules"]
         if "clusteroperators" in rule.get("resources", [])
     ]
-
     assert operator_rules == [
         {
             "apiGroups": ["config.openshift.io"],
@@ -50,6 +49,23 @@ def test_cluster_operator_rbac_is_read_only_and_minimal() -> None:
         }
     ]
 
+
+def test_diagnostics_rbac_is_strictly_read_only() -> None:
+    role = manifest_resources()["ClusterRole"]
+    rules = role["rules"]
+    pod_log_rule = next(
+        rule for rule in rules if "pods/log" in rule.get("resources", [])
+    )
+    event_rule = next(
+        rule for rule in rules if "events" in rule.get("resources", [])
+    )
+
+    assert pod_log_rule["verbs"] == ["get"]
+    assert event_rule["verbs"] == ["get", "list"]
+    forbidden = {"create", "delete", "patch", "update"}
+    assert all(
+        forbidden.isdisjoint(rule.get("verbs", [])) for rule in rules
+    )
 
 def test_build_and_deployment_use_the_same_image_stream_tag() -> None:
     resources = manifest_resources()

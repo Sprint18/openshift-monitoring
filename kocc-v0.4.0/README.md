@@ -68,6 +68,8 @@ alır ve bütün widget'ları bu snapshot'tan üretir. `/health` hiçbir Kuberne
 - `/storage`: PVC requested capacity, durum ve StorageClass tablosu
 - `/routes`: Route/namespace/host arama tablosu
 - `/health-overview`: operator, node, pod ve collection diagnostics
+- `/diagnostics`: lazy, read-only problem Pod listesi
+- `/diagnostics/{namespace}/{pod}`: container state, event, log ve rule-based analiz
 
 Teknik `/health` liveness endpoint'i değişmeden hızlı ve cluster API'sinden
 bağımsızdır. Readiness probe aynı özellikteki `/ready` endpoint'ini kullanır.
@@ -89,6 +91,8 @@ Restart/502 kök nedenini cluster üzerinde doğrulamak için:
 
 ```bash
 oc get pods -l app.kubernetes.io/name=kocc
+oc describe pod <pod>
+oc logs <pod> --previous
 oc describe pod -l app.kubernetes.io/name=kocc
 oc get pod -l app.kubernetes.io/name=kocc -o jsonpath='{range .items[*]}{.metadata.name}{" reason="}{.status.containerStatuses[0].lastState.terminated.reason}{" exit="}{.status.containerStatuses[0].lastState.terminated.exitCode}{" restarts="}{.status.containerStatuses[0].restartCount}{"\n"}{end}'
 oc logs deployment/kocc --previous
@@ -97,6 +101,23 @@ oc get events --sort-by=.lastTimestamp
 
 `OOMKilled`, probe failure, process exit code ve Route/Service endpoint olayları
 görülmeden tek bir restart kök nedeni kesin kabul edilmemelidir.
+
+## Read-only Pod Diagnostics
+
+Diagnostics ana dashboard collection'ına dahil değildir. Problem Pod listesi
+yalnız `/diagnostics` açıldığında; Pod detail, event ve son `50/100/200/500` log
+satırı yalnız `Diagnose` bağlantısı açıldığında alınır. Succeeded/Completed Pod'lar
+listelenmez. Analyzer OOMKilled/137, ImagePullBackOff/ErrImagePull,
+CrashLoopBackOff, FailedScheduling/Pending, FailedMount/FailedAttachVolume,
+Unhealthy probe ve Evicted kanıtlarına açıklanabilir kurallar uygular; kanıt
+yoksa kesinlik iddiasında bulunmaz.
+
+ServiceAccount'a yalnız `pods/log get` ve `events get/list` eklenmiştir;
+Pod `get/list/watch` yetkisi mevcut kuraldan kullanılır. Delete/create/patch/update
+yetkisi yoktur. RMTEST kubeconfig kullanıcısının da remote cluster üzerinde aynı
+minimum read izinlerine sahip olması gerekir. Log içeriği yalnız API response'unda
+kullanıcıya döner; uygulama loguna yazılmaz. Startup INFO kaydı version, process
+ID ve UTC startup timestamp içerir, credential içermez.
 
 ## Cluster health score
 

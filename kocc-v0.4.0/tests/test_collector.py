@@ -422,3 +422,78 @@ def test_pvc_and_route_parsing(
         "tls": False,
         "status": "Unknown",
     }]
+
+
+@patch("app.collector.client.AppsV1Api")
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_diagnostics_excludes_succeeded_pods_and_handles_empty_events(
+    core_api_class: Mock,
+    _custom_api_class: Mock,
+    _apps_api_class: Mock,
+) -> None:
+    completed = pod("jobs", "Succeeded", [container()], name="done")
+    pending = pod("apps", "Pending", [container()], name="waiting")
+    pending.metadata.uid = "uid-1"
+    pending.metadata.creation_timestamp = None
+    completed.metadata.uid = "uid-2"
+    completed.metadata.creation_timestamp = None
+    pending.spec.node_name = None
+    completed.spec.node_name = None
+    core_api = core_api_class.return_value
+    core_api.list_pod_for_all_namespaces.return_value = item_list([
+        completed, pending
+    ])
+    core_api.list_event_for_all_namespaces.return_value = item_list([])
+
+    result = ClusterCollector(Mock()).get_problem_pods()
+
+    assert [item["name"] for item in result] == ["waiting"]
+    assert result[0]["reason"] == "Pending"
+
+
+@patch("app.collector.client.AppsV1Api")
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_pod_diagnostic_previous_log_is_optional(
+    core_api_class: Mock,
+    _custom_api_class: Mock,
+    _apps_api_class: Mock,
+) -> None:
+    status = SimpleNamespace(
+        name="api", ready=False, restart_count=2,
+        state=SimpleNamespace(waiting=SimpleNamespace(
+            reason="CrashLoopBackOff", message="back-off"
+        ), terminated=None, running=None),
+        last_state=SimpleNamespace(terminated=SimpleNamespace(
+            reason="Error", exit_code=1, started_at=None, finished_at=None
+        )),
+    )
+    diagnostic_pod = pod(
+        "apps", "Running",
+        [SimpleNamespace(
+            name="api", image="registry/api:1",
+            resources=SimpleNamespace(limits={"memory": "512Mi"}),
+        )],
+        name="crashing", statuses=[status],
+    )
+    diagnostic_pod.metadata.owner_references = []
+    diagnostic_pod.spec.node_name = "worker-0"
+    diagnostic_pod.status.message = None
+    diagnostic_pod.status.pod_ip = "10.0.0.1"
+    diagnostic_pod.status.start_time = None
+    core_api = core_api_class.return_value
+    core_api.read_namespaced_pod.return_value = diagnostic_pod
+    core_api.list_namespaced_event.return_value = item_list([])
+    core_api.read_namespaced_pod_log.side_effect = [
+        "current log", RuntimeError("previous unavailable")
+    ]
+
+    result = ClusterCollector(Mock()).get_pod_diagnostic(
+        "apps", "crashing", None, 200
+    )
+
+    assert result["events"] == []
+    assert result["logs"]["current"] == "current log"
+    assert result["logs"]["previous_available"] is False
+    assert result["pod"]["containers"][0]["last_exit_code"] == 1

@@ -528,7 +528,8 @@
         ("/workloads", "Workloads", "workloads"),
         ("/storage", "Storage", "storage"),
         ("/routes", "Routes", "routes"),
-        ("/health-overview", "Health", "health")
+        ("/health-overview", "Health", "health"),
+        ("/diagnostics", "Diagnostics", "diagnostics")
     ] %}
     <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
     {% endfor %}
@@ -1138,6 +1139,8 @@
     "podSearchItems": data["search"]["pods"] if page == "workloads" else [],
     "clusterOptions": cluster_options,
     "missingResources": data["resources"]["missing_resources"] if page in ["resources", "workloads"] else {},
+    "missingApplicationRecords": data["resources"]["missing_resources"]["application"]["records"] if page == "resources" else [],
+    "missingAllRecords": data["resources"]["missing_resources"]["all"]["records"] if page == "resources" else [],
     "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
 <script>
@@ -1197,13 +1200,10 @@
             .sort((left, right) => left.localeCompare(right, "tr"));
         const filterStorageKey = `namespaceFilter:${dashboardData.cluster}`;
         const storedNamespace = localStorage.getItem(filterStorageKey) || "";
-        const rebuildNamespaceOptions = (query = "") => {
+        const rebuildNamespaceOptions = () => {
             const previousValue = filter.value || storedNamespace;
-            const normalizedQuery = query.trim().toLocaleLowerCase("tr");
             filter.replaceChildren(new Option("All Namespaces", ""));
             namespaceNames
-                .filter((name) => name.toLocaleLowerCase("tr")
-                    .includes(normalizedQuery))
                 .forEach((name) => filter.add(new Option(name, name)));
             filter.value = Array.from(filter.options)
                 .some((option) => option.value === previousValue)
@@ -1212,9 +1212,12 @@
         rebuildNamespaceOptions();
         const updateNamespaceFilter = () => {
             const selectedNamespace = filter.value;
+            const searchQuery = search.value.trim().toLocaleLowerCase("tr");
             const matchingRows = rows.filter((row) =>
-                selectedNamespace === "" ||
-                row.dataset.namespace === selectedNamespace
+                (!selectedNamespace ||
+                    row.dataset.namespace === selectedNamespace) &&
+                (!searchQuery || row.dataset.namespace
+                    .toLocaleLowerCase("tr").includes(searchQuery))
             );
             const pageCount = Math.max(
                 1, Math.ceil(matchingRows.length / state.namespacePageSize)
@@ -1242,7 +1245,6 @@
         });
         search.addEventListener("input", () => {
             state.namespacePage = 1;
-            rebuildNamespaceOptions(search.value);
             updateNamespaceFilter();
         });
         document.getElementById("namespace-previous").addEventListener(
@@ -1407,9 +1409,11 @@
         const missingPrevious = document.getElementById("missing-previous");
         const missingNext = document.getElementById("missing-next");
         const getFilteredMissingRecords = () => {
-            const scope = includeOpenShift.checked ? "all" : "application";
+            const sourceRecords = includeOpenShift.checked
+                ? dashboardData.missingAllRecords
+                : dashboardData.missingApplicationRecords;
             const query = missingSearch.value.trim().toLocaleLowerCase("tr");
-            return dashboardData.missingResources[scope].records
+            return sourceRecords
                 .filter((item) => !query || [
                     item.namespace, item.pod, item.container
                 ].some((value) => value.toLocaleLowerCase("tr").includes(query)))
@@ -1521,7 +1525,11 @@
                 document.querySelectorAll("#namespace-resource-table thead th")
             ).map((cell) => cell.textContent.trim().replace("↕", "").trim());
             const filteredRows = rows.filter((row) =>
-                !filter.value || row.dataset.namespace === filter.value
+                (!filter.value || row.dataset.namespace === filter.value) &&
+                (!search.value.trim() || row.dataset.namespace
+                    .toLocaleLowerCase("tr").includes(
+                        search.value.trim().toLocaleLowerCase("tr")
+                    ))
             );
             const csvRows = [headers, ...filteredRows.map((row) =>
                 Array.from(row.cells).map((cell) => cell.textContent.trim())

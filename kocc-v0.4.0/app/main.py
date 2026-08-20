@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from copy import deepcopy
@@ -24,6 +25,7 @@ from app.cluster_loader import (
     new_cluster_client,
 )
 from app.collector import ClusterCollector
+from app.diagnostics import analyze_pod_diagnostics
 from app.resource_parser import format_cpu, format_memory
 
 logger = logging.getLogger("kocc")
@@ -44,7 +46,12 @@ DASHBOARD_CACHE_TTL_SECONDS = 15
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
-logger.info("OpenShift Clusters Monitoring Platform %s started", app.version)
+logger.info(
+    "OpenShift Clusters Monitoring Platform started version=%s pid=%s startup_timestamp=%s",
+    app.version,
+    os.getpid(),
+    datetime.now(timezone.utc).isoformat(),
+)
 
 
 @app.get("/health")
@@ -677,6 +684,104 @@ def api_routes(
         return optional_cluster_data(cluster.lower(), "routes")
     except Exception as exc:
         raise_http_error(exc)
+
+
+@app.get("/api/diagnostics/pods")
+def api_diagnostic_pods(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> dict[str, Any]:
+    cluster_key = cluster.lower()
+    try:
+        get_cluster_definition(cluster_key)
+        api_client = new_cluster_client(cluster_key)
+        try:
+            return {
+                "available": True,
+                "items": ClusterCollector(api_client).get_problem_pods(),
+            }
+        finally:
+            api_client.close()
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/diagnostics/{namespace}/{pod_name}")
+def api_pod_diagnostic(
+    namespace: str,
+    pod_name: str,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+    container: str | None = Query(default=None),
+    tail: int = Query(default=200),
+) -> dict[str, Any]:
+    if tail not in {50, 100, 200, 500}:
+        raise HTTPException(
+            status_code=400,
+            detail="tail must be one of 50, 100, 200 or 500",
+        )
+    cluster_key = cluster.lower()
+    try:
+        get_cluster_definition(cluster_key)
+        api_client = new_cluster_client(cluster_key)
+        try:
+            result = ClusterCollector(api_client).get_pod_diagnostic(
+                namespace, pod_name, container, tail
+            )
+            result["analysis"] = analyze_pod_diagnostics(
+                result["pod"], result["events"]
+            )
+            return result
+        finally:
+            api_client.close()
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+def diagnostics_template_context(
+    cluster: str,
+    namespace: str | None = None,
+    pod_name: str | None = None,
+) -> dict[str, Any]:
+    cluster_key = cluster.lower()
+    definitions = get_cluster_definitions()
+    if cluster_key not in definitions:
+        raise HTTPException(status_code=400, detail="Unknown cluster")
+    return {
+        "cluster_options": {
+            key: {"name": definition.name}
+            for key, definition in definitions.items()
+        },
+        "selected_cluster": cluster_key,
+        "selected_cluster_name": definitions[cluster_key].name,
+        "release": app.version,
+        "namespace": namespace,
+        "pod_name": pod_name,
+    }
+
+
+@app.get("/diagnostics", response_class=HTMLResponse)
+def diagnostics_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="diagnostics.html",
+        context=diagnostics_template_context(cluster),
+    )
+
+
+@app.get("/diagnostics/{namespace}/{pod_name}", response_class=HTMLResponse)
+def pod_diagnostic_page(
+    request: Request,
+    namespace: str,
+    pod_name: str,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="diagnostic_detail.html",
+        context=diagnostics_template_context(cluster, namespace, pod_name),
+    )
 
 
 def render_dashboard_page(

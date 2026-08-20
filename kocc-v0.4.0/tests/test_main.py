@@ -466,6 +466,31 @@ def test_missing_resource_search_pagination_csv_and_single_flight_contract(
     assert "refreshInProgress: false" in response.text
     assert "if (state.refreshInProgress) return" in response.text
     assert "seconds === 15 && dashboardData.collectionDuration > 10" in response.text
+    assert '"missingApplicationRecords"' in response.text
+    assert "pod-000" in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_namespace_search_filters_rows_with_single_pipeline(
+    _new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    data["resources"]["namespaces"] = [
+        {"namespace": "Alpha-Team"},
+        {"namespace": "beta-app"},
+        {"namespace": "gamma"},
+    ]
+    collector_class.return_value.collect_dashboard.return_value = data
+
+    response = client.get("/resources?cluster=kkbtest")
+
+    assert response.status_code == 200
+    assert "const searchQuery = search.value.trim().toLocaleLowerCase" in response.text
+    assert "row.dataset.namespace" in response.text
+    assert ".includes(searchQuery)" in response.text
+    assert "state.namespacePage = 1" in response.text
 
 
 def test_official_kkb_logo_is_served_locally() -> None:
@@ -490,11 +515,37 @@ def test_health_probe_does_not_call_cluster_api(
     response = client.get("/health")
     assert response.status_code == 200
     new_cluster_client.assert_not_called()
-
     readiness = client.get("/ready")
     assert readiness.status_code == 200
     assert readiness.json()["status"] == "ready"
     new_cluster_client.assert_not_called()
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_diagnostics_pages_are_lazy_and_render(
+    new_cluster_client: Mock,
+    collector_class: Mock,
+) -> None:
+    listing = client.get("/diagnostics?cluster=kkbtest")
+    detail = client.get(
+        "/diagnostics/apps/api-123?cluster=kkbtest"
+    )
+
+    assert listing.status_code == 200
+    assert "Problemli Podlar" in listing.text
+    assert "/api/diagnostics/pods" in listing.text
+    assert detail.status_code == 200
+    assert "Muhtemel Neden" in detail.text
+    new_cluster_client.assert_not_called()
+    collector_class.assert_not_called()
+
+
+def test_diagnostic_log_tail_validation() -> None:
+    response = client.get(
+        "/api/diagnostics/apps/api-123?cluster=kkbtest&tail=42"
+    )
+    assert response.status_code == 400
 
 
 @patch("app.main.prepare_dashboard_data")

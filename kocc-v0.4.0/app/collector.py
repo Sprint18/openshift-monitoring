@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any
 
 from kubernetes import client
@@ -13,6 +14,11 @@ from app.resource_parser import cpu_to_millicores, memory_to_bytes
 API_REQUEST_TIMEOUT = (5, 30)
 TERMINAL_POD_PHASES = {"Succeeded", "Failed"}
 DETAIL_LIMIT = 20
+DIAGNOSTIC_REASONS = {
+    "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "OOMKilled",
+    "CreateContainerConfigError", "CreateContainerError", "RunContainerError",
+    "ContainerCannotRun", "Error", "Evicted",
+}
 
 logger = logging.getLogger("kocc.collector")
 
@@ -146,6 +152,195 @@ class ClusterCollector:
                 ) else "Unknown",
             })
         return sorted(routes, key=lambda item: (item["namespace"], item["name"]))
+
+    @staticmethod
+    def diagnostic_container(container: Any, status: Any | None) -> dict[str, Any]:
+        state = getattr(status, "state", None)
+        waiting = getattr(state, "waiting", None)
+        terminated = getattr(state, "terminated", None)
+        running = getattr(state, "running", None)
+        last_state = getattr(status, "last_state", None)
+        last_terminated = getattr(last_state, "terminated", None)
+        resources = getattr(container, "resources", None)
+        limits = getattr(resources, "limits", None) or {}
+        if waiting:
+            current_state = "Waiting"
+        elif terminated:
+            current_state = "Terminated"
+        elif running:
+            current_state = "Running"
+        else:
+            current_state = "Unknown"
+        return {
+            "name": container.name,
+            "image": getattr(container, "image", "N/A"),
+            "ready": bool(getattr(status, "ready", False)),
+            "restart_count": getattr(status, "restart_count", 0) or 0,
+            "current_state": current_state,
+            "waiting_reason": getattr(waiting, "reason", None),
+            "waiting_message": getattr(waiting, "message", None),
+            "terminated_reason": getattr(terminated, "reason", None),
+            "exit_code": getattr(terminated, "exit_code", None),
+            "signal": getattr(terminated, "signal", None),
+            "started_at": str(getattr(running or terminated, "started_at", "") or ""),
+            "finished_at": str(getattr(terminated, "finished_at", "") or ""),
+            "last_terminated_reason": getattr(last_terminated, "reason", None),
+            "last_exit_code": getattr(last_terminated, "exit_code", None),
+            "last_started_at": str(getattr(last_terminated, "started_at", "") or ""),
+            "last_finished_at": str(getattr(last_terminated, "finished_at", "") or ""),
+            "memory_limit": limits.get("memory"),
+        }
+
+    @staticmethod
+    def event_item(event: Any) -> dict[str, Any]:
+        timestamp = (
+            getattr(event, "event_time", None)
+            or getattr(event, "last_timestamp", None)
+            or getattr(event.metadata, "creation_timestamp", None)
+        )
+        return {
+            "type": event.type or "Normal",
+            "reason": event.reason or "",
+            "message": event.message or "",
+            "count": event.count or 1,
+            "last_timestamp": str(timestamp or ""),
+        }
+
+    def get_problem_pods(self) -> list[dict[str, Any]]:
+        pods = self.core_api.list_pod_for_all_namespaces(
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items
+        try:
+            events = self.core_api.list_event_for_all_namespaces(
+                _request_timeout=API_REQUEST_TIMEOUT,
+            ).items
+        except Exception as exc:
+            logger.warning("Diagnostic event list unavailable: %s", exc)
+            events = []
+        unhealthy_uids = {
+            getattr(event.involved_object, "uid", None)
+            for event in events
+            if event.reason == "Unhealthy"
+            and getattr(event.involved_object, "uid", None)
+        }
+        result = []
+        now = datetime.now(timezone.utc)
+        for pod in pods:
+            if pod.status.phase == "Succeeded":
+                continue
+            statuses = list(pod.status.container_statuses or [])
+            status_by_name = {status.name: status for status in statuses}
+            containers = [
+                self.diagnostic_container(item, status_by_name.get(item.name))
+                for item in pod.spec.containers or []
+            ]
+            reasons = {
+                value
+                for item in containers
+                for value in (
+                    item["waiting_reason"], item["terminated_reason"],
+                    item["last_terminated_reason"],
+                )
+                if value
+            }
+            total = len(pod.spec.containers or [])
+            ready = sum(item["ready"] for item in containers)
+            phase = pod.status.phase or "Unknown"
+            problem = (
+                phase in {"Pending", "Failed", "Unknown"}
+                or ready < total
+                or bool(reasons & DIAGNOSTIC_REASONS)
+                or pod.metadata.uid in unhealthy_uids
+            )
+            if not problem:
+                continue
+            created = pod.metadata.creation_timestamp
+            age_seconds = int((now - created).total_seconds()) if created else 0
+            main_reason = (
+                next(iter(sorted(reasons & DIAGNOSTIC_REASONS)), None)
+                or pod.status.reason
+                or (phase if phase != "Running" else "NotReady")
+            )
+            result.append({
+                "namespace": pod.metadata.namespace or "default",
+                "name": pod.metadata.name,
+                "phase": phase,
+                "ready": ready,
+                "total": total,
+                "restarts": sum(item["restart_count"] for item in containers),
+                "reason": main_reason,
+                "node": pod.spec.node_name or "N/A",
+                "age_seconds": age_seconds,
+                "severity": "critical" if main_reason in DIAGNOSTIC_REASONS else "warning",
+            })
+        return sorted(result, key=lambda item: (-item["restarts"], item["namespace"], item["name"]))
+
+    def get_pod_diagnostic(
+        self, namespace: str, pod_name: str, container_name: str | None, tail: int
+    ) -> dict[str, Any]:
+        pod = self.core_api.read_namespaced_pod(
+            name=pod_name,
+            namespace=namespace,
+            _request_timeout=API_REQUEST_TIMEOUT,
+        )
+        events = self.core_api.list_namespaced_event(
+            namespace=namespace,
+            field_selector=f"involvedObject.name={pod_name}",
+            _request_timeout=API_REQUEST_TIMEOUT,
+        ).items
+        statuses = list(pod.status.container_statuses or [])
+        status_by_name = {status.name: status for status in statuses}
+        containers = [
+            self.diagnostic_container(item, status_by_name.get(item.name))
+            for item in pod.spec.containers or []
+        ]
+        selected = container_name or (containers[0]["name"] if containers else None)
+        logs = {"container": selected, "current": "", "previous": "", "previous_available": False}
+        if selected:
+            try:
+                logs["current"] = self.core_api.read_namespaced_pod_log(
+                    name=pod_name, namespace=namespace, container=selected,
+                    tail_lines=tail, timestamps=True,
+                    _request_timeout=API_REQUEST_TIMEOUT,
+                )
+            except Exception as exc:
+                logger.info(
+                    "Current log unavailable for %s/%s: %s",
+                    namespace, pod_name, exc,
+                )
+            selected_status = status_by_name.get(selected)
+            if selected_status and (selected_status.restart_count or 0) > 0:
+                try:
+                    logs["previous"] = self.core_api.read_namespaced_pod_log(
+                        name=pod_name, namespace=namespace, container=selected,
+                        tail_lines=tail, timestamps=True, previous=True,
+                        _request_timeout=API_REQUEST_TIMEOUT,
+                    )
+                    logs["previous_available"] = True
+                except Exception as exc:
+                    logger.info("Previous log unavailable for %s/%s: %s", namespace, pod_name, exc)
+        owners = pod.metadata.owner_references or []
+        event_items = [self.event_item(event) for event in events]
+        event_items.sort(
+            key=lambda item: item["last_timestamp"], reverse=True
+        )
+        return {
+            "pod": {
+                "namespace": namespace,
+                "name": pod_name,
+                "node": pod.spec.node_name or "N/A",
+                "phase": pod.status.phase or "Unknown",
+                "reason": pod.status.reason or "",
+                "message": pod.status.message or "",
+                "pod_ip": pod.status.pod_ip or "N/A",
+                "start_time": str(pod.status.start_time or ""),
+                "owner": f"{owners[0].kind}/{owners[0].name}" if owners else "N/A",
+                "restart_count": sum(item["restart_count"] for item in containers),
+                "containers": containers,
+            },
+            "events": event_items,
+            "logs": logs,
+        }
 
     def get_cluster_version(self) -> str:
         result = self.custom_api.get_cluster_custom_object(
