@@ -591,6 +591,8 @@ class ClusterCollector:
     ) -> dict[str, Any]:
         items: list[dict[str, Any]] = []
         crashloop_count = 0
+        restart_by_namespace: dict[str, int] = defaultdict(int)
+        crashloop_by_namespace: dict[str, int] = defaultdict(int)
 
         for pod in pods:
             if (pod.status.phase or "Unknown") == "Succeeded":
@@ -610,6 +612,7 @@ class ClusterCollector:
                     reasons.append(waiting.reason)
             if "CrashLoopBackOff" in reasons:
                 crashloop_count += 1
+                crashloop_by_namespace[pod.metadata.namespace or "default"] += 1
 
             restart_count = sum(
                 getattr(status, "restart_count", 0) or 0
@@ -617,6 +620,7 @@ class ClusterCollector:
             )
             if restart_count <= 0 and not reasons:
                 continue
+            restart_by_namespace[pod.metadata.namespace or "default"] += restart_count
             items.append(
                 {
                     "namespace": pod.metadata.namespace or "default",
@@ -641,6 +645,8 @@ class ClusterCollector:
             "crashloop_count": crashloop_count,
             "items": items[:DETAIL_LIMIT],
             "by_namespace": dict(by_namespace),
+            "restart_by_namespace": dict(restart_by_namespace),
+            "crashloop_by_namespace": dict(crashloop_by_namespace),
         }
 
     def get_cluster_operator_summary(self) -> dict[str, Any]:

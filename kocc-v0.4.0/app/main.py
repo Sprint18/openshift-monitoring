@@ -274,6 +274,188 @@ def top_resource_limits(
     return result
 
 
+EXECUTIVE_TOP_LIMIT = 10
+EXECUTIVE_DISTRIBUTION_LIMIT = 5
+PLATFORM_NAMESPACE_PREFIXES = ("openshift-", "kube-")
+PLATFORM_NAMESPACE_NAMES = {"default", "istio-system", "openshift-monitoring"}
+OVERCOMMIT_WARNING_PERCENT = 100
+OVERCOMMIT_CRITICAL_PERCENT = 150
+
+
+def is_platform_namespace(namespace: str) -> bool:
+    return (
+        namespace in PLATFORM_NAMESPACE_NAMES
+        or namespace.startswith(PLATFORM_NAMESPACE_PREFIXES)
+    )
+
+
+def risk_level(value: float, warning: float, critical: float) -> str:
+    if value >= critical:
+        return "critical"
+    if value >= warning:
+        return "warning"
+    return "healthy"
+
+
+def allocation_distribution(
+    platform: int, applications: int, capacity: int, resource: str,
+) -> dict[str, Any]:
+    used = platform + applications
+    unused = max(0, capacity - used)
+    chart_total = max(capacity, used, 1)
+    formatter = format_cpu if resource == "cpu" else format_memory
+    return {
+        "platform": platform,
+        "applications": applications,
+        "unused": unused,
+        "platform_text": formatter(platform),
+        "applications_text": formatter(applications),
+        "unused_text": formatter(unused),
+        "platform_percent": round(platform / chart_total * 100, 2),
+        "applications_percent": round(applications / chart_total * 100, 2),
+        "unused_percent": round(unused / chart_total * 100, 2),
+        "request_capacity_percent": percentage(used, capacity),
+    }
+
+
+def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
+    """Build executive-only data from the existing cached snapshot."""
+    namespaces = data["resources"]["namespaces"]
+    cluster = data["resources"]["cluster"]
+    platform = [item for item in namespaces if is_platform_namespace(item["namespace"])]
+    applications = [item for item in namespaces if not is_platform_namespace(item["namespace"])]
+
+    def total(items: list[dict[str, Any]], key: str) -> int:
+        return sum(int(item.get(key, 0) or 0) for item in items)
+
+    cpu = allocation_distribution(
+        total(platform, "cpu_request"), total(applications, "cpu_request"),
+        cluster["cpu_capacity"], "cpu",
+    )
+    memory = allocation_distribution(
+        total(platform, "memory_request"), total(applications, "memory_request"),
+        cluster["memory_capacity"], "memory",
+    )
+
+    def ranking(resource: str, mode: str) -> list[dict[str, Any]]:
+        key = f"{resource}_{mode}"
+        capacity = cluster[f"{resource}_capacity"]
+        formatter = format_cpu if resource == "cpu" else format_memory
+        ranked = sorted(
+            namespaces,
+            key=lambda item: (-int(item.get(key, 0) or 0), item["namespace"]),
+        )[:EXECUTIVE_TOP_LIMIT]
+        return [{
+            "namespace": item["namespace"],
+            "value": item[key],
+            "value_text": formatter(item[key]),
+            "capacity_percent": percentage(item[key], capacity),
+        } for item in ranked if item[key] > 0]
+
+    cpu_total = max(cluster["cpu_request"], 1)
+    namespace_ranked = sorted(
+        namespaces,
+        key=lambda item: (-item["cpu_request"], item["namespace"]),
+    )
+    distribution = [{
+        "namespace": item["namespace"],
+        "value": item["cpu_request"],
+        "value_text": format_cpu(item["cpu_request"]),
+        "percent": round(item["cpu_request"] / cpu_total * 100, 2),
+    } for item in namespace_ranked[:EXECUTIVE_DISTRIBUTION_LIMIT] if item["cpu_request"] > 0]
+    top_value = sum(item["value"] for item in distribution)
+    if cluster["cpu_request"] > top_value:
+        other = cluster["cpu_request"] - top_value
+        distribution.append({
+            "namespace": "Diğer", "value": other,
+            "value_text": format_cpu(other),
+            "percent": round(other / cpu_total * 100, 2),
+        })
+    distribution_cursor = 0.0
+    for item in distribution:
+        item["start_percent"] = round(distribution_cursor, 2)
+        distribution_cursor += item["percent"]
+        item["end_percent"] = round(distribution_cursor, 2)
+
+    restart_by_namespace = data["restarts"]["restart_by_namespace"]
+    crashloop_by_namespace = data["restarts"]["crashloop_by_namespace"]
+    missing_by_namespace = {
+        item["namespace"]: sum(int(item.get(key, 0) or 0) for key in (
+            "missing_cpu_request", "missing_cpu_limit",
+            "missing_memory_request", "missing_memory_limit",
+        ))
+        for item in namespaces
+    }
+
+    def maximum(mapping: dict[str, int]) -> tuple[str, int]:
+        return max(mapping.items(), key=lambda item: (item[1], item[0])) if mapping else ("N/A", 0)
+
+    cpu_top = maximum({item["namespace"]: item["cpu_request"] for item in namespaces})
+    memory_top = maximum({item["namespace"]: item["memory_request"] for item in namespaces})
+    restart_top = maximum(restart_by_namespace)
+    crashloop_top = maximum(crashloop_by_namespace)
+    missing_top = maximum(missing_by_namespace)
+    cpu_limit_percent = percentage(cluster["cpu_limit"], cluster["cpu_capacity"])
+    memory_limit_percent = percentage(cluster["memory_limit"], cluster["memory_capacity"])
+    capacity_pressure = max(cpu["request_capacity_percent"], memory["request_capacity_percent"])
+    health = data["health"]
+    operators = data["cluster_operators"]
+    missing_count = data["resources"]["missing_resources"]["application"]["count"]
+    kpis = [
+        {"label": "Overall Health Score", "value": f'{health["score"]}/100', "risk": health["status"].lower(), "icon": "♥"},
+        {"label": "Cluster Capacity Usage", "value": f"%{capacity_pressure}", "risk": risk_level(capacity_pressure, 75, 90), "icon": "◫"},
+        {"label": "CPU Overcommit", "value": f"%{cpu_limit_percent}", "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "⚙"},
+        {"label": "Memory Overcommit", "value": f"%{memory_limit_percent}", "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "▦"},
+        {"label": "Problem Pods", "value": data["pods"]["problem_count"], "risk": risk_level(data["pods"]["problem_count"], 1, 10), "icon": "!"},
+        {"label": "Missing Resources", "value": missing_count, "risk": risk_level(missing_count, 1, 100), "icon": "∅"},
+        {"label": "Cluster Operators Healthy", "value": operators["healthy"] if operators["available"] else "N/A", "risk": "healthy" if operators["available"] and not operators["degraded"] and not operators["unavailable"] else "critical", "icon": "✓"},
+    ]
+    insights: list[str] = []
+    actions: list[dict[str, str]] = []
+    if cpu_limit_percent >= OVERCOMMIT_WARNING_PERCENT:
+        insights.append(f"CPU limitleri kapasitenin %{cpu_limit_percent} seviyesinde.")
+        actions.append({"text": "CPU limit tanımlarını gözden geçirin.", "href": "/resources"})
+    if memory_limit_percent >= OVERCOMMIT_WARNING_PERCENT:
+        insights.append(f"Memory limitleri kapasitenin %{memory_limit_percent} seviyesinde.")
+        actions.append({"text": "Memory limit tanımlarını gözden geçirin.", "href": "/resources"})
+    if data["restarts"]["crashloop_count"]:
+        insights.append(f'{data["restarts"]["crashloop_count"]} CrashLoopBackOff pod bulunuyor.')
+        actions.append({"text": "CrashLoopBackOff podlarını Diagnostics ekranından inceleyin.", "href": "/diagnostics"})
+    if missing_count:
+        insights.append(f"{missing_count} eksik request/limit tanımı bulunuyor.")
+        actions.append({"text": "Eksik resource tanımlarını Resources ekranından düzeltin.", "href": "/resources"})
+    if not insights:
+        insights.append("Belirlenen executive risk eşiklerinde kritik bulgu yok.")
+
+    return {
+        "kpis": kpis, "cpu": cpu, "memory": memory,
+        "rankings": {
+            "cpu_request": ranking("cpu", "request"),
+            "memory_request": ranking("memory", "request"),
+            "cpu_limit": ranking("cpu", "limit"),
+            "memory_limit": ranking("memory", "limit"),
+        },
+        "namespace_distribution": distribution,
+        "gauges": {
+            "cpu": {"percent": cpu_limit_percent, "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},
+            "memory": {"percent": memory_limit_percent, "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},
+        },
+        "hotspots": [
+            {"label": "En yüksek CPU request", "namespace": cpu_top[0], "value": format_cpu(cpu_top[1]), "href": "/resources"},
+            {"label": "En yüksek Memory request", "namespace": memory_top[0], "value": format_memory(memory_top[1]), "href": "/resources"},
+            {"label": "En çok restart", "namespace": restart_top[0], "value": restart_top[1], "href": "/diagnostics"},
+            {"label": "En çok CrashLoopBackOff", "namespace": crashloop_top[0], "value": crashloop_top[1], "href": "/diagnostics"},
+            {"label": "En çok eksik resource", "namespace": missing_top[0], "value": missing_top[1], "href": "/resources"},
+        ],
+        "insights": insights, "actions": actions,
+        "trend": {
+            "cpu": cpu["request_capacity_percent"],
+            "memory": memory["request_capacity_percent"],
+            "health": health["score"],
+        },
+    }
+
+
 def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     """Fill optional dashboard fields without changing the API contract."""
     data.setdefault("version", "N/A")
@@ -308,6 +490,8 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     restarts.setdefault("crashloop_count", 0)
     restarts.setdefault("items", [])
     restarts.setdefault("by_namespace", {})
+    restarts.setdefault("restart_by_namespace", {})
+    restarts.setdefault("crashloop_by_namespace", {})
 
     search = data.setdefault("search", {})
     search.setdefault("pods", [])
@@ -542,6 +726,9 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
     health_started = time.perf_counter()
     data["health"] = health_score(data)
     log_performance("process.health_score", health_started, item_count=1)
+    executive_started = time.perf_counter()
+    data["executive"] = executive_dashboard(data)
+    log_performance("process.executive_dashboard", executive_started, item_count=1)
     data["collected_at"] = format_istanbul_time(datetime.now(timezone.utc))
     data["collection_duration_seconds"] = round(
         time.perf_counter() - started_at, 2

@@ -338,6 +338,68 @@
             gap: 16px;
         }
         .resource-overview .card { display: grid; gap: 10px; }
+        .executive-kpis {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(150px, 1fr));
+            gap: 14px;
+            margin: 18px 0 24px;
+        }
+        .executive-kpi {
+            border-radius: 14px;
+            padding: 18px;
+            color: #fff;
+            box-shadow: 0 8px 24px rgba(17, 42, 77, 0.13);
+            min-height: 116px;
+        }
+        .executive-kpi.healthy { background: linear-gradient(135deg, #16835b, #20a874); }
+        .executive-kpi.warning { background: linear-gradient(135deg, #dc7b17, #f39a32); }
+        .executive-kpi.critical { background: linear-gradient(135deg, #bd3038, #e14b53); }
+        .executive-kpi .kpi-icon { font-size: 20px; opacity: .85; }
+        .executive-kpi .kpi-value { font-size: 30px; font-weight: 800; margin: 10px 0 4px; }
+        .executive-kpi .kpi-label { font-size: 12px; line-height: 1.35; opacity: .92; }
+        .executive-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 18px 0; }
+        .executive-panel { background: white; border: 1px solid var(--surface-border); border-radius: 14px; padding: 20px; box-shadow: 0 6px 20px rgba(17, 42, 77, .07); }
+        .executive-panel h2, .executive-panel h3 { margin-top: 0; }
+        .chart-row { display: flex; align-items: center; gap: 28px; min-height: 230px; }
+        .pie-chart, .donut-chart, .gauge-chart {
+            width: 190px; height: 190px; border-radius: 50%; flex: 0 0 auto;
+            position: relative;
+        }
+        .donut-chart::after, .gauge-chart::after {
+            content: ""; position: absolute; inset: 35px; border-radius: 50%; background: white;
+        }
+        .chart-legend { display: grid; gap: 11px; flex: 1; }
+        .legend-row { display: grid; grid-template-columns: 12px 1fr auto; gap: 9px; align-items: center; font-size: 13px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+        .bar-chart { display: grid; gap: 12px; }
+        .bar-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) 3fr auto; gap: 10px; align-items: center; font-size: 12px; }
+        .bar-track, .allocation-track { height: 16px; background: #e8edf3; border-radius: 999px; overflow: hidden; }
+        .bar-fill { height: 100%; min-width: 2px; background: linear-gradient(90deg, #ef7d00, #f5ae58); border-radius: inherit; }
+        .allocation { margin: 14px 0 20px; }
+        .allocation-track { height: 24px; display: flex; margin: 8px 0; }
+        .allocation-platform { background: #183b63; }
+        .allocation-applications { background: #ef7d00; }
+        .allocation-unused { background: #cfd7e2; }
+        .allocation-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; }
+        .gauge-wrap { display: flex; justify-content: space-around; gap: 25px; text-align: center; }
+        .gauge-chart { width: 170px; height: 170px; }
+        .gauge-value { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; font-size: 25px; font-weight: 800; }
+        .hotspot-list { display: grid; gap: 9px; }
+        .hotspot-row { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 12px; padding: 11px; border-radius: 9px; background: #f3f6f9; color: inherit; text-decoration: none; }
+        .hotspot-row:hover { outline: 2px solid rgba(239,125,0,.35); }
+        .insight-panel { border-left: 5px solid #ef7d00; }
+        .insight-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+        .sparkline-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .sparkline { width: 100%; height: 76px; overflow: visible; }
+        .sparkline polyline { fill: none; stroke: #ef7d00; stroke-width: 3; vector-effect: non-scaling-stroke; }
+        .sparkline-card strong { font-size: 22px; }
+        @media (max-width: 1500px) {
+            .executive-kpis { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+        }
+        @media (max-width: 1000px) {
+            .executive-grid { grid-template-columns: 1fr; }
+            .executive-kpis { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+        }
         .metric-row {
             display: flex;
             justify-content: space-between;
@@ -471,6 +533,12 @@
         [data-theme="dark"] .table-wrapper,
         [data-theme="dark"] .drilldown,
         [data-theme="dark"] .popover { background: #17263a; color: #eef2f6; }
+        [data-theme="dark"] .executive-panel { background: #17263a; color: #eef2f6; border-color: #344b67; }
+        [data-theme="dark"] .donut-chart::after,
+        [data-theme="dark"] .gauge-chart::after { background: #17263a; }
+        [data-theme="dark"] .hotspot-row { background: #20334b; color: #eef2f6; }
+        [data-theme="dark"] .bar-track,
+        [data-theme="dark"] .allocation-track { background: #263d59; }
         [data-theme="dark"] table th,
         [data-theme="dark"] .namespace-table-wrapper thead th,
         [data-theme="dark"] .popover-title { background: #20334b; color: #fff; }
@@ -587,7 +655,134 @@
     </div>
     {% else %}
 
-    {% if page in ["overview", "health"] %}
+    {% if page == "overview" %}
+    {% set executive = data["executive"] %}
+    <section aria-labelledby="executive-summary-title">
+        <h2 id="executive-summary-title">Executive Summary</h2>
+        <div class="executive-kpis">
+            {% for kpi in executive["kpis"] %}
+            <article class="executive-kpi {{ kpi['risk'] }}" title="{{ kpi['label'] }}: {{ kpi['value'] }}">
+                <div class="kpi-icon" aria-hidden="true">{{ kpi["icon"] }}</div>
+                <div class="kpi-value">{{ kpi["value"] }}</div>
+                <div class="kpi-label">{{ kpi["label"] }}</div>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <div class="executive-grid">
+        {% for resource, title in [("cpu", "Cluster CPU Request Distribution"), ("memory", "Cluster Memory Request Distribution")] %}
+        {% set allocation = executive[resource] %}
+        <section class="executive-panel">
+            <h2>{{ title }}</h2>
+            <div class="chart-row">
+                <div class="pie-chart" role="img" aria-label="Platform, application ve unused kapasite dağılımı" style="background: conic-gradient(#183b63 0 {{ allocation['platform_percent'] }}%, #ef7d00 {{ allocation['platform_percent'] }}% {{ allocation['platform_percent'] + allocation['applications_percent'] }}%, #cfd7e2 {{ allocation['platform_percent'] + allocation['applications_percent'] }}% 100%);"></div>
+                <div class="chart-legend">
+                    {% for key, label, color in [("platform", "OpenShift / Platform", "#183b63"), ("applications", "Applications", "#ef7d00"), ("unused", "Unused Capacity", "#cfd7e2")] %}
+                    <div class="legend-row" title="{{ label }}: {{ allocation[key + '_text'] }} · %{{ allocation[key + '_percent'] }}">
+                        <span class="legend-dot" style="background: {{ color }}"></span>
+                        <span>{{ label }}<br><small>{{ allocation[key + "_text"] }}</small></span>
+                        <strong>%{{ allocation[key + "_percent"] }}</strong>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
+        {% endfor %}
+    </div>
+
+    <div class="executive-grid">
+        {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
+        <section class="executive-panel">
+            <h2>{{ title }}</h2>
+            <div class="bar-chart">
+                {% for item in executive["rankings"][key] %}
+                <div class="bar-row" title="{{ item['namespace'] }}: {{ item['value_text'] }} · cluster kapasitesinin %{{ item['capacity_percent'] }}">
+                    <span>{{ item["namespace"] }}</span>
+                    <div class="bar-track"><div class="bar-fill" style="width: {{ [item['capacity_percent'], 100]|min }}%"></div></div>
+                    <strong>{{ item["value_text"] }}</strong>
+                </div>
+                {% else %}<p>Veri yok.</p>{% endfor %}
+            </div>
+        </section>
+        {% endfor %}
+    </div>
+
+    <div class="executive-grid">
+        <section class="executive-panel">
+            <h2>Namespace CPU Request Distribution</h2>
+            <div class="chart-row">
+                <div class="donut-chart" role="img" aria-label="Top namespace CPU request dağılımı" style="background: conic-gradient({% set colors = ['#183b63','#ef7d00','#36a2ae','#7d5bbe','#d95575','#cfd7e2'] %}{% for item in executive['namespace_distribution'] %}{{ colors[loop.index0] }} {{ item['start_percent'] }}% {{ item['end_percent'] }}%{% if not loop.last %}, {% endif %}{% endfor %});"></div>
+                <div class="chart-legend">
+                    {% for item in executive["namespace_distribution"] %}
+                    <div class="legend-row" title="{{ item['namespace'] }}: {{ item['value_text'] }}">
+                        <span class="legend-dot" style="background: {{ colors[loop.index0] }}"></span>
+                        <span>{{ item["namespace"] }}</span><strong>%{{ item["percent"] }}</strong>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
+        <section class="executive-panel">
+            <h2>Capacity Risk Gauge</h2>
+            <div class="gauge-wrap">
+                {% for resource, label in [("cpu", "CPU Overcommit"), ("memory", "Memory Overcommit")] %}
+                {% set gauge = executive["gauges"][resource] %}
+                {% set gauge_color = '#20a874' if gauge['risk'] == 'healthy' else '#f39a32' if gauge['risk'] == 'warning' else '#e14b53' %}
+                <div>
+                    <div class="gauge-chart" title="{{ label }}: %{{ gauge['percent'] }}" style="background: conic-gradient({{ gauge_color }} 0 {{ [gauge['percent'] / 2, 100]|min }}%, #e8edf3 {{ [gauge['percent'] / 2, 100]|min }}% 100%);"><span class="gauge-value">%{{ gauge["percent"] }}</span></div>
+                    <strong>{{ label }}</strong>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <section class="executive-panel">
+        <h2>OpenShift vs Application Allocation</h2>
+        {% for resource, label in [("cpu", "CPU Requests"), ("memory", "Memory Requests")] %}
+        {% set allocation = executive[resource] %}
+        <div class="allocation">
+            <strong>{{ label }}</strong>
+            <div class="allocation-track" title="OpenShift %{{ allocation['platform_percent'] }} · Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}">
+                <span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span>
+                <span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span>
+                <span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span>
+            </div>
+            <div class="allocation-legend"><span>OpenShift <strong>%{{ allocation["platform_percent"] }}</strong></span><span>Applications <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused <strong>%{{ allocation["unused_percent"] }}</strong></span></div>
+        </div>
+        {% endfor %}
+    </section>
+
+    <div class="executive-grid">
+        <section class="executive-panel">
+            <h2>Resource Hotspots</h2>
+            <div class="hotspot-list">
+                {% for item in executive["hotspots"] %}
+                <a class="hotspot-row" href="{{ item['href'] }}?cluster={{ selected_cluster }}{% if item['href'] == '/resources' %}&missing_q={{ item['namespace']|urlencode }}{% endif %}"><span>{{ item["label"] }}</span><strong>{{ item["namespace"] }}</strong><span>{{ item["value"] }}</span></a>
+                {% endfor %}
+            </div>
+        </section>
+        <section class="executive-panel">
+            <h2>30 Refresh Trend</h2>
+            <div class="sparkline-grid" id="executive-trends" data-cluster="{{ selected_cluster }}" data-cpu="{{ executive['trend']['cpu'] }}" data-memory="{{ executive['trend']['memory'] }}" data-health="{{ executive['trend']['health'] }}">
+                {% for key, label in [("cpu", "CPU Requests"), ("memory", "Memory Requests"), ("health", "Health Score")] %}
+                <div class="sparkline-card"><span>{{ label }}</span><br><strong>{{ executive["trend"][key] }}{% if key != "health" %}%{% endif %}</strong><svg class="sparkline" viewBox="0 0 300 76" preserveAspectRatio="none" data-sparkline="{{ key }}" aria-label="{{ label }} son 30 refresh trendi"><polyline points=""></polyline></svg></div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <section class="executive-panel insight-panel">
+        <h2>Executive Insights</h2>
+        <div class="insight-columns">
+            <div><h3>Health Score'u etkileyen bulgular</h3><ul>{% for insight in executive["insights"] %}<li>{{ insight }}</li>{% endfor %}</ul></div>
+            <div><h3>Önerilen aksiyonlar</h3><ul>{% for action in executive["actions"] %}<li><a href="{{ action['href'] }}?cluster={{ selected_cluster }}">{{ action["text"] }}</a></li>{% else %}<li>Acil aksiyon önerisi yok.</li>{% endfor %}</ul></div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if page == "health" %}
     <div class="cards">
         <div class="card">
             <h3>OpenShift Version</h3>
@@ -672,7 +867,7 @@
     </div>
     {% endif %}
 
-    {% if page in ["overview", "resources"] %}
+    {% if page == "resources" %}
     <h2>Resource Capacity / Overcommit</h2>
     <div class="resource-overview">
         {% for resource, label in [("cpu", "CPU"), ("memory", "Memory")] %}
@@ -708,7 +903,7 @@
     </div>
     {% endif %}
 
-    {% if page in ["overview", "health"] %}
+    {% if page == "health" %}
     <h2>Operational Health</h2>
     <div class="cards">
         <div class="card">
@@ -1163,6 +1358,7 @@
     "missingResources": data["resources"]["missing_resources"] if page in ["resources", "workloads"] else {},
     "missingApplicationRecords": data["resources"]["missing_resources"]["application"]["records"] if page == "resources" else [],
     "missingAllRecords": data["resources"]["missing_resources"]["all"]["records"] if page == "resources" else [],
+    "executiveTrend": data["executive"]["trend"] if page == "overview" else {},
     "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
 <script src="/static/missing_resources.js"></script>
@@ -1800,6 +1996,37 @@
                     : "No matching resources";
             } catch (_error) { globalResults.textContent = "Optional search data unavailable"; }
             globalResults.classList.remove("loading-inline");
+        });
+        {% endif %}
+
+        {% if page == "overview" %}
+        const trendRoot = document.getElementById("executive-trends");
+        const trendKey = `executiveTrend:${dashboardData.cluster}`;
+        let trendHistory = [];
+        try {
+            trendHistory = JSON.parse(localStorage.getItem(trendKey) || "[]");
+            if (!Array.isArray(trendHistory)) trendHistory = [];
+        } catch (_error) { trendHistory = []; }
+        trendHistory.push({
+            timestamp: Date.now(),
+            cpu: Number(dashboardData.executiveTrend.cpu || 0),
+            memory: Number(dashboardData.executiveTrend.memory || 0),
+            health: Number(dashboardData.executiveTrend.health || 0),
+        });
+        trendHistory = trendHistory.slice(-30);
+        localStorage.setItem(trendKey, JSON.stringify(trendHistory));
+        ["cpu", "memory", "health"].forEach((key) => {
+            const values = trendHistory.map((item) => Number(item[key] || 0));
+            const ceiling = Math.max(100, ...values, 1);
+            const width = 300;
+            const height = 70;
+            const points = values.map((value, index) => {
+                const x = values.length === 1 ? width : index * width / (values.length - 1);
+                const y = height - Math.min(value, ceiling) / ceiling * height + 3;
+                return `${x.toFixed(1)},${y.toFixed(1)}`;
+            }).join(" ");
+            trendRoot.querySelector(`[data-sparkline="${key}"] polyline`)
+                .setAttribute("points", points);
         });
         {% endif %}
 

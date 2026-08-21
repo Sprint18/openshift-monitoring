@@ -333,6 +333,13 @@ pytest
 
 ## Performans ve restart teşhisi
 
+Overview, mevcut cluster snapshot'ından üretilen Executive Dashboard'dur. KPI,
+CPU/Memory request dağılımları, request/limit sıralamaları, overcommit gauge'ları,
+hotspot ve deterministic aksiyon önerileri yeni Kubernetes çağrısı yapmaz.
+"Usage" görselleri metrics-server gerçek tüketimi değil, tanımlı resource
+request değerlerinin cluster capacity içindeki dağılımını gösterir. Trendler
+yalnız tarayıcı `localStorage` alanında son 30 Overview yenilemesini tutar.
+
 Uygulama her Kubernetes API/işleme adımı için `cluster`, `op`, `duration_ms`,
 varsa `items` ve `cache_hit` alanlarını içeren yapılandırılmış INFO logları üretir.
 Bir saniyeyi aşan adımlar ayrıca `slow_operation` olarak WARNING seviyesinde

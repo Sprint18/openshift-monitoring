@@ -16,6 +16,7 @@ from app.main import (
     cached_dashboard_data,
     clear_dashboard_cache,
     collection_time_severity,
+    executive_dashboard,
     format_istanbul_time,
     health_score,
     missing_resources_page,
@@ -785,7 +786,11 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     response = client.get("/?cluster=kkbtest")
 
     assert response.status_code == 200
-    assert "Resource Capacity / Overcommit" in response.text
+    assert "Executive Summary" in response.text
+    assert "Cluster CPU Request Distribution" in response.text
+    assert "Top 10 Namespace by CPU Requests" in response.text
+    assert "Resource Hotspots" in response.text
+    assert "Executive Insights" in response.text
     assert "Namespace Resource Özeti" not in response.text
     assert "Missing Requests / Limits</h2>" not in response.text
     assert "Route Search" not in response.text
@@ -793,6 +798,58 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     assert 'href="/workloads?cluster=kkbtest"' in response.text
     collector.get_workload_summary.assert_not_called()
     collector.get_pvc_summary.assert_not_called()
+
+
+def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
+    gib = 1024 ** 3
+    data = {
+        "health": {"score": 72, "status": "Critical"},
+        "pods": {"problem_count": 12},
+        "cluster_operators": {
+            "available": True, "healthy": 30, "degraded": 1,
+            "unavailable": 0,
+        },
+        "restarts": {
+            "crashloop_count": 4,
+            "restart_by_namespace": {"sandbox-app": 40, "openshift-monitoring": 2},
+            "crashloop_by_namespace": {"sandbox-app": 4},
+        },
+        "resources": {
+            "cluster": {
+                "cpu_capacity": 10_000, "cpu_request": 8_000,
+                "cpu_limit": 18_000, "memory_capacity": 100 * gib,
+                "memory_request": 70 * gib, "memory_limit": 130 * gib,
+            },
+            "missing_resources": {"application": {"count": 120}},
+            "namespaces": [
+                {
+                    "namespace": "openshift-monitoring", "cpu_request": 3_000,
+                    "cpu_limit": 4_000, "memory_request": 30 * gib,
+                    "memory_limit": 40 * gib, "missing_cpu_request": 0,
+                    "missing_cpu_limit": 0, "missing_memory_request": 0,
+                    "missing_memory_limit": 0,
+                },
+                {
+                    "namespace": "sandbox-app", "cpu_request": 5_000,
+                    "cpu_limit": 14_000, "memory_request": 40 * gib,
+                    "memory_limit": 90 * gib, "missing_cpu_request": 30,
+                    "missing_cpu_limit": 30, "missing_memory_request": 30,
+                    "missing_memory_limit": 30,
+                },
+            ],
+        },
+    }
+
+    executive = executive_dashboard(data)
+
+    assert executive["cpu"]["platform_percent"] == 30
+    assert executive["cpu"]["applications_percent"] == 50
+    assert executive["cpu"]["unused_percent"] == 20
+    assert executive["rankings"]["cpu_request"][0]["namespace"] == "sandbox-app"
+    assert executive["gauges"]["cpu"]["risk"] == "critical"
+    assert executive["hotspots"][2]["namespace"] == "sandbox-app"
+    assert any("CPU limitleri" in item for item in executive["insights"])
+    assert any(action["href"] == "/diagnostics" for action in executive["actions"])
 
 
 @patch("app.main.cached_dashboard_data")
@@ -861,6 +918,26 @@ def test_rendered_resources_javascript_parses(
         capture_output=True, text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_rendered_executive_javascript_parses(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is not installed")
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    response = client.get("/?cluster=kkbtest")
+    scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", response.text, re.S)
+    inline = next(script for script in scripts if "initializeDashboard" in script)
+    completed = subprocess.run(
+        [bun, "-e", f"new Function({json.dumps(inline)});"],
+        capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "executiveTrend:${dashboardData.cluster}" in response.text
 
 
 def missing_record(namespace: str, missing_count: int = 1) -> dict:
