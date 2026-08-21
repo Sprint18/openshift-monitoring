@@ -28,6 +28,10 @@ def reset_perf_path(token: Token[str]) -> None:
     _path.reset(token)
 
 
+def get_perf_path() -> str:
+    return _path.get()
+
+
 def elapsed_ms(started_at: float) -> int:
     return round((time.perf_counter() - started_at) * 1000)
 

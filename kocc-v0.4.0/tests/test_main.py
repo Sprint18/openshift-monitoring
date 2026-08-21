@@ -10,12 +10,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import (
+    DASHBOARD_CACHE_TTL_SECONDS,
+    DIAGNOSTIC_CACHE_TTL_SECONDS,
     app,
     cached_dashboard_data,
     clear_dashboard_cache,
     collection_time_severity,
     format_istanbul_time,
     health_score,
+    missing_resources_page,
+    positive_env_seconds,
     prepare_dashboard_data,
     resource_severity,
     top_resource_limits,
@@ -595,12 +599,18 @@ def test_cache_hit_and_miss_are_logged(
 
 @patch("app.main.prepare_dashboard_data")
 def test_cache_force_refresh_bypasses_fresh_snapshot(
-    prepare_data: Mock,
+    prepare_data: Mock, caplog,
 ) -> None:
     prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
-    assert cached_dashboard_data("kkbtest")["generation"] == 1
-    assert cached_dashboard_data("kkbtest", force_refresh=True)["generation"] == 2
+    with caplog.at_level("INFO", logger="kocc"):
+        assert cached_dashboard_data("kkbtest")["generation"] == 1
+        assert cached_dashboard_data("kkbtest")["generation"] == 1
+        assert cached_dashboard_data("kkbtest", force_refresh=True)["generation"] == 2
     assert prepare_data.call_count == 2
+    assert "cache=MISS" in caplog.text
+    assert "cache=HIT" in caplog.text
+    assert "cache=BYPASS" in caplog.text
+    assert "ttl_ms=60000" in caplog.text
 
 
 @patch("app.main.ClusterCollector")
@@ -851,3 +861,123 @@ def test_rendered_resources_javascript_parses(
         capture_output=True, text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def missing_record(namespace: str, missing_count: int = 1) -> dict:
+    return {
+        "namespace": namespace, "pod": f"{namespace}-pod",
+        "container": "app", "cpu_request": False, "cpu_limit": True,
+        "memory_request": True, "memory_limit": False,
+        "missing_count": missing_count,
+    }
+
+
+def test_missing_resources_backend_filter_sort_and_pagination() -> None:
+    records = [
+        missing_record("conjur", 1), missing_record("dynatrace", 2),
+        missing_record("sandbox-a", 3), missing_record("sandbox-b", 1),
+        missing_record("sandbox-payment", 2),
+        missing_record("openshift-monitoring", 9),
+    ]
+    result = missing_resources_page(
+        records, q="SANDBOX", include_openshift=False,
+        sort="missing_count", direction="desc", page=1, page_size=2,
+    )
+    assert [item["namespace"] for item in result["records"]] == [
+        "sandbox-a", "sandbox-payment"
+    ]
+    assert result == {**result, "total": 3, "page": 1, "page_size": 2, "pages": 2}
+    assert all(not item["namespace"].startswith("openshift-") for item in result["records"])
+
+
+@patch("app.main.cached_dashboard_data")
+def test_dedicated_missing_resources_api_and_csv_share_filter(
+    cached_data: Mock,
+) -> None:
+    records = [missing_record("dynatrace"), missing_record("sandbox-a")]
+    cached_data.return_value = {
+        "resources": {"missing_resources": {"all": {"records": records}}}
+    }
+    response = client.get(
+        "/api/resources/missing?cluster=rmtest&q=sandbox&page=1&page_size=50"
+    )
+    csv_response = client.get(
+        "/api/resources/missing.csv?cluster=rmtest&q=sandbox"
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["records"][0]["namespace"] == "sandbox-a"
+    assert "sandbox-a" in csv_response.text
+    assert "dynatrace" not in csv_response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_resources_server_side_fallback_search(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    records = [missing_record("conjur"), missing_record("sandbox-a")]
+    summary = {"count": 2, "namespace_count": 2, "container_count": 2,
+               "items": [], "more_count": 0, "records": records}
+    data["resources"]["missing_resources"] = {"application": summary, "all": summary}
+    collector_class.return_value.collect_dashboard.return_value = data
+    response = client.get("/resources?cluster=kkbtest&missing_q=sandbox")
+    tbody = response.text.split('id="missing-resource-body"', 1)[1].split("</tbody>", 1)[0]
+    assert "sandbox-a" in tbody
+    assert "conjur" not in tbody
+
+
+def test_snapshot_ttl_environment_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("KOCC_TEST_TTL", raising=False)
+    assert positive_env_seconds("KOCC_TEST_TTL", 60) == 60
+    monkeypatch.setenv("KOCC_TEST_TTL", "90")
+    assert positive_env_seconds("KOCC_TEST_TTL", 60) == 90
+    assert DASHBOARD_CACHE_TTL_SECONDS > 0
+    assert DIAGNOSTIC_CACHE_TTL_SECONDS > 0
+
+
+def test_stale_ajax_response_guard() -> None:
+    bun = shutil.which("bun")
+    if not bun:
+        pytest.skip("bun is not installed")
+    script_path = Path(__file__).parents[1] / "app/static/missing_resources.js"
+    completed = subprocess.run(
+        [bun, "-e", (
+            f"const m=require({json.dumps(str(script_path))});"
+            "console.log(m.isCurrentRequest(1,2),m.isCurrentRequest(2,2));"
+        )], check=True, capture_output=True, text=True,
+    )
+    assert completed.stdout.strip() == "false true"
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_diagnostics_reuses_compact_dashboard_snapshot(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    data = dashboard_payload()
+    data["pods"]["diagnostic_items"] = [{
+        "namespace": "apps", "name": "api", "phase": "Running",
+        "ready": 0, "total": 1, "restarts": 12,
+        "reason": "CrashLoopBackOff", "node": "worker-0",
+        "age_seconds": 100, "severity": "critical",
+    }]
+    collector = collector_class.return_value
+    collector.collect_dashboard.return_value = data
+    assert client.get("/?cluster=kkbtest").status_code == 200
+    response = client.get("/api/diagnostics/pods?cluster=kkbtest")
+    assert response.status_code == 200
+    assert response.json()["items"][0]["name"] == "api"
+    collector.get_problem_pods.assert_not_called()
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_diagnostics_collects_when_dashboard_snapshot_is_absent(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_problem_pods.return_value = []
+    response = client.get("/api/diagnostics/pods?cluster=rmtest")
+    assert response.status_code == 200
+    collector_class.return_value.get_problem_pods.assert_called_once()

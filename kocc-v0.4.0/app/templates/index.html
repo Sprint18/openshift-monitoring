@@ -753,26 +753,30 @@
 
     {% if page == "resources" %}
     <h2>Missing Requests / Limits</h2>
-    <div class="table-toolbar">
+    <form class="table-toolbar" method="get" action="/resources" id="missing-resource-form">
+        <input type="hidden" name="cluster" value="{{ selected_cluster }}">
         <div class="field-group">
             <label for="missing-resource-search">
                 Search namespace / pod / container
             </label>
             <input
                 id="missing-resource-search"
+                name="missing_q"
                 type="search"
+                value="{{ missing_options.get('q', '') }}"
                 placeholder="Namespace, pod veya container ara..."
                 autocomplete="off"
             >
         </div>
         <label>
-            <input type="checkbox" id="include-openshift-namespaces">
+            <input type="checkbox" id="include-openshift-namespaces" name="include_openshift" value="true" {% if missing_options.get('include_openshift') %}checked{% endif %}>
             Include OpenShift namespaces
         </label>
+        <button type="submit" class="action-button">Filter</button>
         <button type="button" class="action-button" id="export-missing-csv">
             Export CSV
         </button>
-    </div>
+    </form>
     <div class="table-wrapper namespace-table-wrapper">
         <table id="missing-resource-table">
             <thead>
@@ -805,10 +809,14 @@
         </table>
     </div>
     <div class="pagination">
-        <span id="missing-resource-range" aria-live="polite"></span>
+        <span id="missing-resource-range" aria-live="polite">{% if missing_fallback %}{{ 0 if not missing_fallback["total"] else ((missing_fallback["page"] - 1) * missing_fallback["page_size"] + 1) }}-{{ [missing_fallback["page"] * missing_fallback["page_size"], missing_fallback["total"]]|min }} / {{ missing_fallback["total"] }} kayıt{% endif %}</span>
         <button type="button" class="action-button" id="missing-previous">Previous</button>
         <strong id="missing-page-number">1</strong>
         <button type="button" class="action-button" id="missing-next">Next</button>
+        <noscript>
+            {% if missing_fallback and missing_fallback["page"] > 1 %}<a href="/resources?cluster={{ selected_cluster }}&missing_q={{ missing_options.get('q', '')|urlencode }}&include_openshift={{ 'true' if missing_options.get('include_openshift') else 'false' }}&missing_page={{ missing_fallback['page'] - 1 }}">Previous</a>{% endif %}
+            {% if missing_fallback and missing_fallback["page"] < missing_fallback["pages"] %}<a href="/resources?cluster={{ selected_cluster }}&missing_q={{ missing_options.get('q', '')|urlencode }}&include_openshift={{ 'true' if missing_options.get('include_openshift') else 'false' }}&missing_page={{ missing_fallback['page'] + 1 }}">Next</a>{% endif %}
+        </noscript>
     </div>
     {% endif %}
 
@@ -1585,6 +1593,47 @@
         );
         } catch (error) {
             console.error("MissingResources init failed:", error);
+        }
+        try {
+            const takeOwnership = (element) => {
+                const replacement = element.cloneNode(true);
+                element.replaceWith(replacement);
+                return replacement;
+            };
+            const ownedSearch = takeOwnership(
+                document.getElementById("missing-resource-search")
+            );
+            const ownedInclude = takeOwnership(
+                document.getElementById("include-openshift-namespaces")
+            );
+            const ownedPrevious = takeOwnership(
+                document.getElementById("missing-previous")
+            );
+            const ownedNext = takeOwnership(
+                document.getElementById("missing-next")
+            );
+            const ownedExport = takeOwnership(
+                document.getElementById("export-missing-csv")
+            );
+            const ownedSortButtons = Array.from(
+                document.querySelectorAll(".missing-sort-button")
+            ).map(takeOwnership);
+            KoccMissingResources.createMissingResourcesController({
+                cluster: dashboardData.cluster,
+                endpoint: "/api/resources/missing",
+                csvEndpoint: "/api/resources/missing.csv",
+                search: ownedSearch,
+                includeOpenShift: ownedInclude,
+                body: document.getElementById("missing-resource-body"),
+                range: document.getElementById("missing-resource-range"),
+                pageNumber: document.getElementById("missing-page-number"),
+                previous: ownedPrevious,
+                next: ownedNext,
+                exportButton: ownedExport,
+                sortButtons: ownedSortButtons,
+            });
+        } catch (error) {
+            console.error("MissingResources enhancement failed:", error);
         }
         {% endif %}
 

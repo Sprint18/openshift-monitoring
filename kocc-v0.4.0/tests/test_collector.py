@@ -321,6 +321,7 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     caplog: object,
 ) -> None:
     caplog.set_level("INFO", logger="kocc.collector")
+    caplog.set_level("INFO", logger="kocc.performance")
     core_api = core_api_class.return_value
     core_api.list_node.return_value = item_list([])
     core_api.list_pod_for_all_namespaces.return_value = item_list([])
@@ -342,6 +343,9 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     core_api.list_namespace.assert_called_once_with(
         _request_timeout=API_REQUEST_TIMEOUT
     )
+    assert "op=api.list_pods" in caplog.text
+    assert "items=0" in caplog.text
+    assert "resource_version_mode=cache" in caplog.text
     for step in (
         "collect_nodes",
         "collect_pods",

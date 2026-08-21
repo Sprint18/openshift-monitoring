@@ -494,6 +494,7 @@ class ClusterCollector:
             ).items
         phase_counts: dict[str, int] = defaultdict(int)
         problem_items: list[dict[str, Any]] = []
+        now = datetime.now(timezone.utc)
 
         for pod in pods:
             phase = pod.status.phase or "Unknown"
@@ -517,6 +518,14 @@ class ClusterCollector:
                     "ready_containers": ready_containers,
                     "total_containers": total_containers,
                     "reason": self.pod_reason(pod),
+                    "restarts": sum(
+                        getattr(status, "restart_count", 0) or 0
+                        for status in statuses
+                    ),
+                    "node": getattr(pod.spec, "node_name", None) or "N/A",
+                    "age_seconds": int(
+                        (now - getattr(pod.metadata, "creation_timestamp")).total_seconds()
+                    ) if getattr(pod.metadata, "creation_timestamp", None) else 0,
                 }
             )
 
@@ -525,6 +534,10 @@ class ClusterCollector:
         )
         problem_by_namespace: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in problem_items:
+            item["severity"] = (
+                "critical" if item["reason"] in DIAGNOSTIC_REASONS
+                else "warning"
+            )
             if len(problem_by_namespace[item["namespace"]]) < 10:
                 problem_by_namespace[item["namespace"]].append(item)
 
@@ -540,6 +553,14 @@ class ClusterCollector:
             "problem_items": problem_items[:DETAIL_LIMIT],
             "problem_more_count": max(0, len(problem_items) - DETAIL_LIMIT),
             "problem_by_namespace": dict(problem_by_namespace),
+            "diagnostic_items": [
+                {
+                    **item,
+                    "ready": item["ready_containers"],
+                    "total": item["total_containers"],
+                }
+                for item in problem_items
+            ],
         }
 
     @staticmethod

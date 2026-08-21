@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import csv
+import io
 import threading
 import time
 from copy import deepcopy
@@ -11,7 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
@@ -28,6 +30,7 @@ from app.collector import ClusterCollector
 from app.diagnostics import analyze_pod_diagnostics
 from app.performance import (
     log_performance,
+    get_perf_path,
     reset_perf_cluster,
     reset_perf_path,
     set_perf_cluster,
@@ -49,8 +52,21 @@ app.mount(
     name="static",
 )
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
-DASHBOARD_CACHE_TTL_SECONDS = 30
-DIAGNOSTIC_CACHE_TTL_SECONDS = 30
+def positive_env_seconds(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except ValueError:
+        logger.warning("Invalid %s; using default %s", name, default)
+        return default
+
+
+DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
+    "KOCC_SNAPSHOT_TTL_SECONDS", 60
+)
+DIAGNOSTIC_CACHE_TTL_SECONDS = positive_env_seconds(
+    "KOCC_DIAGNOSTICS_CACHE_TTL_SECONDS", 60
+)
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _diagnostic_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _dashboard_cache_lock = threading.Lock()
@@ -286,6 +302,7 @@ def normalize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
         pods.setdefault(key, 0)
     pods.setdefault("problem_items", [])
     pods.setdefault("problem_by_namespace", {})
+    pods.setdefault("diagnostic_items", [])
 
     restarts = data.setdefault("restarts", {})
     restarts.setdefault("crashloop_count", 0)
@@ -553,6 +570,12 @@ def _cached_dashboard_data(
     with _dashboard_cache_lock:
         cached = _dashboard_cache.get(cluster_key)
         if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+            age_ms = round((now - cached[0]) * 1000)
+            logger.info(
+                "snapshot cluster=%s path=%s cache=HIT age_ms=%s ttl_ms=%s",
+                cluster_key, get_perf_path(), age_ms,
+                DASHBOARD_CACHE_TTL_SECONDS * 1000,
+            )
             data = deepcopy(cached[1])
             data["cache"] = {
                 "hit": True,
@@ -560,7 +583,7 @@ def _cached_dashboard_data(
             }
             log_performance(
                 "cache.snapshot", cache_started, cache_hit=True,
-                extra={"snapshot_age_ms": round((now - cached[0]) * 1000)},
+                extra={"snapshot_age_ms": age_ms},
             )
             return data
         cluster_lock = _cluster_cache_locks.setdefault(
@@ -572,6 +595,12 @@ def _cached_dashboard_data(
         with _dashboard_cache_lock:
             cached = _dashboard_cache.get(cluster_key)
             if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
+                age_ms = round((now - cached[0]) * 1000)
+                logger.info(
+                    "snapshot cluster=%s path=%s cache=HIT age_ms=%s ttl_ms=%s",
+                    cluster_key, get_perf_path(), age_ms,
+                    DASHBOARD_CACHE_TTL_SECONDS * 1000,
+                )
                 data = deepcopy(cached[1])
                 data["cache"] = {
                     "hit": True,
@@ -579,9 +608,16 @@ def _cached_dashboard_data(
                 }
                 log_performance(
                     "cache.snapshot", cache_started, cache_hit=True,
-                    extra={"snapshot_age_ms": round((now - cached[0]) * 1000)},
+                    extra={"snapshot_age_ms": age_ms},
                 )
                 return data
+        logger.info(
+            "snapshot cluster=%s path=%s cache=%s age_ms=%s ttl_ms=%s",
+            cluster_key, get_perf_path(),
+            "BYPASS" if force_refresh else "MISS",
+            round((now - cached[0]) * 1000) if cached else 0,
+            DASHBOARD_CACHE_TTL_SECONDS * 1000,
+        )
         log_performance("cache.snapshot", cache_started, cache_hit=False)
         try:
             data = prepare_dashboard_data(cluster_key)
@@ -617,6 +653,69 @@ def cached_dashboard_data(
         return _cached_dashboard_data(cluster_key, force_refresh)
     finally:
         reset_perf_cluster(token)
+
+
+MISSING_SORT_FIELDS = {
+    "namespace", "pod", "container", "missing_count",
+    "cpu_request", "cpu_limit", "memory_request", "memory_limit",
+}
+
+
+def missing_resources_page(
+    records: list[dict[str, Any]],
+    *,
+    q: str = "",
+    include_openshift: bool = False,
+    sort: str = "namespace",
+    direction: str = "asc",
+    page: int = 1,
+    page_size: int = 50,
+) -> dict[str, Any]:
+    """Apply the canonical missing-resource query pipeline."""
+    sort_key = sort if sort in MISSING_SORT_FIELDS else "namespace"
+    descending = direction.lower() == "desc"
+    query = q.strip().casefold()
+    filtered = [
+        item for item in records
+        if (include_openshift or not str(item.get("namespace", "")).startswith("openshift-"))
+        and (
+            not query
+            or any(
+                query in str(item.get(field, "")).casefold()
+                for field in ("namespace", "pod", "container")
+            )
+        )
+    ]
+    numeric = sort_key == "missing_count"
+    filtered.sort(
+        key=lambda item: (
+            int(item.get(sort_key, 0) or 0)
+            if numeric
+            else str(item.get(sort_key, "")).casefold()
+        ),
+        reverse=descending,
+    )
+    total = len(filtered)
+    namespace_count = len({item.get("namespace", "") for item in filtered})
+    pages = max(1, (total + page_size - 1) // page_size)
+    safe_page = min(max(page, 1), pages)
+    start = (safe_page - 1) * page_size
+    return {
+        "records": filtered[start:start + page_size],
+        "total": total,
+        "page": safe_page,
+        "page_size": page_size,
+        "pages": pages,
+        "namespace_count": namespace_count,
+    }
+
+
+def query_cached_missing_resources(
+    cluster_key: str, **options: Any
+) -> dict[str, Any]:
+    snapshot = cached_dashboard_data(cluster_key)
+    records = snapshot["resources"]["missing_resources"]["all"]["records"]
+    return missing_resources_page(records, **options)
 
 
 def raise_http_error(exc: Exception) -> None:
@@ -672,6 +771,69 @@ def api_summary(
 ) -> dict[str, Any]:
     try:
         return cached_dashboard_data(cluster.lower(), force_refresh=refresh)
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/resources/missing")
+def api_missing_resources(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+    q: str = Query(default=""),
+    include_openshift: bool = Query(default=False),
+    sort: str = Query(default="namespace"),
+    direction: str = Query(default="asc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    try:
+        return query_cached_missing_resources(
+            cluster.lower(), q=q, include_openshift=include_openshift,
+            sort=sort, direction=direction, page=page,
+            page_size=page_size,
+        )
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/resources/missing.csv")
+def api_missing_resources_csv(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+    q: str = Query(default=""),
+    include_openshift: bool = Query(default=False),
+    sort: str = Query(default="namespace"),
+    direction: str = Query(default="asc"),
+) -> StreamingResponse:
+    try:
+        snapshot = cached_dashboard_data(cluster.lower())
+        records = snapshot["resources"]["missing_resources"]["all"]["records"]
+        result = missing_resources_page(
+            records, q=q, include_openshift=include_openshift,
+            sort=sort, direction=direction, page=1,
+            page_size=max(1, len(records)),
+        )
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Namespace", "Pod", "Container", "CPU Request", "CPU Limit",
+            "Memory Request", "Memory Limit", "Missing Count",
+        ])
+        for item in result["records"]:
+            writer.writerow([
+                item["namespace"], item["pod"], item["container"],
+                "Defined" if item["cpu_request"] else "Missing",
+                "Defined" if item["cpu_limit"] else "Missing",
+                "Defined" if item["memory_request"] else "Missing",
+                "Defined" if item["memory_limit"] else "Missing",
+                item["missing_count"],
+            ])
+        return StreamingResponse(
+            iter([output.getvalue()]), media_type="text/csv",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{cluster.lower()}-missing-resources.csv"'
+                )
+            },
+        )
     except Exception as exc:
         raise_http_error(exc)
 
@@ -767,6 +929,23 @@ def api_diagnostic_pods(
         get_cluster_definition(cluster_key)
         now = time.monotonic()
         with _dashboard_cache_lock:
+            dashboard_cached = _dashboard_cache.get(cluster_key)
+            if (
+                not refresh
+                and dashboard_cached
+                and now - dashboard_cached[0] < DASHBOARD_CACHE_TTL_SECONDS
+                and "diagnostic_items" in dashboard_cached[1].get("pods", {})
+            ):
+                items = deepcopy(
+                    dashboard_cached[1]["pods"]["diagnostic_items"]
+                )
+                age_ms = round((now - dashboard_cached[0]) * 1000)
+                log_performance(
+                    "cache.diagnostics_dashboard_snapshot",
+                    time.perf_counter(), item_count=len(items),
+                    cache_hit=True, extra={"snapshot_age_ms": age_ms},
+                )
+                return {"available": True, "items": items}
             cached = _diagnostic_cache.get(cluster_key)
             if not refresh and cached and now - cached[0] < DIAGNOSTIC_CACHE_TTL_SECONDS:
                 age_ms = round((now - cached[0]) * 1000)
@@ -886,6 +1065,7 @@ def render_dashboard_page(
     cluster: str,
     page: str,
     force_refresh: bool = False,
+    missing_options: dict[str, Any] | None = None,
 ) -> HTMLResponse:
     cluster_key = cluster.lower()
     definitions = get_cluster_definitions()
@@ -893,6 +1073,7 @@ def render_dashboard_page(
         key: {"name": definition.name}
         for key, definition in definitions.items()
     }
+    missing_fallback: dict[str, Any] | None = None
 
     try:
         if page in {"workloads", "storage", "routes"}:
@@ -916,6 +1097,17 @@ def render_dashboard_page(
             )
         if page == "resources":
             missing = data["resources"]["missing_resources"]
+            options = missing_options or {}
+            fallback = missing_resources_page(
+                missing["all"]["records"], **options
+            )
+            missing_fallback = fallback
+            missing["application"]["records"] = fallback["records"]
+            missing["application"]["count"] = fallback["total"]
+            missing["application"]["container_count"] = fallback["total"]
+            missing["application"]["namespace_count"] = fallback[
+                "namespace_count"
+            ]
             logger.info(
                 "resources_page_payload missing_application=%s missing_all=%s",
                 len(missing["application"]["records"]),
@@ -934,6 +1126,8 @@ def render_dashboard_page(
                 "error": None,
                 "release": app.version,
                 "page": page,
+                "missing_options": missing_options or {},
+                "missing_fallback": missing_fallback,
             },
         )
     except Exception as exc:
@@ -956,6 +1150,8 @@ def render_dashboard_page(
                 "error": dashboard_error_message(exc),
                 "release": app.version,
                 "page": page,
+                "missing_options": missing_options or {},
+                "missing_fallback": missing_fallback,
             },
         )
 
@@ -974,8 +1170,23 @@ def resources_page(
     request: Request,
     cluster: str = Query(default=DEFAULT_CLUSTER),
     refresh: bool = Query(default=False),
+    missing_q: str = Query(default=""),
+    include_openshift: bool = Query(default=False),
+    missing_sort: str = Query(default="namespace"),
+    missing_direction: str = Query(default="asc"),
+    missing_page: int = Query(default=1, ge=1),
 ) -> HTMLResponse:
-    return render_dashboard_page(request, cluster, "resources", refresh)
+    return render_dashboard_page(
+        request, cluster, "resources", refresh,
+        {
+            "q": missing_q,
+            "include_openshift": include_openshift,
+            "sort": missing_sort,
+            "direction": missing_direction,
+            "page": missing_page,
+            "page_size": 50,
+        },
+    )
 
 
 @app.get("/workloads", response_class=HTMLResponse)
