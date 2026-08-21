@@ -393,12 +393,46 @@
         .sparkline { width: 100%; height: 76px; overflow: visible; }
         .sparkline polyline { fill: none; stroke: #ef7d00; stroke-width: 3; vector-effect: non-scaling-stroke; }
         .sparkline-card strong { font-size: 22px; }
+        .namespace-hero { margin: 18px 0 24px; padding: 24px; }
+        .hero-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+        .hero-heading h2 { margin-bottom: 5px; }
+        .hero-heading p, .chart-note { margin: 0; color: #6a6e73; font-size: 12px; }
+        .request-toggle { display: inline-flex; padding: 3px; border: 1px solid var(--surface-border); border-radius: 9px; background: #eef2f6; }
+        .request-toggle-button { border: 0; border-radius: 7px; padding: 9px 15px; background: transparent; color: var(--kkb-navy); font-weight: 700; cursor: pointer; }
+        .request-toggle-button.is-active { background: var(--kkb-navy); color: white; box-shadow: 0 2px 8px rgba(19,43,79,.2); }
+        .namespace-chart-layout { display: grid; grid-template-columns: minmax(360px, .9fr) minmax(500px, 1.3fr); gap: 34px; align-items: center; min-height: 430px; }
+        .namespace-pie { width: min(390px, 90%); aspect-ratio: 1; border-radius: 50%; margin: auto; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,.05), 0 10px 28px rgba(17,42,77,.12); }
+        .namespace-pie svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 2px 2px rgba(0,0,0,.08)); }
+        .namespace-pie path { stroke: white; stroke-width: .8; transition: opacity .15s, transform .15s; transform-origin: center; }
+        .namespace-pie path:hover, .namespace-pie path:focus { opacity: .8; outline: none; transform: scale(1.015); }
+        .namespace-pie::after { content: ""; position: absolute; inset: 33%; border-radius: 50%; background: white; }
+        .namespace-pie > span { position: absolute; inset: 33%; z-index: 1; display: grid; place-content: center; text-align: center; font-size: 23px; font-weight: 800; }
+        .namespace-pie > span small { display: block; margin-top: 5px; font-size: 11px; font-weight: 400; color: #6a6e73; }
+        .namespace-legend-wrap { min-width: 0; }
+        .namespace-legend-table { width: 100%; }
+        .namespace-legend-table th { position: static; }
+        .namespace-legend-table td:first-child { display: flex; align-items: center; gap: 8px; }
+        .namespace-legend-table td small { display: block; color: #6a6e73; }
+        .chart-warning { padding: 9px 12px; border-radius: 7px; color: #8a3b00; background: #fff1df; font-weight: 700; font-size: 12px; }
+        .executive-summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+        .executive-summary-cards article, .platform-summary { border: 1px solid var(--surface-border); border-radius: 10px; padding: 16px; background: #fafbfd; }
+        .executive-summary-cards h3, .platform-summary h3 { margin: 0 0 12px; color: var(--kkb-navy); }
+        .executive-summary-cards dl { margin: 0; display: grid; gap: 8px; }
+        .executive-summary-cards dl div { display: flex; justify-content: space-between; gap: 12px; }
+        .executive-summary-cards dt { color: #6a6e73; font-size: 12px; }
+        .executive-summary-cards dd { margin: 0; font-weight: 700; text-align: right; }
+        .concentration-badge { display: inline-block; margin-top: 10px; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+        .concentration-badge.warning { color: #8a3b00; background: #fff1df; }
+        .concentration-badge.critical { color: #8b1620; background: #fde4e6; }
+        .platform-summary { margin-top: 14px; }
         @media (max-width: 1500px) {
             .executive-kpis { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
         }
         @media (max-width: 1000px) {
             .executive-grid { grid-template-columns: 1fr; }
             .executive-kpis { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+            .namespace-chart-layout { grid-template-columns: 1fr; }
+            .executive-summary-cards { grid-template-columns: 1fr; }
         }
         .metric-row {
             display: flex;
@@ -539,6 +573,20 @@
         [data-theme="dark"] .hotspot-row { background: #20334b; color: #eef2f6; }
         [data-theme="dark"] .bar-track,
         [data-theme="dark"] .allocation-track { background: #263d59; }
+        [data-theme="dark"] .namespace-pie::after,
+        [data-theme="dark"] .executive-summary-cards article,
+        [data-theme="dark"] .platform-summary { background: #17263a; }
+        [data-theme="dark"] .executive-summary-cards article,
+        [data-theme="dark"] .platform-summary { border-color: #344b67; }
+        [data-theme="dark"] .executive-summary-cards h3,
+        [data-theme="dark"] .platform-summary h3,
+        [data-theme="dark"] .request-toggle-button { color: #eef2f6; }
+        [data-theme="dark"] .request-toggle { background: #20334b; border-color: #45617f; }
+        [data-theme="dark"] .request-toggle-button.is-active { background: var(--kkb-orange); color: #17263a; }
+        [data-theme="dark"] .hero-heading p,
+        [data-theme="dark"] .chart-note,
+        [data-theme="dark"] .namespace-pie > span small,
+        [data-theme="dark"] .executive-summary-cards dt { color: #b9c2cc; }
         [data-theme="dark"] table th,
         [data-theme="dark"] .namespace-table-wrapper thead th,
         [data-theme="dark"] .popover-title { background: #20334b; color: #fff; }
@@ -670,26 +718,46 @@
         </div>
     </section>
 
-    <div class="executive-grid">
-        {% for resource, title in [("cpu", "Cluster CPU Request Distribution"), ("memory", "Cluster Memory Request Distribution")] %}
+    <section class="executive-panel namespace-hero">
+        <div class="hero-heading">
+            <div><h2>Request Dağılımı (Namespace Bazında)</h2><p>Cluster capacity referanslı tanımlı resource request dağılımı</p></div>
+            <div class="request-toggle" role="group" aria-label="Resource request türü">
+                <button type="button" class="request-toggle-button is-active" data-request-toggle="cpu">CPU Request</button>
+                <button type="button" class="request-toggle-button" data-request-toggle="memory">Memory Request</button>
+            </div>
+        </div>
+        {% set slice_colors = ['#183b63','#ef7d00','#249c98','#7756b6','#d54c70','#e7aa22','#4d8cc9','#76a83b','#9a5b3f','#65758b','#b9c4d0','#d8dee6'] %}
+        {% for resource in ["cpu", "memory"] %}
+        {% set chart = executive["request_distributions"][resource] %}
         {% set allocation = executive[resource] %}
-        <section class="executive-panel">
-            <h2>{{ title }}</h2>
-            <div class="chart-row">
-                <div class="pie-chart" role="img" aria-label="Platform, application ve unused kapasite dağılımı" style="background: conic-gradient(#183b63 0 {{ allocation['platform_percent'] }}%, #ef7d00 {{ allocation['platform_percent'] }}% {{ allocation['platform_percent'] + allocation['applications_percent'] }}%, #cfd7e2 {{ allocation['platform_percent'] + allocation['applications_percent'] }}% 100%);"></div>
-                <div class="chart-legend">
-                    {% for key, label, color in [("platform", "OpenShift / Platform", "#183b63"), ("applications", "Applications", "#ef7d00"), ("unused", "Unused Capacity", "#cfd7e2")] %}
-                    <div class="legend-row" title="{{ label }}: {{ allocation[key + '_text'] }} · %{{ allocation[key + '_percent'] }}">
-                        <span class="legend-dot" style="background: {{ color }}"></span>
-                        <span>{{ label }}<br><small>{{ allocation[key + "_text"] }}</small></span>
-                        <strong>%{{ allocation[key + "_percent"] }}</strong>
-                    </div>
-                    {% endfor %}
+        <div data-request-mode="{{ resource }}" {% if resource == "memory" %}hidden{% endif %}>
+            <div class="namespace-chart-layout">
+                <div class="namespace-pie" role="img" aria-label="{{ resource|upper }} request namespace dağılımı"><svg viewBox="0 0 200 200" aria-hidden="true">{% for item in chart["slices"] %}<path d="{{ item['svg_path'] }}" fill="{{ slice_colors[loop.index0] }}" tabindex="0"><title>{{ item["label"] }} · {{ item["value_text"] }} · cluster {{ resource|upper }} capacity değerinin %{{ item["capacity_percent"] }}{% if item["grouped_count"] %} · {{ item["grouped_count"] }} namespace{% endif %}</title></path>{% endfor %}</svg><span>{{ chart["capacity_text"] }}<small>Cluster Capacity</small></span></div>
+                <div class="namespace-legend-wrap">
+                    <table class="namespace-legend-table">
+                        <thead><tr><th>Namespace</th><th>{{ resource|upper }} Request</th><th>Capacity %</th></tr></thead>
+                        <tbody>
+                            {% for item in chart["slices"] %}
+                            <tr title="{{ item['label'] }} · {{ item['value_text'] }} · cluster {{ resource|upper }} capacity değerinin %{{ item['capacity_percent'] }}{% if item['grouped_count'] %} · {{ item['grouped_count'] }} namespace{% endif %}">
+                                <td><span class="legend-dot" style="background: {{ slice_colors[loop.index0] }}"></span>{{ item["label"] }}{% if item["grouped_count"] %}<small>{{ item["grouped_count"] }} namespace</small>{% endif %}</td>
+                                <td>{{ item["value_text"] }}</td><td><strong>%{{ item["capacity_percent"] }}</strong></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% if chart["over_capacity"] %}<p class="chart-warning">Requests capacity değerini aşıyor; Unused Capacity 0 kabul edilmiştir.</p>{% endif %}
+                    <p class="chart-note">Not: Capacity'nin %{{ chart["slice_threshold_percent"] }} değerinden az request tanımlayan veya ilk {{ chart["max_namespace_slices"] }} dilim dışında kalan namespace'ler “Diğerleri” altında toplanır.</p>
                 </div>
             </div>
-        </section>
+            <div class="executive-summary-cards">
+                <article><h3>Capacity Summary</h3><dl><div><dt>Total Capacity</dt><dd>{{ chart["capacity_text"] }}</dd></div><div><dt>Total Requests</dt><dd>{{ chart["total_requests_text"] }}</dd></div><div><dt>Request Ratio</dt><dd>%{{ chart["request_ratio"] }}</dd></div><div><dt>Unused</dt><dd>{{ chart["unused_text"] }}</dd></div></dl></article>
+                <article><h3>Namespace Summary</h3><dl><div><dt>Total Namespaces</dt><dd>{{ chart["total_namespaces"] }}</dd></div><div><dt>Namespaces ≥ %{{ chart["slice_threshold_percent"] }}</dt><dd>{{ chart["threshold_namespace_count"] }}</dd></div><div><dt>Displayed Namespace Slices</dt><dd>{{ chart["visible_namespace_count"] }}</dd></div><div><dt>Grouped under Others</dt><dd>{{ chart["grouped_namespace_count"] }}</dd></div></dl></article>
+                <article><h3>Risk Summary</h3><dl><div><dt>Top Namespace</dt><dd>{{ chart["top_namespace"] }}</dd></div><div><dt>Request</dt><dd>{{ chart["top_value_text"] }}</dd></div><div><dt>Share</dt><dd>%{{ chart["top_share"] }}</dd></div></dl>{% if chart["concentration"] != "healthy" %}<span class="concentration-badge {{ chart['concentration'] }}">{{ "Critical" if chart["concentration"] == "critical" else "High" }} concentration</span>{% endif %}</article>
+            </div>
+            <article class="platform-summary"><h3>Platform vs Application</h3><div class="allocation-track" title="Platform %{{ allocation['platform_percent'] }} · Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}"><span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span><span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span><span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span></div><div class="allocation-legend"><span>OpenShift / Platform <strong>%{{ allocation["platform_percent"] }}</strong></span><span>Application Workloads <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused Capacity <strong>%{{ allocation["unused_percent"] }}</strong></span></div></article>
+        </div>
         {% endfor %}
-    </div>
+    </section>
 
     <div class="executive-grid">
         {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
@@ -710,20 +778,6 @@
 
     <div class="executive-grid">
         <section class="executive-panel">
-            <h2>Namespace CPU Request Distribution</h2>
-            <div class="chart-row">
-                <div class="donut-chart" role="img" aria-label="Top namespace CPU request dağılımı" style="background: conic-gradient({% set colors = ['#183b63','#ef7d00','#36a2ae','#7d5bbe','#d95575','#cfd7e2'] %}{% for item in executive['namespace_distribution'] %}{{ colors[loop.index0] }} {{ item['start_percent'] }}% {{ item['end_percent'] }}%{% if not loop.last %}, {% endif %}{% endfor %});"></div>
-                <div class="chart-legend">
-                    {% for item in executive["namespace_distribution"] %}
-                    <div class="legend-row" title="{{ item['namespace'] }}: {{ item['value_text'] }}">
-                        <span class="legend-dot" style="background: {{ colors[loop.index0] }}"></span>
-                        <span>{{ item["namespace"] }}</span><strong>%{{ item["percent"] }}</strong>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </section>
-        <section class="executive-panel">
             <h2>Capacity Risk Gauge</h2>
             <div class="gauge-wrap">
                 {% for resource, label in [("cpu", "CPU Overcommit"), ("memory", "Memory Overcommit")] %}
@@ -738,22 +792,6 @@
         </section>
     </div>
 
-    <section class="executive-panel">
-        <h2>OpenShift vs Application Allocation</h2>
-        {% for resource, label in [("cpu", "CPU Requests"), ("memory", "Memory Requests")] %}
-        {% set allocation = executive[resource] %}
-        <div class="allocation">
-            <strong>{{ label }}</strong>
-            <div class="allocation-track" title="OpenShift %{{ allocation['platform_percent'] }} · Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}">
-                <span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span>
-                <span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span>
-                <span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span>
-            </div>
-            <div class="allocation-legend"><span>OpenShift <strong>%{{ allocation["platform_percent"] }}</strong></span><span>Applications <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused <strong>%{{ allocation["unused_percent"] }}</strong></span></div>
-        </div>
-        {% endfor %}
-    </section>
-
     <div class="executive-grid">
         <section class="executive-panel">
             <h2>Resource Hotspots</h2>
@@ -766,7 +804,7 @@
         <section class="executive-panel">
             <h2>30 Refresh Trend</h2>
             <div class="sparkline-grid" id="executive-trends" data-cluster="{{ selected_cluster }}" data-cpu="{{ executive['trend']['cpu'] }}" data-memory="{{ executive['trend']['memory'] }}" data-health="{{ executive['trend']['health'] }}">
-                {% for key, label in [("cpu", "CPU Requests"), ("memory", "Memory Requests"), ("health", "Health Score")] %}
+                {% for key, label in [("cpu", "CPU Request %"), ("memory", "Memory Request %"), ("health", "Health Score")] %}
                 <div class="sparkline-card"><span>{{ label }}</span><br><strong>{{ executive["trend"][key] }}{% if key != "health" %}%{% endif %}</strong><svg class="sparkline" viewBox="0 0 300 76" preserveAspectRatio="none" data-sparkline="{{ key }}" aria-label="{{ label }} son 30 refresh trendi"><polyline points=""></polyline></svg></div>
                 {% endfor %}
             </div>
@@ -2000,6 +2038,24 @@
         {% endif %}
 
         {% if page == "overview" %}
+        const requestToggleButtons = document.querySelectorAll(
+            "[data-request-toggle]"
+        );
+        const setRequestMode = (mode) => {
+            const safeMode = mode === "memory" ? "memory" : "cpu";
+            document.querySelectorAll("[data-request-mode]").forEach((panel) => {
+                panel.hidden = panel.dataset.requestMode !== safeMode;
+            });
+            requestToggleButtons.forEach((button) => {
+                const active = button.dataset.requestToggle === safeMode;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-pressed", String(active));
+            });
+        };
+        requestToggleButtons.forEach((button) => button.addEventListener(
+            "click", () => setRequestMode(button.dataset.requestToggle)
+        ));
+        setRequestMode("cpu");
         const trendRoot = document.getElementById("executive-trends");
         const trendKey = `executiveTrend:${dashboardData.cluster}`;
         let trendHistory = [];

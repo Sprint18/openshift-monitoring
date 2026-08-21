@@ -4,6 +4,7 @@ import logging
 import os
 import csv
 import io
+import math
 import threading
 import time
 from copy import deepcopy
@@ -275,9 +276,14 @@ def top_resource_limits(
 
 
 EXECUTIVE_TOP_LIMIT = 10
-EXECUTIVE_DISTRIBUTION_LIMIT = 5
+NAMESPACE_SLICE_THRESHOLD_PERCENT = 1.0
+MAX_NAMESPACE_SLICES = 10
+CONCENTRATION_WARNING_PERCENT = 20.0
+CONCENTRATION_CRITICAL_PERCENT = 30.0
 PLATFORM_NAMESPACE_PREFIXES = ("openshift-", "kube-")
-PLATFORM_NAMESPACE_NAMES = {"default", "istio-system", "openshift-monitoring"}
+PLATFORM_NAMESPACE_NAMES = {
+    "default", "istio-system", "openshift-monitoring", "dynatrace",
+}
 OVERCOMMIT_WARNING_PERCENT = 100
 OVERCOMMIT_CRITICAL_PERCENT = 150
 
@@ -318,6 +324,117 @@ def allocation_distribution(
     }
 
 
+def namespace_request_distribution(
+    namespaces: list[dict[str, Any]], resource: str, capacity: int,
+) -> dict[str, Any]:
+    """Group a capacity-based namespace request distribution for one chart."""
+    key = f"{resource}_request"
+    formatter = format_cpu if resource == "cpu" else format_memory
+    ranked = sorted(
+        namespaces,
+        key=lambda item: (-int(item.get(key, 0) or 0), item["namespace"]),
+    )
+    individually_visible = [
+        item for item in ranked
+        if capacity > 0
+        and percentage(int(item.get(key, 0) or 0), capacity)
+        >= NAMESPACE_SLICE_THRESHOLD_PERCENT
+    ]
+    visible = individually_visible[:MAX_NAMESPACE_SLICES]
+    visible_names = {item["namespace"] for item in visible}
+    grouped = [item for item in ranked if item["namespace"] not in visible_names]
+    total_requests = sum(int(item.get(key, 0) or 0) for item in ranked)
+    unused = max(capacity - total_requests, 0)
+    visual_total = max(capacity, total_requests, 1)
+    slices: list[dict[str, Any]] = []
+    for item in visible:
+        value = int(item.get(key, 0) or 0)
+        slices.append({
+            "label": item["namespace"], "value": value,
+            "value_text": formatter(value),
+            "capacity_percent": percentage(value, capacity),
+            "visual_percent": round(value / visual_total * 100, 4),
+            "grouped_count": 0, "kind": "namespace",
+        })
+    grouped_value = sum(int(item.get(key, 0) or 0) for item in grouped)
+    if grouped:
+        slices.append({
+            "label": "Diğerleri", "value": grouped_value,
+            "value_text": formatter(grouped_value),
+            "capacity_percent": percentage(grouped_value, capacity),
+            "visual_percent": round(grouped_value / visual_total * 100, 4),
+            "grouped_count": len(grouped), "kind": "others",
+        })
+    if unused > 0:
+        slices.append({
+            "label": "Unused Capacity", "value": unused,
+            "value_text": formatter(unused),
+            "capacity_percent": percentage(unused, capacity),
+            "visual_percent": round(unused / visual_total * 100, 4),
+            "grouped_count": 0, "kind": "unused",
+        })
+    cursor = 0.0
+    for item in slices:
+        item["start_percent"] = round(cursor, 4)
+        cursor += item["visual_percent"]
+        item["end_percent"] = round(cursor, 4)
+        item["svg_path"] = pie_slice_path(
+            item["start_percent"], item["end_percent"]
+        )
+    top = next((item for item in slices if item["kind"] == "namespace"), None)
+    top_share = top["capacity_percent"] if top else 0.0
+    concentration = risk_level(
+        top_share,
+        CONCENTRATION_WARNING_PERCENT,
+        CONCENTRATION_CRITICAL_PERCENT,
+    )
+    return {
+        "resource": resource,
+        "capacity": capacity,
+        "capacity_text": formatter(capacity),
+        "total_requests": total_requests,
+        "total_requests_text": formatter(total_requests),
+        "request_ratio": percentage(total_requests, capacity),
+        "unused": unused,
+        "unused_text": formatter(unused),
+        "over_capacity": total_requests > capacity,
+        "slices": slices,
+        "total_namespaces": len(namespaces),
+        "visible_namespace_count": len(visible),
+        "threshold_namespace_count": len(individually_visible),
+        "grouped_namespace_count": len(grouped),
+        "top_namespace": top["label"] if top else "N/A",
+        "top_value_text": top["value_text"] if top else formatter(0),
+        "top_share": top_share,
+        "concentration": concentration,
+        "slice_threshold_percent": NAMESPACE_SLICE_THRESHOLD_PERCENT,
+        "max_namespace_slices": MAX_NAMESPACE_SLICES,
+    }
+
+
+def pie_slice_path(start_percent: float, end_percent: float) -> str:
+    """Return a deterministic SVG wedge path for a percentage interval."""
+    center = 100.0
+    radius = 94.0
+    span = max(0.0, end_percent - start_percent)
+    if span >= 99.999:
+        return (
+            "M 100 6 A 94 94 0 1 1 99.999 6 "
+            "A 94 94 0 1 1 100 6 Z"
+        )
+    start_angle = math.radians(start_percent * 3.6 - 90)
+    end_angle = math.radians(end_percent * 3.6 - 90)
+    start_x = center + radius * math.cos(start_angle)
+    start_y = center + radius * math.sin(start_angle)
+    end_x = center + radius * math.cos(end_angle)
+    end_y = center + radius * math.sin(end_angle)
+    large_arc = 1 if span > 50 else 0
+    return (
+        f"M 100 100 L {start_x:.3f} {start_y:.3f} "
+        f"A 94 94 0 {large_arc} 1 {end_x:.3f} {end_y:.3f} Z"
+    )
+
+
 def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
     """Build executive-only data from the existing cached snapshot."""
     namespaces = data["resources"]["namespaces"]
@@ -336,6 +453,14 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
         total(platform, "memory_request"), total(applications, "memory_request"),
         cluster["memory_capacity"], "memory",
     )
+    request_distributions = {
+        "cpu": namespace_request_distribution(
+            namespaces, "cpu", cluster["cpu_capacity"]
+        ),
+        "memory": namespace_request_distribution(
+            namespaces, "memory", cluster["memory_capacity"]
+        ),
+    }
 
     def ranking(resource: str, mode: str) -> list[dict[str, Any]]:
         key = f"{resource}_{mode}"
@@ -351,31 +476,6 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
             "value_text": formatter(item[key]),
             "capacity_percent": percentage(item[key], capacity),
         } for item in ranked if item[key] > 0]
-
-    cpu_total = max(cluster["cpu_request"], 1)
-    namespace_ranked = sorted(
-        namespaces,
-        key=lambda item: (-item["cpu_request"], item["namespace"]),
-    )
-    distribution = [{
-        "namespace": item["namespace"],
-        "value": item["cpu_request"],
-        "value_text": format_cpu(item["cpu_request"]),
-        "percent": round(item["cpu_request"] / cpu_total * 100, 2),
-    } for item in namespace_ranked[:EXECUTIVE_DISTRIBUTION_LIMIT] if item["cpu_request"] > 0]
-    top_value = sum(item["value"] for item in distribution)
-    if cluster["cpu_request"] > top_value:
-        other = cluster["cpu_request"] - top_value
-        distribution.append({
-            "namespace": "Diğer", "value": other,
-            "value_text": format_cpu(other),
-            "percent": round(other / cpu_total * 100, 2),
-        })
-    distribution_cursor = 0.0
-    for item in distribution:
-        item["start_percent"] = round(distribution_cursor, 2)
-        distribution_cursor += item["percent"]
-        item["end_percent"] = round(distribution_cursor, 2)
 
     restart_by_namespace = data["restarts"]["restart_by_namespace"]
     crashloop_by_namespace = data["restarts"]["crashloop_by_namespace"]
@@ -403,7 +503,7 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
     missing_count = data["resources"]["missing_resources"]["application"]["count"]
     kpis = [
         {"label": "Overall Health Score", "value": f'{health["score"]}/100', "risk": health["status"].lower(), "icon": "♥"},
-        {"label": "Cluster Capacity Usage", "value": f"%{capacity_pressure}", "risk": risk_level(capacity_pressure, 75, 90), "icon": "◫"},
+        {"label": "Cluster Request Allocation", "value": f"%{capacity_pressure}", "risk": risk_level(capacity_pressure, 75, 90), "icon": "◫"},
         {"label": "CPU Overcommit", "value": f"%{cpu_limit_percent}", "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "⚙"},
         {"label": "Memory Overcommit", "value": f"%{memory_limit_percent}", "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "▦"},
         {"label": "Problem Pods", "value": data["pods"]["problem_count"], "risk": risk_level(data["pods"]["problem_count"], 1, 10), "icon": "!"},
@@ -424,18 +524,38 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
     if missing_count:
         insights.append(f"{missing_count} eksik request/limit tanımı bulunuyor.")
         actions.append({"text": "Eksik resource tanımlarını Resources ekranından düzeltin.", "href": "/resources"})
+    for resource, label in (("cpu", "CPU"), ("memory", "Memory")):
+        distribution_item = request_distributions[resource]
+        if distribution_item["top_namespace"] != "N/A":
+            concentration_prefix = (
+                "Critical concentration: "
+                if distribution_item["concentration"] == "critical"
+                else "High concentration: "
+                if distribution_item["concentration"] == "warning"
+                else ""
+            )
+            insights.append(
+                f'{concentration_prefix}{distribution_item["top_namespace"]} tek başına cluster {label} '
+                f'capacity değerinin %{distribution_item["top_share"]} seviyesinde request tanımlıyor.'
+            )
+        category = cpu if resource == "cpu" else memory
+        insights.append(
+            f'Platform namespace’leri toplam {label} capacity değerinin '
+            f'%{category["platform_percent"]} seviyesinde request tanımlıyor; '
+            f'application namespace’leri %{category["applications_percent"]} seviyesinde.'
+        )
     if not insights:
         insights.append("Belirlenen executive risk eşiklerinde kritik bulgu yok.")
 
     return {
         "kpis": kpis, "cpu": cpu, "memory": memory,
+        "request_distributions": request_distributions,
         "rankings": {
             "cpu_request": ranking("cpu", "request"),
             "memory_request": ranking("memory", "request"),
             "cpu_limit": ranking("cpu", "limit"),
             "memory_limit": ranking("memory", "limit"),
         },
-        "namespace_distribution": distribution,
         "gauges": {
             "cpu": {"percent": cpu_limit_percent, "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},
             "memory": {"percent": memory_limit_percent, "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},

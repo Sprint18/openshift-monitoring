@@ -19,7 +19,9 @@ from app.main import (
     executive_dashboard,
     format_istanbul_time,
     health_score,
+    is_platform_namespace,
     missing_resources_page,
+    namespace_request_distribution,
     positive_env_seconds,
     prepare_dashboard_data,
     resource_severity,
@@ -787,7 +789,9 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
 
     assert response.status_code == 200
     assert "Executive Summary" in response.text
-    assert "Cluster CPU Request Distribution" in response.text
+    assert "Request Dağılımı (Namespace Bazında)" in response.text
+    assert "CPU Request" in response.text
+    assert "Memory Request" in response.text
     assert "Top 10 Namespace by CPU Requests" in response.text
     assert "Resource Hotspots" in response.text
     assert "Executive Insights" in response.text
@@ -798,6 +802,80 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     assert 'href="/workloads?cluster=kkbtest"' in response.text
     collector.get_workload_summary.assert_not_called()
     collector.get_pvc_summary.assert_not_called()
+    collector.collect_dashboard.assert_called_once()
+
+
+def request_namespace(name: str, cpu: int = 0, memory: int = 0) -> dict:
+    return {
+        "namespace": name,
+        "cpu_request": cpu,
+        "memory_request": memory,
+    }
+
+
+def test_namespace_distribution_groups_below_one_percent_and_keeps_exact_one() -> None:
+    result = namespace_request_distribution([
+        request_namespace("exact-one", cpu=100),
+        request_namespace("small-a", cpu=40),
+        request_namespace("small-b", cpu=50),
+    ], "cpu", 10_000)
+
+    assert result["slices"][0]["label"] == "exact-one"
+    others = next(item for item in result["slices"] if item["kind"] == "others")
+    assert others["value"] == 90
+    assert others["grouped_count"] == 2
+    assert result["unused"] == 9_810
+
+
+def test_namespace_distribution_caps_named_slices_and_sums_others() -> None:
+    namespaces = [
+        request_namespace(f"ns-{index:02}", cpu=200 - index)
+        for index in range(15)
+    ]
+    result = namespace_request_distribution(namespaces, "cpu", 10_000)
+    named = [item for item in result["slices"] if item["kind"] == "namespace"]
+    others = next(item for item in result["slices"] if item["kind"] == "others")
+
+    assert len(named) == 10
+    assert len(result["slices"]) <= 12
+    assert others["grouped_count"] == 5
+    assert others["value"] == sum(200 - index for index in range(10, 15))
+
+
+def test_namespace_distribution_over_capacity_has_zero_unused() -> None:
+    result = namespace_request_distribution([
+        request_namespace("large", cpu=12_000),
+        request_namespace("second", cpu=3_000),
+    ], "cpu", 10_000)
+
+    assert result["total_requests"] == 15_000
+    assert result["request_ratio"] == 150
+    assert result["unused"] == 0
+    assert result["over_capacity"] is True
+    assert not any(item["kind"] == "unused" for item in result["slices"])
+
+
+def test_cpu_and_memory_distributions_use_capacity_based_shares() -> None:
+    namespaces = [request_namespace("app", cpu=2_000, memory=20 * 1024**3)]
+    cpu = namespace_request_distribution(namespaces, "cpu", 10_000)
+    memory = namespace_request_distribution(namespaces, "memory", 100 * 1024**3)
+
+    assert cpu["slices"][0]["capacity_percent"] == 20
+    assert memory["slices"][0]["capacity_percent"] == 20
+    assert cpu["concentration"] == "warning"
+    critical = namespace_request_distribution([
+        request_namespace("critical", cpu=3_000)
+    ], "cpu", 10_000)
+    assert critical["concentration"] == "critical"
+
+
+def test_platform_namespace_classifier_is_centralized() -> None:
+    assert is_platform_namespace("openshift-storage") is True
+    assert is_platform_namespace("kube-system") is True
+    assert is_platform_namespace("default") is True
+    assert is_platform_namespace("istio-system") is True
+    assert is_platform_namespace("dynatrace") is True
+    assert is_platform_namespace("sandbox-app") is False
 
 
 def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
@@ -830,11 +908,18 @@ def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
                     "missing_memory_limit": 0,
                 },
                 {
-                    "namespace": "sandbox-app", "cpu_request": 5_000,
+                    "namespace": "sandbox-app", "cpu_request": 4_000,
                     "cpu_limit": 14_000, "memory_request": 40 * gib,
                     "memory_limit": 90 * gib, "missing_cpu_request": 30,
                     "missing_cpu_limit": 30, "missing_memory_request": 30,
                     "missing_memory_limit": 30,
+                },
+                {
+                    "namespace": "dynatrace", "cpu_request": 1_000,
+                    "cpu_limit": 1_000, "memory_request": 0,
+                    "memory_limit": 0, "missing_cpu_request": 0,
+                    "missing_cpu_limit": 0, "missing_memory_request": 0,
+                    "missing_memory_limit": 0,
                 },
             ],
         },
@@ -842,8 +927,8 @@ def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
 
     executive = executive_dashboard(data)
 
-    assert executive["cpu"]["platform_percent"] == 30
-    assert executive["cpu"]["applications_percent"] == 50
+    assert executive["cpu"]["platform_percent"] == 40
+    assert executive["cpu"]["applications_percent"] == 40
     assert executive["cpu"]["unused_percent"] == 20
     assert executive["rankings"]["cpu_request"][0]["namespace"] == "sandbox-app"
     assert executive["gauges"]["cpu"]["risk"] == "critical"
@@ -938,6 +1023,15 @@ def test_rendered_executive_javascript_parses(
     )
     assert completed.returncode == 0, completed.stderr
     assert "executiveTrend:${dashboardData.cluster}" in response.text
+    assert 'data-request-toggle="cpu"' in response.text
+    assert 'data-request-toggle="memory"' in response.text
+    assert 'data-request-mode="cpu"' in response.text
+    assert 'data-request-mode="memory"' in response.text
+    assert "setRequestMode(\"cpu\")" in response.text
+    assert '[data-theme="dark"] .namespace-pie::after' in response.text
+    assert "/api/" not in inline.split("const requestToggleButtons", 1)[1].split(
+        "const trendRoot", 1
+    )[0]
 
 
 def missing_record(namespace: str, missing_count: int = 1) -> dict:
