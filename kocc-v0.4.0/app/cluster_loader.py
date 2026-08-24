@@ -63,7 +63,7 @@ def new_cluster_client(cluster_key: str) -> client.ApiClient:
             return client.ApiClient()
         except Exception as exc:
             raise ClusterConfigurationError(
-                f"{definition.name} için in-cluster configuration yüklenemedi: {exc}"
+                f"{definition.name} için in-cluster configuration yüklenemedi."
             ) from exc
 
     if definition.connection_type == "kubeconfig":
@@ -85,7 +85,7 @@ def new_cluster_client(cluster_key: str) -> client.ApiClient:
             )
         except Exception as exc:
             raise ClusterConfigurationError(
-                f"{definition.name} kubeconfig yüklenemedi: {exc}"
+                f"{definition.name} kubeconfig yüklenemedi."
             ) from exc
 
     raise ClusterConfigurationError(

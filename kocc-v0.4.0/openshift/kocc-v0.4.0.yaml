@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -20,10 +21,24 @@ rules:
       - nodes
       - namespaces
       - pods
+      - persistentvolumeclaims
     verbs:
       - get
       - list
       - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods/log
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - get
+      - list
   - apiGroups:
       - config.openshift.io
     resources:
@@ -32,6 +47,36 @@ rules:
       - get
       - list
       - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - clusteroperators
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - k8s.ovn.org
+    resources:
+      - egressips
+    verbs:
+      - get
+      - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -43,7 +88,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: kocc
-    namespace: kocc
+    namespace: ocp-monitoring-portal-test
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -53,6 +98,7 @@ apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 ---
@@ -60,6 +106,7 @@ apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -76,12 +123,17 @@ spec:
     to:
       kind: ImageStreamTag
       name: kocc:0.4.0
+      namespace: ocp-monitoring-portal-test
   triggers: []
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
+  annotations:
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"kocc:0.4.0","namespace":"ocp-monitoring-portal-test"},"fieldPath":"spec.template.spec.containers[?(@.name==\"kocc\")].image","paused":false}]
   labels:
     app.kubernetes.io/name: kocc
     app.kubernetes.io/version: "0.4.0"
@@ -95,11 +147,13 @@ spec:
       labels:
         app.kubernetes.io/name: kocc
         app.kubernetes.io/version: "0.4.0"
+      annotations:
+        dynatrace.com/inject: "false"
     spec:
       serviceAccountName: kocc
       containers:
         - name: kocc
-          image: image-registry.openshift-image-registry.svc:5000/kocc/kocc:0.4.0
+          image: image-registry.openshift-image-registry.svc:5000/ocp-monitoring-portal-test/kocc:0.4.0
           imagePullPolicy: Always
           ports:
             - name: http
@@ -107,7 +161,7 @@ spec:
               protocol: TCP
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -139,12 +193,13 @@ spec:
             items:
               - key: rmtest.kubeconfig
                 path: rmtest.kubeconfig
-            defaultMode: 0400
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 spec:
@@ -160,6 +215,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: kocc
+  namespace: ocp-monitoring-portal-test
   labels:
     app.kubernetes.io/name: kocc
 spec:

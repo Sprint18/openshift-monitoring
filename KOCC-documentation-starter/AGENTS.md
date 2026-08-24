@@ -1,6 +1,8 @@
 # KOCC Agent Instructions
 
-Project: KKB OpenShift Control Center (KOCC)
+Project: OpenShift Clusters Monitoring Platform
+
+Technical resource identifier: KOCC
 
 Repository: Sprint18/openshift-monitoring
 

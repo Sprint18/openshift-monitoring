@@ -1,4 +1,4 @@
-# KOCC
+# OpenShift Clusters Monitoring Platform
 
 Current release: v0.4.0
 

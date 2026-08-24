@@ -6,8 +6,19 @@
         name="viewport"
         content="width=device-width, initial-scale=1"
     >
-    <title>KOCC - KKB OpenShift Control Center</title>
+    <title>OpenShift Clusters Monitoring Platform</title>
+    <link
+        rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23c9190b'/%3E%3Ctext x='32' y='42' text-anchor='middle' font-size='30' fill='white'%3EO%3C/text%3E%3C/svg%3E"
+    >
     <style>
+        :root {
+            --kkb-navy: #132b4f;
+            --kkb-blue: #1d4f7a;
+            --kkb-orange: #f58220;
+            --kkb-orange-soft: #fff3e8;
+            --surface-border: #d8dee6;
+        }
         * { box-sizing: border-box; }
         body {
             margin: 0;
@@ -16,9 +27,10 @@
             font-family: Arial, Helvetica, sans-serif;
         }
         header {
-            background: #151515;
+            background: var(--kkb-navy);
             color: white;
             padding: 18px 32px;
+            border-bottom: 4px solid var(--kkb-orange);
         }
         .header-row {
             display: flex;
@@ -28,6 +40,19 @@
             flex-wrap: wrap;
         }
         header h1 { margin: 0; font-size: 24px; }
+        .brand-block {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+        .brand-logo {
+            width: 62px;
+            height: 58px;
+            padding: 4px;
+            border-radius: 6px;
+            background: white;
+            object-fit: contain;
+        }
         .subtitle { margin-top: 5px; color: #d2d2d2; }
         .cluster-form {
             display: flex;
@@ -42,6 +67,26 @@
             border-radius: 4px;
             background: white;
             font-size: 14px;
+        }
+        .primary-nav {
+            display: flex;
+            gap: 4px;
+            padding: 0 32px;
+            overflow-x: auto;
+            background: #0d213d;
+        }
+        .primary-nav a {
+            padding: 11px 14px;
+            border-bottom: 3px solid transparent;
+            color: #dbe5ef;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .primary-nav a:hover,
+        .primary-nav a.active {
+            border-bottom-color: var(--kkb-orange);
+            color: white;
+            background: rgba(255,255,255,.06);
         }
         main { padding: 24px 32px 48px; }
         .selected {
@@ -64,8 +109,11 @@
             margin-bottom: 20px;
         }
         .card {
+            position: relative;
             background: white;
-            border-radius: 6px;
+            border: 1px solid var(--surface-border);
+            border-top: 3px solid var(--kkb-orange);
+            border-radius: 8px;
             padding: 18px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
         }
@@ -74,6 +122,48 @@
             color: #6a6e73;
             font-size: 14px;
         }
+        .interactive-card { cursor: pointer; }
+        .interactive-card h3::after {
+            content: " ⓘ";
+            color: #6a6e73;
+            font-weight: normal;
+        }
+        .interactive-card:focus {
+            outline: 3px solid #73bcf7;
+            outline-offset: 2px;
+        }
+        .popover {
+            display: none;
+            position: absolute;
+            top: calc(100% - 8px);
+            left: 12px;
+            z-index: 20;
+            width: min(480px, calc(100vw - 80px));
+            max-height: 320px;
+            overflow: auto;
+            padding: 14px;
+            border: 1px solid #8a8d90;
+            border-radius: 6px;
+            background: white;
+            color: #151515;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+            cursor: default;
+        }
+        .interactive-card.is-open .popover { display: block; }
+        .popover ul { margin: 0; padding-left: 20px; }
+        .popover li { margin: 0 0 8px; }
+        .popover-title {
+            position: sticky;
+            top: -14px;
+            z-index: 1;
+            margin: -14px -14px 10px;
+            padding: 12px 14px;
+            background: white;
+            border-bottom: 1px solid #d2d2d2;
+            font-weight: bold;
+        }
+        .popover li,
+        .popover p { overflow-wrap: anywhere; }
         .value { font-size: 27px; font-weight: bold; }
         .subvalue {
             margin-top: 7px;
@@ -94,8 +184,20 @@
             width: 100%;
             overflow-x: auto;
             background: white;
-            border-radius: 6px;
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
             box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+        }
+        .namespace-table-wrapper {
+            max-height: 70vh;
+            overflow: auto;
+        }
+        .namespace-table-wrapper thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #f0f0f0;
+            box-shadow: inset 0 -1px 0 #8a8d90;
         }
         table {
             width: 100%;
@@ -108,7 +210,92 @@
             text-align: left;
             font-size: 14px;
         }
-        th { background: #f0f0f0; }
+        th {
+            border-right: 1px solid #e5e8ec;
+            background: #eef2f6;
+        }
+        tbody tr:nth-child(even) > td { background-color: #fafbfc; }
+        tbody tr:hover > td { background-color: var(--kkb-orange-soft); }
+        td.numeric, th.numeric { text-align: right; }
+        td.wrap-cell {
+            max-width: 320px;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+        .table-toolbar {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 16px;
+            margin: 0 0 12px;
+            flex-wrap: wrap;
+        }
+        .field-group {
+            display: grid;
+            gap: 6px;
+        }
+        .field-group label { font-weight: bold; }
+        .field-group input,
+        .field-group select {
+            min-width: 220px;
+            padding: 9px 12px;
+            border: 1px solid #8a8d90;
+            border-radius: 4px;
+            background: white;
+            font-size: 14px;
+        }
+        .ranking-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 16px;
+        }
+        .ranking-grid h3 { margin: 0 0 10px; }
+        .sort-button {
+            padding: 0;
+            border: 0;
+            color: inherit;
+            background: transparent;
+            font: inherit;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .sort-button::after { content: " ↕"; color: #6a6e73; }
+        .sort-button[data-direction="asc"]::after {
+            content: " ↑";
+            color: var(--kkb-orange);
+        }
+        .sort-button[data-direction="desc"]::after {
+            content: " ↓";
+            color: var(--kkb-orange);
+        }
+        .severity-badge {
+            display: inline-block;
+            margin: 3px 4px 0 0;
+            padding: 3px 7px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .severity-warning {
+            color: #5f4700;
+            background: #fff4cc;
+        }
+        .severity-high {
+            color: #7d3a00;
+            background: #fce3c3;
+        }
+        .severity-critical {
+            color: #7d1007;
+            background: #faeae8;
+        }
+        tr.row-warning > td { background: #fffdf4; }
+        tr.row-high > td { background: #fff7ed; }
+        tr.row-critical > td { background: #fdf1f0; }
+        .empty-message {
+            padding: 20px;
+            color: #6a6e73;
+            text-align: center;
+        }
         .status, .role {
             display: inline-block;
             padding: 4px 9px;
@@ -142,49 +329,389 @@
             height: 100%;
             background: #0066cc;
         }
+        .progress.request > span { background: #0066cc; }
+        .progress.limit > span { background: #8a8d90; }
+        .progress.overcommitted > span { background: #c9190b; }
+        .resource-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .resource-overview .card { display: grid; gap: 10px; }
+        .executive-kpis {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(150px, 1fr));
+            gap: 14px;
+            margin: 18px 0 24px;
+        }
+        .executive-kpi {
+            border-radius: 14px;
+            padding: 18px;
+            color: #fff;
+            box-shadow: 0 8px 24px rgba(17, 42, 77, 0.13);
+            min-height: 116px;
+        }
+        .executive-kpi.healthy { background: linear-gradient(135deg, #16835b, #20a874); }
+        .executive-kpi.warning { background: linear-gradient(135deg, #dc7b17, #f39a32); }
+        .executive-kpi.critical { background: linear-gradient(135deg, #bd3038, #e14b53); }
+        .executive-kpi .kpi-icon { font-size: 20px; opacity: .85; }
+        .executive-kpi .kpi-value { font-size: 30px; font-weight: 800; margin: 10px 0 4px; }
+        .executive-kpi .kpi-label { font-size: 12px; line-height: 1.35; opacity: .92; }
+        .kpi-info { float: right; font-size: 13px; opacity: .8; }
+        .executive-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 18px 0; }
+        .executive-panel { background: white; border: 1px solid var(--surface-border); border-radius: 14px; padding: 20px; box-shadow: 0 6px 20px rgba(17, 42, 77, .07); }
+        .executive-panel h2, .executive-panel h3 { margin-top: 0; }
+        .chart-row { display: flex; align-items: center; gap: 28px; min-height: 230px; }
+        .pie-chart, .donut-chart, .gauge-chart {
+            width: 190px; height: 190px; border-radius: 50%; flex: 0 0 auto;
+            position: relative;
+        }
+        .donut-chart::after, .gauge-chart::after {
+            content: ""; position: absolute; inset: 35px; border-radius: 50%; background: white;
+        }
+        .chart-legend { display: grid; gap: 11px; flex: 1; }
+        .legend-row { display: grid; grid-template-columns: 12px 1fr auto; gap: 9px; align-items: center; font-size: 13px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+        .bar-chart { display: grid; gap: 12px; }
+        .bar-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) 3fr auto; gap: 10px; align-items: center; font-size: 12px; }
+        .bar-track, .allocation-track { height: 16px; background: #e8edf3; border-radius: 999px; overflow: hidden; }
+        .bar-fill { height: 100%; min-width: 2px; background: linear-gradient(90deg, #ef7d00, #f5ae58); border-radius: inherit; }
+        .allocation { margin: 14px 0 20px; }
+        .allocation-track { height: 24px; display: flex; margin: 8px 0; }
+        .allocation-platform { background: #183b63; }
+        .allocation-applications { background: #ef7d00; }
+        .allocation-unused { background: #cfd7e2; }
+        .allocation-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; }
+        .gauge-wrap { display: flex; justify-content: space-around; gap: 25px; text-align: center; }
+        .gauge-chart { width: 170px; height: 170px; }
+        .gauge-value { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; font-size: 25px; font-weight: 800; }
+        .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .ranking-toggle { display: inline-flex; border: 1px solid var(--surface-border); border-radius: 8px; overflow: hidden; }
+        .ranking-toggle button { border: 0; padding: 7px 10px; background: #eef2f6; color: var(--kkb-navy); cursor: pointer; font-weight: 700; }
+        .ranking-toggle button.is-active { color: white; background: var(--kkb-navy); }
+        .platform-overview-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+        .overview-mini-card { border: 1px solid var(--surface-border); border-radius: 10px; padding: 14px; background: #fafbfd; }
+        .overview-mini-card h3 { color: var(--kkb-navy); margin-bottom: 10px; }
+        .overview-mini-card dl { margin: 0; display: grid; gap: 7px; }
+        .overview-mini-card dl div { display: flex; justify-content: space-between; gap: 8px; }
+        .overview-mini-card dt { color: #6a6e73; font-size: 12px; }
+        .overview-mini-card dd { margin: 0; font-weight: 700; text-align: right; }
+        .control-list { display: grid; gap: 0; }
+        .control-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--surface-border); }
+        .status-pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+        .status-pill.healthy { color: #075f40; background: #d5f2e5; }
+        .status-pill.warning, .status-pill.high { color: #874400; background: #fff0d5; }
+        .status-pill.critical, .status-pill.unavailable { color: #8b1620; background: #fde4e6; }
+        .status-pill.unassigned { color: #8b1620; background: #fde4e6; }
+        .egress-unassigned { background: #fff1df !important; }
+        .risk-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+        .risk-card { text-align: center; padding: 18px; border: 1px solid var(--surface-border); border-radius: 10px; }
+        .risk-value { font-size: 30px; font-weight: 800; margin: 10px 0; }
+        .risk-scale { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; height: 9px; overflow: hidden; border-radius: 999px; margin: 12px 0; }
+        .risk-scale span:nth-child(1) { background:#20a874 }.risk-scale span:nth-child(2) { background:#e7aa22 }.risk-scale span:nth-child(3) { background:#ef7d00 }.risk-scale span:nth-child(4) { background:#d93644 }
+        .hotspot-list { display: grid; gap: 9px; }
+        .hotspot-row { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 12px; padding: 11px; border-radius: 9px; background: #f3f6f9; color: inherit; text-decoration: none; }
+        .hotspot-row:hover { outline: 2px solid rgba(239,125,0,.35); }
+        .insight-panel { border-left: 5px solid #ef7d00; }
+        .insight-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+        .sparkline-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .sparkline { width: 100%; height: 76px; overflow: visible; }
+        .sparkline polyline { fill: none; stroke: #ef7d00; stroke-width: 3; vector-effect: non-scaling-stroke; }
+        .sparkline-card strong { font-size: 22px; }
+        .namespace-hero { margin: 18px 0 24px; padding: 24px; }
+        .hero-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+        .hero-heading h2 { margin-bottom: 5px; }
+        .hero-heading p, .chart-note { margin: 0; color: #6a6e73; font-size: 12px; }
+        .request-toggle { display: inline-flex; padding: 3px; border: 1px solid var(--surface-border); border-radius: 9px; background: #eef2f6; }
+        .request-toggle-button { border: 0; border-radius: 7px; padding: 9px 15px; background: transparent; color: var(--kkb-navy); font-weight: 700; cursor: pointer; }
+        .request-toggle-button.is-active { background: var(--kkb-navy); color: white; box-shadow: 0 2px 8px rgba(19,43,79,.2); }
+        .namespace-chart-layout { display: grid; grid-template-columns: minmax(360px, .9fr) minmax(500px, 1.3fr); gap: 34px; align-items: center; min-height: 430px; }
+        .namespace-pie { width: min(390px, 90%); aspect-ratio: 1; border-radius: 50%; margin: auto; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,.05), 0 10px 28px rgba(17,42,77,.12); }
+        .namespace-pie svg { display: block; width: 100%; height: 100%; filter: drop-shadow(0 2px 2px rgba(0,0,0,.08)); }
+        .namespace-pie path { stroke: white; stroke-width: .8; transition: opacity .15s, transform .15s; transform-origin: center; }
+        .namespace-pie path:hover, .namespace-pie path:focus { opacity: .8; outline: none; transform: scale(1.015); }
+        .namespace-pie::after { content: ""; position: absolute; inset: 33%; border-radius: 50%; background: white; }
+        .namespace-pie > span { position: absolute; inset: 33%; z-index: 1; display: grid; place-content: center; text-align: center; font-size: 23px; font-weight: 800; }
+        .namespace-pie > span small { display: block; margin-top: 5px; font-size: 11px; font-weight: 400; color: #6a6e73; }
+        .namespace-legend-wrap { min-width: 0; }
+        .namespace-legend-table { width: 100%; }
+        .namespace-legend-table th { position: static; }
+        .namespace-legend-table td:first-child { display: flex; align-items: center; gap: 8px; }
+        .namespace-legend-table td small { display: block; color: #6a6e73; }
+        .chart-warning { padding: 9px 12px; border-radius: 7px; color: #8a3b00; background: #fff1df; font-weight: 700; font-size: 12px; }
+        .executive-summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+        .executive-summary-cards article, .platform-summary { border: 1px solid var(--surface-border); border-radius: 10px; padding: 16px; background: #fafbfd; }
+        .executive-summary-cards h3, .platform-summary h3 { margin: 0 0 12px; color: var(--kkb-navy); }
+        .executive-summary-cards dl { margin: 0; display: grid; gap: 8px; }
+        .executive-summary-cards dl div { display: flex; justify-content: space-between; gap: 12px; }
+        .executive-summary-cards dt { color: #6a6e73; font-size: 12px; }
+        .executive-summary-cards dd { margin: 0; font-weight: 700; text-align: right; }
+        .concentration-badge { display: inline-block; margin-top: 10px; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+        .concentration-badge.warning { color: #8a3b00; background: #fff1df; }
+        .concentration-badge.critical { color: #8b1620; background: #fde4e6; }
+        .platform-summary { margin-top: 14px; }
+        @media (max-width: 1500px) {
+            .executive-kpis { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+            .platform-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (max-width: 1000px) {
+            .executive-grid { grid-template-columns: 1fr; }
+            .executive-kpis { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+            .namespace-chart-layout { grid-template-columns: 1fr; }
+            .executive-summary-cards { grid-template-columns: 1fr; }
+            .platform-overview-grid, .risk-grid { grid-template-columns: 1fr; }
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .overcommit-badge {
+            display: inline-block;
+            padding: 3px 7px;
+            border-radius: 10px;
+            color: #7d1007;
+            background: #faeae8;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .health-Healthy { color: #3e8635; }
+        .health-Warning { color: #f0ab00; }
+        .health-Critical { color: #c9190b; }
+        .collection-normal { color: #3e8635; }
+        .collection-warning { color: #8a6d00; }
+        .collection-slow { color: #c9190b; }
+        .action-button,
+        .namespace-link {
+            border: 0;
+            color: #0066cc;
+            background: transparent;
+            font: inherit;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        .action-button {
+            padding: 9px 12px;
+            border: 1px solid var(--kkb-blue);
+            border-radius: 4px;
+            text-decoration: none;
+        }
+        .action-button:disabled { opacity: .55; cursor: wait; }
+        .missing-badge {
+            display: inline-block;
+            min-width: 26px;
+            padding: 3px 6px;
+            border-radius: 10px;
+            color: #7d1007;
+            background: #faeae8;
+            font-size: 11px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .defined-mark { color: #3e8635; font-weight: bold; }
+        .pagination {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 12px;
+        }
+        .refresh-warning {
+            display: none;
+            color: #8a6d00;
+            font-size: 12px;
+        }
+        .refresh-warning.is-visible { display: block; }
+        .refresh-meta {
+            display: flex;
+            align-items: end;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .drilldown {
+            display: none;
+            margin: 12px 0 16px;
+            padding: 16px;
+            border-left: 5px solid #0066cc;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+        }
+        .drilldown.is-open { display: block; }
+        footer {
+            padding: 24px 8px 12px;
+            color: #999;
+            font-size: 11px;
+            text-align: center;
+            opacity: .75;
+        }
+        @media (max-width: 600px) {
+            main { padding: 18px 14px 40px; }
+            header { padding: 16px 14px; }
+            .ranking-grid { grid-template-columns: 1fr; }
+            .popover { width: calc(100vw - 56px); left: 0; }
+            .brand-logo { width: 50px; height: 48px; }
+            header h1 { font-size: 19px; }
+        }
         .resource-cell { min-width: 210px; }
         .resource-cell small {
             display: block;
             margin-top: 5px;
             color: #6a6e73;
         }
+        .theme-button { white-space: nowrap; }
+        .loading-inline::after {
+            content: "";
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-left: 8px;
+            border: 2px solid #b8bbbe;
+            border-top-color: var(--kkb-orange);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .operational-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+            gap: 16px;
+        }
+        .page-grid { grid-template-columns: minmax(0, 1fr); }
+        .page-grid .panel { min-height: 360px; }
+        .page-grid .results-list { max-height: none; overflow: visible; }
+        .panel {
+            padding: 18px;
+            border: 1px solid var(--surface-border);
+            border-top: 3px solid var(--kkb-orange);
+            border-radius: 8px;
+            background: white;
+        }
+        .results-list { max-height: 360px; overflow: auto; }
+        .results-list a { color: var(--kkb-blue); overflow-wrap: anywhere; }
+        [data-theme="dark"] body { background: #0d1726; color: #eef2f6; }
+        [data-theme="dark"] .card,
+        [data-theme="dark"] .panel,
+        [data-theme="dark"] .table-wrapper,
+        [data-theme="dark"] .drilldown,
+        [data-theme="dark"] .popover { background: #17263a; color: #eef2f6; }
+        [data-theme="dark"] .executive-panel { background: #17263a; color: #eef2f6; border-color: #344b67; }
+        [data-theme="dark"] .overview-mini-card, [data-theme="dark"] .risk-card { background:#1e3047; border-color:#405775; }
+        [data-theme="dark"] .overview-mini-card h3 { color:#fff; }
+        [data-theme="dark"] .donut-chart::after,
+        [data-theme="dark"] .gauge-chart::after { background: #17263a; }
+        [data-theme="dark"] .hotspot-row { background: #20334b; color: #eef2f6; }
+        [data-theme="dark"] .bar-track,
+        [data-theme="dark"] .allocation-track { background: #263d59; }
+        [data-theme="dark"] .namespace-pie::after,
+        [data-theme="dark"] .executive-summary-cards article,
+        [data-theme="dark"] .platform-summary { background: #17263a; }
+        [data-theme="dark"] .executive-summary-cards article,
+        [data-theme="dark"] .platform-summary { border-color: #344b67; }
+        [data-theme="dark"] .executive-summary-cards h3,
+        [data-theme="dark"] .platform-summary h3,
+        [data-theme="dark"] .request-toggle-button { color: #eef2f6; }
+        [data-theme="dark"] .request-toggle { background: #20334b; border-color: #45617f; }
+        [data-theme="dark"] .request-toggle-button.is-active { background: var(--kkb-orange); color: #17263a; }
+        [data-theme="dark"] .hero-heading p,
+        [data-theme="dark"] .chart-note,
+        [data-theme="dark"] .namespace-pie > span small,
+        [data-theme="dark"] .executive-summary-cards dt { color: #b9c2cc; }
+        [data-theme="dark"] table th,
+        [data-theme="dark"] .namespace-table-wrapper thead th,
+        [data-theme="dark"] .popover-title { background: #20334b; color: #fff; }
+        [data-theme="dark"] table tbody tr:nth-child(even) { background: #132237; }
+        [data-theme="dark"] table tbody tr:hover { background: #263d59; }
+        [data-theme="dark"] .subvalue,
+        [data-theme="dark"] .selected,
+        [data-theme="dark"] footer { color: #b9c2cc; }
+        [data-theme="dark"] input,
+        [data-theme="dark"] select { background: #20334b; color: white; border-color: #718096; }
     </style>
 </head>
 <body>
 <header>
     <div class="header-row">
-        <div>
-            <h1>KKB OpenShift Control Center</h1>
-            <div class="subtitle">
-                Multi Cluster OpenShift Operasyon Platformu
+        <div class="brand-block">
+            <img
+                class="brand-logo"
+                src="/static/kkb-turuncu-lacivert-logo.png"
+                alt="KKB"
+            >
+            <div>
+                <h1>OpenShift Clusters Monitoring Platform</h1>
+                <div class="subtitle">
+                    Multi Cluster OpenShift Operations &amp; Monitoring Platform
+                </div>
             </div>
         </div>
-        <form class="cluster-form" method="get" action="/">
+        <form class="cluster-form" method="get" action="{{ request.url.path }}">
             <label for="cluster">Cluster</label>
             <select
                 id="cluster"
                 name="cluster"
                 onchange="this.form.submit()"
             >
-                {% for key, item in cluster_options.items() %}
+                {% for key, item in cluster_options|dictsort %}
                 <option
                     value="{{ key }}"
                     {% if key == selected_cluster %}selected{% endif %}
                 >
-                    {{ item.name }}
+                    {{ item["name"] }}
                 </option>
                 {% endfor %}
             </select>
+            <button type="button" id="theme-toggle" class="action-button theme-button">
+                Dark mode
+            </button>
         </form>
     </div>
 </header>
+{% include "_navigation.html" %}
 
 <main>
-    <p class="selected">
-        Görüntülenen cluster:
-        <strong>{{ selected_cluster_name }}</strong>
-        <span class="release">v{{ release }}</span>
-    </p>
+    <div class="table-toolbar">
+        <p class="selected">
+            Görüntülenen cluster:
+            <strong>{{ selected_cluster_name }}</strong>
+            <span class="release">v{{ release }}</span>
+        </p>
+        {% if not error %}
+        <div class="refresh-meta">
+            <div class="field-group">
+                <label for="refresh-interval">Auto Refresh</label>
+                <select id="refresh-interval">
+                    <option value="0">Manual</option>
+                    <option value="15">15 sec</option>
+                    <option value="30">30 sec</option>
+                    <option value="60">1 min</option>
+                    <option value="300">5 min</option>
+                </select>
+            </div>
+            <div>
+                Last Refresh: <strong>{{ data["collected_at"] }}</strong><br>
+                Collection Time:
+                <strong>{{ data["collection_duration_seconds"] }} sec</strong>
+                ·
+                <span class="collection-{{ data["collection_duration_severity"] }}">
+                    {% if data["collection_duration_severity"] == "slow" %}Slow
+                    {% elif data["collection_duration_severity"] == "warning" %}Warning
+                    {% else %}Normal{% endif %}
+                </span>
+                {% if data["cache"]["hit"] %}
+                <br>Data age: {{ data["cache"]["age_seconds"] }} sec
+                {% if "stale" in data["cache"] and data["cache"]["stale"] %}· <span class="warning">Stale snapshot</span>{% endif %}
+                {% endif %}
+                <div id="refresh-duration-warning" class="refresh-warning">
+                    Refresh interval is close to collection duration
+                </div>
+            </div>
+            <button type="button" id="manual-refresh" class="action-button">
+                Refresh
+            </button>
+            <span id="refresh-status" aria-live="polite"></span>
+        </div>
+        {% endif %}
+    </div>
 
     {% if error %}
     <div class="error">
@@ -193,124 +720,446 @@
     </div>
     {% else %}
 
+    {% if page == "overview" %}
+    {% set executive = data["executive"] %}
+    <section aria-labelledby="executive-summary-title">
+        <h2 id="executive-summary-title">Executive Summary</h2>
+        <div class="executive-kpis">
+            {% for kpi in executive["kpis"] %}
+            <article class="executive-kpi {{ kpi['risk'] }}" title="{{ kpi['label'] }}: {{ kpi['value'] }}{% if kpi.get('detail') %} · {{ kpi['detail'] }}{% endif %}">
+                <span class="kpi-info" aria-hidden="true">ⓘ</span><div class="kpi-icon" aria-hidden="true">{{ kpi["icon"] }}</div>
+                <div class="kpi-value">{{ kpi["value"] }}</div>
+                <div class="kpi-label">{{ kpi["label"] }}</div>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="executive-panel namespace-hero">
+        <div class="hero-heading">
+            <div><h2>Request Dağılımı (Namespace Bazında)</h2><p>Cluster capacity referanslı tanımlı resource request dağılımı</p></div>
+            <div class="request-toggle" role="group" aria-label="Resource request türü">
+                <button type="button" class="request-toggle-button is-active" data-request-toggle="cpu">CPU Request</button>
+                <button type="button" class="request-toggle-button" data-request-toggle="memory">Memory Request</button>
+            </div>
+        </div>
+        {% set slice_colors = ['#183b63','#ef7d00','#249c98','#7756b6','#d54c70','#e7aa22','#4d8cc9','#76a83b','#9a5b3f','#65758b','#b9c4d0','#d8dee6'] %}
+        {% for resource in ["cpu", "memory"] %}
+        {% set chart = executive["request_distributions"][resource] %}
+        {% set allocation = executive[resource] %}
+        <div data-request-mode="{{ resource }}" {% if resource == "memory" %}hidden{% endif %}>
+            <div class="namespace-chart-layout">
+                <div class="namespace-pie" role="img" aria-label="{{ resource|upper }} request namespace dağılımı"><svg viewBox="0 0 200 200" aria-hidden="true">{% for item in chart["slices"] %}<path d="{{ item['svg_path'] }}" fill="{{ slice_colors[loop.index0] }}" tabindex="0"><title>{{ item["label"] }} · {{ item["value_text"] }} · cluster {{ resource|upper }} capacity değerinin %{{ item["capacity_percent"] }}{% if item["grouped_count"] %} · {{ item["grouped_count"] }} namespace{% endif %}</title></path>{% endfor %}</svg><span>{{ chart["capacity_text"] }}<small>Cluster Capacity</small></span></div>
+                <div class="namespace-legend-wrap">
+                    <table class="namespace-legend-table">
+                        <thead><tr><th>Namespace</th><th>{{ resource|upper }} Request</th><th>Capacity %</th></tr></thead>
+                        <tbody>
+                            {% for item in chart["slices"] %}
+                            <tr title="{{ item['label'] }} · {{ item['value_text'] }} · cluster {{ resource|upper }} capacity değerinin %{{ item['capacity_percent'] }}{% if item['grouped_count'] %} · {{ item['grouped_count'] }} namespace{% endif %}">
+                                <td><span class="legend-dot" style="background: {{ slice_colors[loop.index0] }}"></span>{{ item["label"] }}{% if item["grouped_count"] %}<small>{{ item["grouped_count"] }} namespace</small>{% endif %}</td>
+                                <td>{{ item["value_text"] }}</td><td><strong>%{{ item["capacity_percent"] }}</strong></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% if chart["over_capacity"] %}<p class="chart-warning">Requests capacity değerini aşıyor; Unused Capacity 0 kabul edilmiştir.</p>{% endif %}
+                    <p class="chart-note">Not: Capacity'nin %{{ chart["slice_threshold_percent"] }} değerinden az request tanımlayan veya ilk {{ chart["max_namespace_slices"] }} dilim dışında kalan namespace'ler “Diğerleri” altında toplanır.</p>
+                </div>
+            </div>
+            <div class="executive-summary-cards">
+                <article><h3>Capacity Summary</h3><dl><div><dt>Total Capacity</dt><dd>{{ chart["capacity_text"] }}</dd></div><div><dt>Total Requests</dt><dd>{{ chart["total_requests_text"] }}</dd></div><div><dt>Request Ratio</dt><dd>%{{ chart["request_ratio"] }}</dd></div><div><dt>Unused</dt><dd>{{ chart["unused_text"] }}</dd></div></dl></article>
+                <article><h3>Namespace Summary</h3><dl><div><dt>Total Namespaces</dt><dd>{{ chart["total_namespaces"] }}</dd></div><div><dt>Namespaces ≥ %{{ chart["slice_threshold_percent"] }}</dt><dd>{{ chart["threshold_namespace_count"] }}</dd></div><div><dt>Displayed Namespace Slices</dt><dd>{{ chart["visible_namespace_count"] }}</dd></div><div><dt>Grouped under Others</dt><dd>{{ chart["grouped_namespace_count"] }}</dd></div></dl></article>
+                <article><h3>Risk Summary</h3><dl><div><dt>Top Namespace</dt><dd>{{ chart["top_namespace"] }}</dd></div><div><dt>Request</dt><dd>{{ chart["top_value_text"] }}</dd></div><div><dt>Share</dt><dd>%{{ chart["top_share"] }}</dd></div></dl>{% if chart["concentration"] != "healthy" %}<span class="concentration-badge {{ chart['concentration'] }}">{{ "Critical" if chart["concentration"] == "critical" else "High" }} concentration</span>{% endif %}</article>
+            </div>
+            <article class="platform-summary"><h3>KKB Applications vs Platform/Other</h3><div class="allocation-track" title="Platform/Other %{{ allocation['platform_percent'] }} · KKB Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}"><span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span><span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span><span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span></div><div class="allocation-legend"><span>Platform / Other <strong>%{{ allocation["platform_percent"] }}</strong></span><span>KKB Applications <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused Capacity <strong>%{{ allocation["unused_percent"] }}</strong></span></div></article>
+        </div>
+        {% endfor %}
+    </section>
+
+    <div class="executive-grid">
+        {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
+        <section class="executive-panel ranking-panel" data-ranking-key="{{ key }}">
+            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All</button><button type="button" data-ranking-mode="kkb_apps" title="sandbox- / uat- / test- / beta- / prod-">KKB Apps</button></div></div>
+            <div class="bar-chart" data-ranking-output></div>
+        </section>
+        {% endfor %}
+    </div>
+
+    <div class="executive-grid">
+        <section class="executive-panel">
+            <h2>Capacity Risk</h2>
+            <div class="risk-grid">
+                {% for resource, label in [("cpu", "CPU Overcommit"), ("memory", "Memory Overcommit")] %}
+                {% set gauge = executive["gauges"][resource] %}
+                <article class="risk-card" title="{{ gauge['explanation'] }}"><strong>{{ label }}</strong><div class="risk-value">%{{ gauge["percent"] }}</div><span class="status-pill {{ gauge['risk'] }}">{{ gauge["risk"]|capitalize }}</span><div class="risk-scale" aria-hidden="true"><span></span><span></span><span></span><span></span></div><p>{{ gauge["explanation"] }}</p></article>
+                {% endfor %}
+            </div>
+            <p class="chart-note">Status: &lt;100 Healthy · 100–150 Warning · 150–250 High · ≥250 Critical</p>
+        </section>
+    </div>
+
+    <div class="executive-grid">
+        <section class="executive-panel">
+            <h2>Resource Hotspots</h2>
+            <div class="hotspot-list">
+                {% for item in executive["hotspots"] %}
+                <a class="hotspot-row" href="{{ item['href'] }}?cluster={{ selected_cluster }}{% if item['href'] == '/resources' %}&missing_q={{ item['namespace']|urlencode }}{% endif %}"><span>{{ item["label"] }}</span><strong>{{ item["namespace"] }}</strong><span>{{ item["value"] }}</span></a>
+                {% endfor %}
+            </div>
+        </section>
+        <section class="executive-panel">
+            <h2>30 Refresh Trend</h2>
+            <div class="sparkline-grid" id="executive-trends" data-cluster="{{ selected_cluster }}" data-cpu="{{ executive['trend']['cpu'] }}" data-memory="{{ executive['trend']['memory'] }}" data-health="{{ executive['trend']['health'] }}">
+                {% for key, label in [("cpu", "CPU Request %"), ("memory", "Memory Request %"), ("health", "Health Score")] %}
+                <div class="sparkline-card"><span>{{ label }}</span><br><strong>{{ executive["trend"][key] }}{% if key != "health" %}%{% endif %}</strong><svg class="sparkline" viewBox="0 0 300 76" preserveAspectRatio="none" data-sparkline="{{ key }}" aria-label="{{ label }} son 30 refresh trendi"><polyline points=""></polyline></svg></div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+
+    <section class="executive-panel insight-panel">
+        <h2>Executive Insights</h2>
+        <div class="insight-columns">
+            <div><h3>Health Score'u etkileyen bulgular</h3><ul>{% for insight in executive["insights"] %}<li>{{ insight }}</li>{% endfor %}</ul></div>
+            <div><h3>Önerilen aksiyonlar</h3><ul>{% for action in executive["actions"] %}<li><a href="{{ action['href'] }}?cluster={{ selected_cluster }}">{{ action["text"] }}</a></li>{% else %}<li>Acil aksiyon önerisi yok.</li>{% endfor %}</ul></div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if page == "platform" %}
+    {% set controls = data.get("platform_controls", []) %}
+    {% set control_map = {} %}{% for control in controls %}{% set _ = control_map.update({control["name"]: control}) %}{% endfor %}
+    {% set conjur = control_map.get("Conjur Pods", {"status":"Unavailable", "detail":"Data unavailable", "highest_restart":0}) %}
+    {% set operators = data["cluster_operators"] %}
+    {% set healthy_controls = controls|selectattr("status", "equalto", "Healthy")|list|length %}
+    <section class="executive-panel">
+        <h2>Platform Overview</h2>
+        <div class="executive-summary-cards">
+            <article><h3>Platform Health</h3><div id="platform-health-kpi" data-healthy="{{ healthy_controls + (1 if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 0) }}" data-total="{{ controls|length + 2 }}"><div class="kpi-value">{{ healthy_controls }}/{{ controls|length + 2 }} Healthy</div><span class="status-pill warning">Loading EgressIP…</span></div></article>
+            <article><h3>EgressIP Status</h3><div id="egress-kpi">Loading…</div></article>
+            <article><h3>Conjur Status</h3><div class="kpi-value">{{ conjur["detail"] }}</div><span class="status-pill {{ conjur['status']|lower }}">{{ conjur["status"] }}</span>{% if conjur["highest_restart"] %}<p>Highest restart: {{ conjur["highest_restart"] }}</p>{% endif %}<p><a href="/diagnostics?cluster={{ selected_cluster }}">Diagnostics →</a></p></article>
+        </div>
+        <div class="platform-overview-grid" style="margin-top:14px">
+            <article class="overview-mini-card"><h3>Nodes</h3><dl><div><dt>Total</dt><dd>{{ data["nodes"]["total"] }}</dd></div><div><dt>Ready</dt><dd>{{ data["nodes"]["ready"] }}</dd></div><div><dt>NotReady</dt><dd>{{ data["nodes"]["not_ready"] }}</dd></div></dl></article>
+            <article class="overview-mini-card"><h3>Cluster Operators</h3>{% if operators["available"] %}<dl><div><dt>Healthy</dt><dd>{{ operators["healthy"] }}</dd></div><div><dt>Degraded</dt><dd>{{ operators["degraded"] }}</dd></div><div><dt>Progressing</dt><dd>{{ operators["progressing"] }}</dd></div><div><dt>Unavailable</dt><dd>{{ operators["unavailable"] }}</dd></div></dl>{% else %}<p>Unavailable</p>{% endif %}</article>
+            {% for name in ["DNS (CoreDNS)", "Ingress Controller", "Image Registry", "Monitoring Stack"] %}{% set control = control_map.get(name, {"status":"Unavailable", "detail":"Data unavailable"}) %}<article class="overview-mini-card"><h3>{{ name }}</h3><p>{{ control["detail"] }}</p><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></article>{% endfor %}
+        </div>
+    </section>
+    <section class="executive-panel"><h2>Critical Controls</h2><div class="control-list" id="critical-controls">{% for control in controls %}<a class="control-row" href="{{ '/diagnostics' if control['name'] == 'Conjur Pods' else '/health-overview' }}?cluster={{ selected_cluster }}"><span>{{ control["name"] }}</span><span>{{ control["detail"] }}</span><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></a>{% endfor %}<a class="control-row" href="/health-overview?cluster={{ selected_cluster }}"><span>Cluster Operators</span><span>{{ operators["healthy"] if operators["available"] else "API unavailable" }}</span><span class="status-pill {{ 'healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'warning' }}">{{ 'Healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'Warning' }}</span></a><div class="control-row"><span>EgressIP</span><span id="egress-control-detail">Loading…</span><span id="egress-control-status" class="status-pill unavailable">Unavailable</span></div></div></section>
+    <section class="executive-panel" id="egressip-section"><h2>EgressIP</h2><div class="table-toolbar"><label>Search <input id="egress-search" type="search" placeholder="Name, IP, namespace, node, status"></label><span id="egress-result-info"></span></div><div id="egressip-results" class="loading-inline">Loading EgressIP data…</div><div class="pagination-controls"><button type="button" id="egress-prev">Previous</button><span id="egress-page-info">Page 1 / 1</span><button type="button" id="egress-next">Next</button></div></section>
+    <div class="executive-grid"><section class="executive-panel"><h2>Storage Overview</h2><div id="platform-storage" class="loading-inline">Loading storage data…</div><p><a href="/storage?cluster={{ selected_cluster }}">View Storage →</a></p></section><section class="executive-panel"><h2>Route Overview</h2><div id="platform-routes" class="loading-inline">Loading route data…</div><p><a href="/routes?cluster={{ selected_cluster }}">View Routes →</a></p></section></div>
+    {% endif %}
+
+    {% if page == "health" %}
     <div class="cards">
         <div class="card">
             <h3>OpenShift Version</h3>
-            <div class="value">{{ data.version }}</div>
+            <div class="value">{{ data["version"] }}</div>
         </div>
-        <div class="card">
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Node detaylarını göster">
             <h3>Node</h3>
-            <div class="value">{{ data.nodes.total }}</div>
+            <div class="value">{{ data["nodes"]["total"] }}</div>
             <div class="subvalue">
-                <span class="healthy">{{ data.nodes.ready }} Ready</span>
+                <span class="healthy">{{ data["nodes"]["ready"] }} Ready</span>
                 ·
-                <span class="{% if data.nodes.not_ready %}danger{% else %}healthy{% endif %}">
-                    {{ data.nodes.not_ready }} NotReady
+                <span class="{% if data["nodes"]["not_ready"] %}danger{% else %}healthy{% endif %}">
+                    {{ data["nodes"]["not_ready"] }} NotReady
                 </span>
             </div>
+            <div class="popover">
+                <p class="popover-title">Node Details</p>
+                <ul>
+                    {% for node in data["nodes"]["items"] %}
+                    <li class="{% if not node["ready"] %}danger{% endif %}">
+                        <strong>{{ node["name"] }}</strong> —
+                        {{ node["roles"]|join(", ") }} —
+                        {% if node["ready"] %}Ready{% else %}NotReady{% endif %} —
+                        CPU {{ node["cpu_capacity_text"] }} —
+                        Memory {{ node["memory_capacity_text"] }}
+                    </li>
+                    {% else %}<li>No node data</li>{% endfor %}
+                </ul>
+            </div>
         </div>
-        <div class="card">
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Problemli podları göster">
             <h3>Pod</h3>
-            <div class="value">{{ data.pods.total }}</div>
+            <div class="value">{{ data["pods"]["total"] }}</div>
             <div class="subvalue">
-                {{ data.pods.running }} Running ·
-                {{ data.pods.pending }} Pending ·
-                {{ data.pods.failed }} Failed
+                {{ data["pods"]["running"] }} Running ·
+                {{ data["pods"]["pending"] }} Pending ·
+                {{ data["pods"]["failed"] }} Failed
+            </div>
+            <div class="popover">
+                <p class="popover-title">Pods Not Ready</p>
+                {% if data["pods"]["problem_items"] %}
+                <ul>
+                    {% for pod in data["pods"]["problem_items"] %}
+                    <li>
+                        <strong>{{ pod["namespace"] }} / {{ pod["name"] }}</strong>
+                        — {{ pod["phase"] }} —
+                        {{ pod["ready_containers"] }}/{{ pod["total_containers"] }} Ready
+                        {% if pod["reason"] %}— {{ pod["reason"] }}{% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if data["pods"]["problem_more_count"] %}
+                <strong>+ {{ data["pods"]["problem_more_count"] }} more</strong>
+                {% endif %}
+                {% else %}<p>All pods are Ready</p>{% endif %}
             </div>
         </div>
         <div class="card">
             <h3>Namespace</h3>
-            <div class="value">{{ data.namespace_count }}</div>
+            <div class="value">{{ data["namespace_count"] }}</div>
+        </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Health score detaylarını göster">
+            <h3>Overall Health</h3>
+            <div class="value health-{{ data["health"]["status"] }}">
+                {{ data["health"]["score"] }}/100
+            </div>
+            <div class="subvalue">{{ data["health"]["status"] }}</div>
+            <div class="popover">
+                <p class="popover-title">Health Score Açıklaması</p>
+                <ul>
+                    <li>Hazır olmayan node etkisi: -{{ data["health"]["node_penalty"] }} puan</li>
+                    <li>Hazır olmayan pod etkisi: -{{ data["health"]["pod_penalty"] }} puan</li>
+                    <li>CPU requests: kapasitenin %{{ data["health"]["signals"]["cpu_request"] }} değeri</li>
+                    <li>CPU limits: kapasitenin %{{ data["health"]["signals"]["cpu_limit"] }} değeri</li>
+                    <li>Memory requests: kapasitenin %{{ data["health"]["signals"]["memory_request"] }} değeri</li>
+                    <li>Memory limits: kapasitenin %{{ data["health"]["signals"]["memory_limit"] }} değeri</li>
+                    <li>Resource baskısı etkisi: -{{ data["health"]["resource_penalty"] }} puan</li>
+                    <li>ClusterOperator etkisi: -{{ data["health"]["operator_penalty"] }} puan</li>
+                </ul>
+            </div>
         </div>
     </div>
+    {% endif %}
 
-    <h2>Cluster Resource Özeti</h2>
-    <div class="cards">
+    {% if page == "resources" %}
+    <h2>Resource Capacity / Overcommit</h2>
+    <div class="resource-overview">
+        {% for resource, label in [("cpu", "CPU"), ("memory", "Memory")] %}
         <div class="card">
-            <h3>CPU Allocatable</h3>
-            <div class="value">
-                {{ data.resources.cluster.cpu_allocatable_text }}
+            <h3>{{ label }}</h3>
+            <div class="metric-row"><span>Capacity</span><strong>{{ data["resources"]["cluster"][resource + "_capacity_text"] }}</strong></div>
+            <div class="metric-row"><span>Requests</span><strong>{{ data["resources"]["cluster"][resource + "_request_text"] }} — %{{ data["resources"]["cluster"][resource + "_request_percent"] }}</strong></div>
+            <div class="progress request"><span style="width: {{ [data["resources"]["cluster"][resource + "_request_percent"], 100]|min }}%"></span></div>
+            <div class="metric-row">
+                <span>Limits</span>
+                <strong>
+                    {{ data["resources"]["cluster"][resource + "_limit_text"] }} —
+                    %{{ data["resources"]["cluster"][resource + "_limit_percent"] }}
+                    {% if data["resources"]["cluster"][resource + "_overcommitted"] %}
+                    <span class="overcommit-badge">OVERCOMMITTED</span>
+                    {% endif %}
+                </strong>
             </div>
-            <div class="subvalue">
-                Capacity:
-                {{ data.resources.cluster.cpu_capacity_text }}
-            </div>
+            <div class="progress limit {% if data["resources"]["cluster"][resource + "_overcommitted"] %}overcommitted{% endif %}"><span style="width: {{ [data["resources"]["cluster"][resource + "_limit_percent"], 100]|min }}%"></span></div>
+            <div class="subvalue">Overcommit ratio: {{ data["resources"]["cluster"][resource + "_overcommit_ratio"] }}x</div>
         </div>
-        <div class="card">
-            <h3>CPU Request</h3>
-            <div class="value">
-                {{ data.resources.cluster.cpu_request_text }}
-            </div>
-            <div class="subvalue">
-                %{{ data.resources.cluster.cpu_request_percent }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>CPU Limit</h3>
-            <div class="value">
-                {{ data.resources.cluster.cpu_limit_text }}
-            </div>
-            <div class="subvalue">
-                %{{ data.resources.cluster.cpu_limit_percent }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Allocatable</h3>
-            <div class="value">
-                {{ data.resources.cluster.memory_allocatable_text }}
-            </div>
-            <div class="subvalue">
-                Capacity:
-                {{ data.resources.cluster.memory_capacity_text }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Request</h3>
-            <div class="value">
-                {{ data.resources.cluster.memory_request_text }}
-            </div>
-            <div class="subvalue">
-                %{{ data.resources.cluster.memory_request_percent }}
-            </div>
-        </div>
-        <div class="card">
-            <h3>Memory Limit</h3>
-            <div class="value">
-                {{ data.resources.cluster.memory_limit_text }}
-            </div>
-            <div class="subvalue">
-                %{{ data.resources.cluster.memory_limit_percent }}
-            </div>
-        </div>
+        {% endfor %}
         <div class="card">
             <h3>Disk Capacity</h3>
             <div class="value">
-                {{ data.resources.cluster.storage_capacity_text }}
+                {{ data["resources"]["cluster"]["storage_capacity_text"] }}
             </div>
             <div class="subvalue">
                 Allocatable:
-                {{ data.resources.cluster.storage_allocatable_text }}
+                {{ data["resources"]["cluster"]["storage_allocatable_text"] }}
             </div>
         </div>
     </div>
+    {% endif %}
 
+    {% if page == "health" %}
+    <h2>Operational Health</h2>
+    <div class="cards">
+        <div class="card">
+            <h3>Missing Requests / Limits</h3>
+            <div class="value" id="missing-resource-count">{{ data["resources"]["missing_resources"]["application"]["count"] }}</div>
+            <div class="subvalue" id="missing-resource-impact">
+                {{ data["resources"]["missing_resources"]["application"]["namespace_count"] }} namespace ·
+                {{ data["resources"]["missing_resources"]["application"]["container_count"] }} container
+            </div>
+        </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="ClusterOperator detaylarını göster">
+            <h3>Cluster Operators</h3>
+            {% if data["cluster_operators"]["available"] %}
+            <div class="value">{{ data["cluster_operators"]["healthy"] }} Healthy</div>
+            <div class="subvalue">{{ data["cluster_operators"]["degraded"] }} Degraded · {{ data["cluster_operators"]["progressing"] }} Progressing · {{ data["cluster_operators"]["unavailable"] }} Unavailable</div>
+            {% else %}
+            <div class="value warning" title="ClusterOperator API unavailable">Unavailable</div>
+            <div class="subvalue">ClusterOperator API unavailable</div>
+            {% endif %}
+            <div class="popover">
+                <p class="popover-title">ClusterOperator Health</p>
+                {% if data["cluster_operators"]["available"] %}<ul>
+                    {% for operator in data["cluster_operators"]["items"] %}
+                    <li><strong>{{ operator["name"] }}</strong> — Available {{ operator["available"] }} · Progressing {{ operator["progressing"] }} · Degraded {{ operator["degraded"] }}{% if operator["reason"] %} — {{ operator["reason"] }}{% endif %}{% if operator["message"] %}: {{ operator["message"] }}{% endif %}</li>
+                    {% endfor %}
+                </ul>{% else %}<p>ClusterOperator data unavailable</p>{% endif %}
+            </div>
+        </div>
+        <div class="card interactive-card" tabindex="0" role="button" aria-label="Restart detaylarını göster">
+            <h3>CrashLoopBackOff</h3>
+            <div class="value {% if data["restarts"]["crashloop_count"] %}danger{% endif %}">{{ data["restarts"]["crashloop_count"] }}</div>
+            <div class="subvalue">Top restarted pods</div>
+            <div class="popover">
+                <p class="popover-title">Pod Restarts</p>
+                {% if data["restarts"]["items"] %}<ul>
+                    {% for pod in data["restarts"]["items"] %}<li>{{ pod["namespace"] }} / {{ pod["name"] }} — {{ pod["restart_count"] }} restarts{% if pod["reason"] %} — {{ pod["reason"] }}{% endif %}</li>{% endfor %}
+                </ul>{% else %}<p>No pod restarts</p>{% endif %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if page == "resources" %}
+    <h2>Missing Requests / Limits</h2>
+    <form class="table-toolbar" method="get" action="/resources" id="missing-resource-form">
+        <input type="hidden" name="cluster" value="{{ selected_cluster }}">
+        <div class="field-group">
+            <label for="missing-resource-search">
+                Search namespace / pod / container
+            </label>
+            <input
+                id="missing-resource-search"
+                name="missing_q"
+                type="search"
+                value="{{ missing_options.get('q', '') }}"
+                placeholder="Namespace, pod veya container ara..."
+                autocomplete="off"
+            >
+        </div>
+        <label>
+            <input type="checkbox" id="include-openshift-namespaces" name="include_openshift" value="true" {% if missing_options.get('include_openshift') %}checked{% endif %}>
+            Include OpenShift namespaces
+        </label>
+        <button type="submit" class="action-button">Filter</button>
+        <button type="button" class="action-button" id="export-missing-csv">
+            Export CSV
+        </button>
+    </form>
+    <div class="table-wrapper namespace-table-wrapper">
+        <table id="missing-resource-table">
+            <thead>
+                <tr>
+                    <th><button class="sort-button missing-sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
+                    <th><button class="sort-button missing-sort-button" data-sort="pod" data-type="text">Pod</button></th>
+                    <th><button class="sort-button missing-sort-button" data-sort="container" data-type="text">Container</button></th>
+                    <th>CPU Request</th>
+                    <th>CPU Limit</th>
+                    <th>Memory Request</th>
+                    <th>Memory Limit</th>
+                    <th class="numeric"><button class="sort-button missing-sort-button" data-sort="missing_count" data-type="number">Missing Count</button></th>
+                </tr>
+            </thead>
+            <tbody id="missing-resource-body" data-initial-record-count="{{ [data['resources']['missing_resources']['application']['records']|length, 50]|min }}">
+                {% for item in data["resources"]["missing_resources"]["application"]["records"][:50] %}
+                <tr data-missing-record>
+                    <td class="wrap-cell">{{ item["namespace"] }}</td>
+                    <td class="wrap-cell">{{ item["pod"] }}</td>
+                    <td class="wrap-cell">{{ item["container"] }}</td>
+                    {% for field in ["cpu_request", "cpu_limit", "memory_request", "memory_limit"] %}
+                    <td>{% if item[field] %}<span class="defined-mark" title="Defined">✓</span>{% else %}<span class="missing-badge">Missing</span>{% endif %}</td>
+                    {% endfor %}
+                    <td class="numeric"><strong>{{ item["missing_count"] }}</strong></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="8" class="empty-message">No missing resource definitions found</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="pagination">
+        <span id="missing-resource-range" aria-live="polite">{% if missing_fallback %}{{ 0 if not missing_fallback["total"] else ((missing_fallback["page"] - 1) * missing_fallback["page_size"] + 1) }}-{{ [missing_fallback["page"] * missing_fallback["page_size"], missing_fallback["total"]]|min }} / {{ missing_fallback["total"] }} kayıt{% endif %}</span>
+        <button type="button" class="action-button" id="missing-previous">Previous</button>
+        <strong id="missing-page-number">1</strong>
+        <button type="button" class="action-button" id="missing-next">Next</button>
+        <noscript>
+            {% if missing_fallback and missing_fallback["page"] > 1 %}<a href="/resources?cluster={{ selected_cluster }}&missing_q={{ missing_options.get('q', '')|urlencode }}&include_openshift={{ 'true' if missing_options.get('include_openshift') else 'false' }}&missing_page={{ missing_fallback['page'] - 1 }}">Previous</a>{% endif %}
+            {% if missing_fallback and missing_fallback["page"] < missing_fallback["pages"] %}<a href="/resources?cluster={{ selected_cluster }}&missing_q={{ missing_options.get('q', '')|urlencode }}&include_openshift={{ 'true' if missing_options.get('include_openshift') else 'false' }}&missing_page={{ missing_fallback['page'] + 1 }}">Next</a>{% endif %}
+        </noscript>
+    </div>
+    {% endif %}
+
+    {% if page in ["workloads", "storage", "routes"] %}
+    <h2>{% if page == "workloads" %}Workloads{% elif page == "storage" %}PVC / Storage{% else %}Routes{% endif %}</h2>
+    <div class="operational-grid page-grid">
+        {% if page == "workloads" %}
+        <section class="panel">
+            <h3>Namespace Drill-down</h3>
+            <select id="workload-detail-namespace">
+                <option value="">Select namespace</option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}">{{ namespace }}</option>
+                {% endfor %}
+            </select>
+            <div id="workload-detail-results">Select a namespace.</div>
+        </section>
+        <section class="panel">
+            <h3>Top Restart Pods</h3>
+            <label for="workload-namespace-filter">Namespace</label>
+            <select id="workload-namespace-filter">
+                <option value="">All Namespaces</option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}">{{ namespace }}</option>
+                {% endfor %}
+            </select>
+            <label for="restart-ranking-size">Ranking</label>
+            <select id="restart-ranking-size">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+            </select>
+            <div id="restart-ranking" class="results-list"></div>
+        </section>
+        {% endif %}
+        {% if page == "storage" %}
+        <section class="panel">
+            <h3>PVC / Storage</h3>
+            <div class="table-toolbar">
+                <input id="pvc-search" type="search" placeholder="Namespace, PVC veya storageClass ara...">
+                <select id="pvc-namespace-filter"><option value="">All Namespaces</option></select>
+            </div>
+            <div id="pvc-results" class="loading-inline">Loading PVC data</div>
+        </section>
+        {% endif %}
+        {% if page == "routes" %}
+        <section class="panel">
+            <h3>Route Search</h3>
+            <input id="route-search" type="search" placeholder="Route, namespace veya host ara...">
+            <div id="route-results" class="results-list loading-inline">Loading route data</div>
+        </section>
+        {% endif %}
+        {% if page == "workloads" %}
+        <section class="panel">
+            <h3>Global Workload Search</h3>
+            <input id="global-search" type="search" placeholder="Namespace, pod, workload veya route ara...">
+            <div id="global-search-results" class="results-list">Type to search</div>
+        </section>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if page == "health" %}
     <h2>Node Dağılımı</h2>
     <div class="cards">
         <div class="card">
             <h3>Master</h3>
-            <div class="value">{{ data.nodes.role_counts.master }}</div>
+            <div class="value">{{ data["nodes"]["role_counts"]["master"] }}</div>
         </div>
         <div class="card">
             <h3>Infra</h3>
-            <div class="value">{{ data.nodes.role_counts.infra }}</div>
+            <div class="value">{{ data["nodes"]["role_counts"]["infra"] }}</div>
         </div>
         <div class="card">
             <h3>Worker</h3>
-            <div class="value">{{ data.nodes.role_counts.worker }}</div>
+            <div class="value">{{ data["nodes"]["role_counts"]["worker"] }}</div>
         </div>
         <div class="card">
             <h3>Other</h3>
-            <div class="value">{{ data.nodes.role_counts.other }}</div>
+            <div class="value">{{ data["nodes"]["role_counts"]["other"] }}</div>
         </div>
     </div>
 
@@ -331,11 +1180,11 @@
                 </tr>
             </thead>
             <tbody>
-                {% for node in data.nodes.items %}
+                {% for node in data["nodes"]["items"] %}
                 <tr>
-                    <td>{{ node.name }}</td>
+                    <td>{{ node["name"] }}</td>
                     <td>
-                        {% if node.ready %}
+                        {% if node["ready"] %}
                         <span class="status status-ready">Ready</span>
                         {% else %}
                         <span class="status status-not-ready">
@@ -344,62 +1193,1122 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% for role in node.roles %}
+                        {% for role in node["roles"] %}
                         <span class="role">{{ role }}</span>
                         {% endfor %}
                     </td>
-                    <td>{{ node.cpu_capacity_text }}</td>
-                    <td>{{ node.cpu_allocatable_text }}</td>
-                    <td>{{ node.memory_capacity_text }}</td>
-                    <td>{{ node.memory_allocatable_text }}</td>
-                    <td>{{ node.storage_capacity_text }}</td>
-                    <td>{{ node.storage_allocatable_text }}</td>
+                    <td>{{ node["cpu_capacity_text"] }}</td>
+                    <td>{{ node["cpu_allocatable_text"] }}</td>
+                    <td>{{ node["memory_capacity_text"] }}</td>
+                    <td>{{ node["memory_allocatable_text"] }}</td>
+                    <td>{{ node["storage_capacity_text"] }}</td>
+                    <td>{{ node["storage_allocatable_text"] }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
+    <div class="pagination">
+        <span id="namespace-page-range"></span>
+        <button type="button" id="namespace-previous" class="action-button">Previous</button>
+        <strong id="namespace-page-number">1</strong>
+        <button type="button" id="namespace-next" class="action-button">Next</button>
+    </div>
+    {% endif %}
+
+    {% if page == "resources" %}
+    <h2>Top Resource Limits</h2>
+    <div class="table-toolbar">
+        <div class="field-group">
+            <label for="ranking-size">Ranking boyutu</label>
+            <select id="ranking-size">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+            </select>
+        </div>
+    </div>
+    <div class="ranking-grid">
+        {% for resource, label in [("cpu", "Top CPU Requests"), ("memory", "Top Memory Requests")] %}
+        <div>
+            <h3>{{ label }}</h3>
+            <div class="table-wrapper"><table>
+                <thead><tr><th>Sıra</th><th>Namespace</th><th>Request</th><th>Capacity %</th></tr></thead>
+                <tbody class="ranking-body">
+                    {% for item in data["resources"]["top_requests"][resource] %}
+                    <tr data-rank="{{ item["rank"] }}"><td>{{ item["rank"] }}</td><td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td><td>{{ item["request_text"] }}</td><td>%{{ item["capacity_percent"] }}</td></tr>
+                    {% else %}<tr><td colspan="4">Request verisi yok.</td></tr>{% endfor %}
+                </tbody>
+            </table></div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="ranking-grid">
+        <div>
+            <h3>Top CPU Limits</h3>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sıra</th>
+                            <th>Namespace</th>
+                            <th>CPU Request</th>
+                            <th>CPU Limit</th>
+                            <th>Capacity %</th>
+                        </tr>
+                    </thead>
+                    <tbody class="ranking-body">
+                        {% for item in data["resources"]["top_limits"]["cpu"] %}
+                        <tr data-rank="{{ item["rank"] }}">
+                            <td>{{ item["rank"] }}</td>
+                            <td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td>
+                            <td>{{ item["request_text"] }}</td>
+                            <td>{{ item["limit_text"] }}</td>
+                            <td>%{{ item["capacity_percent"] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="empty-message">CPU limit verisi yok.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div>
+            <h3>Top Memory Limits</h3>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sıra</th>
+                            <th>Namespace</th>
+                            <th>Memory Request</th>
+                            <th>Memory Limit</th>
+                            <th>Capacity %</th>
+                        </tr>
+                    </thead>
+                    <tbody class="ranking-body">
+                        {% for item in data["resources"]["top_limits"]["memory"] %}
+                        <tr data-rank="{{ item["rank"] }}">
+                            <td>{{ item["rank"] }}</td>
+                            <td><button class="namespace-link" data-namespace-link="{{ item["namespace"] }}">{{ item["namespace"] }}</button></td>
+                            <td>{{ item["request_text"] }}</td>
+                            <td>{{ item["limit_text"] }}</td>
+                            <td>%{{ item["capacity_percent"] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="empty-message">Memory limit verisi yok.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
     <h2>Namespace Resource Özeti</h2>
-    <div class="table-wrapper">
-        <table>
+    <div class="table-toolbar">
+        <div class="field-group">
+            <label for="namespace-search">Search namespace</label>
+            <input
+                id="namespace-search"
+                type="search"
+                placeholder="Namespace ara..."
+                autocomplete="off"
+            >
+        </div>
+        <div class="field-group">
+            <label for="namespace-filter">Namespace</label>
+            <select id="namespace-filter" aria-controls="namespace-resource-table">
+                <option value="">All Namespaces</option>
+                {% for namespace in data["resources"]["namespace_options"] %}
+                <option value="{{ namespace }}">{{ namespace }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <span id="namespace-result-count" aria-live="polite"></span>
+            <button type="button" class="action-button" id="export-csv">Export CSV</button>
+        </div>
+    </div>
+    <section id="namespace-drilldown" class="drilldown" aria-live="polite"></section>
+    <div class="table-wrapper namespace-table-wrapper">
+        <table id="namespace-resource-table">
             <thead>
                 <tr>
-                    <th>Namespace</th>
-                    <th>Pod</th>
-                    <th>Container</th>
-                    <th>CPU Request</th>
-                    <th>CPU Limit</th>
-                    <th>Memory Request</th>
-                    <th>Memory Limit</th>
-                    <th>Eksik CPU Req.</th>
-                    <th>Eksik CPU Limit</th>
-                    <th>Eksik Mem. Req.</th>
-                    <th>Eksik Mem. Limit</th>
-                    <th>Tamamen Tanımsız</th>
+                    <th><button class="sort-button namespace-sort-button" data-sort="namespace" data-type="text">Namespace</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="pod-count" data-type="number">Pod</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="container-count" data-type="number">Container</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="cpu-request" data-type="number">CPU Request</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="cpu-limit" data-type="number">CPU Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="memory-request" data-type="number">Memory Request</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="memory-limit" data-type="number">Memory Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-cpu-request" data-type="number">Eksik CPU Req.</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-cpu-limit" data-type="number">Eksik CPU Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-memory-request" data-type="number">Eksik Mem. Req.</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="missing-memory-limit" data-type="number">Eksik Mem. Limit</button></th>
+                    <th class="numeric"><button class="sort-button namespace-sort-button" data-sort="completely-undefined" data-type="number">Tamamen Tanımsız</button></th>
                 </tr>
             </thead>
-            <tbody>
-                {% for namespace in data.resources.namespaces %}
-                <tr>
-                    <td>{{ namespace.namespace }}</td>
-                    <td>{{ namespace.pod_count }}</td>
-                    <td>{{ namespace.container_count }}</td>
-                    <td>{{ namespace.cpu_request_text }}</td>
-                    <td>{{ namespace.cpu_limit_text }}</td>
-                    <td>{{ namespace.memory_request_text }}</td>
-                    <td>{{ namespace.memory_limit_text }}</td>
-                    <td>{{ namespace.missing_cpu_request }}</td>
-                    <td>{{ namespace.missing_cpu_limit }}</td>
-                    <td>{{ namespace.missing_memory_request }}</td>
-                    <td>{{ namespace.missing_memory_limit }}</td>
-                    <td>{{ namespace.completely_undefined }}</td>
+            <tbody id="namespace-resource-body">
+                {% for namespace in data["resources"]["namespaces"] %}
+                {% set cpu_severity = namespace["cpu_limit_severity"] %}
+                {% set memory_severity = namespace["memory_limit_severity"] %}
+                {% if "critical" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "critical" %}
+                {% elif "high" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "high" %}
+                {% elif "warning" in [cpu_severity, memory_severity] %}
+                    {% set row_severity = "warning" %}
+                {% else %}
+                    {% set row_severity = "normal" %}
+                {% endif %}
+                <tr
+                    class="row-{{ row_severity }}"
+                    data-namespace="{{ namespace["namespace"] }}"
+                    data-pod-count="{{ namespace["pod_count"] }}"
+                    data-container-count="{{ namespace["container_count"] }}"
+                    data-cpu-request="{{ namespace["cpu_request"] }}"
+                    data-cpu-limit="{{ namespace["cpu_limit"] }}"
+                    data-memory-request="{{ namespace["memory_request"] }}"
+                    data-memory-limit="{{ namespace["memory_limit"] }}"
+                    data-missing-cpu-request="{{ namespace["missing_cpu_request"] }}"
+                    data-missing-cpu-limit="{{ namespace["missing_cpu_limit"] }}"
+                    data-missing-memory-request="{{ namespace["missing_memory_request"] }}"
+                    data-missing-memory-limit="{{ namespace["missing_memory_limit"] }}"
+                    data-completely-undefined="{{ namespace["completely_undefined"] }}"
+                >
+                    <td><button class="namespace-link" data-namespace-link="{{ namespace["namespace"] }}">{{ namespace["namespace"] }}</button></td>
+                    <td class="numeric">{{ namespace["pod_count"] }}</td>
+                    <td class="numeric">{{ namespace["container_count"] }}</td>
+                    <td class="numeric">{{ namespace["cpu_request_text"] }}</td>
+                    <td class="numeric">
+                        {{ namespace["cpu_limit_text"] }}
+                        {% if cpu_severity != "normal" %}
+                        <span class="severity-badge severity-{{ cpu_severity }}">
+                            {{ cpu_severity|title }} CPU Limit
+                            (%{{ namespace["cpu_limit_capacity_percent"] }})
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td class="numeric">{{ namespace["memory_request_text"] }}</td>
+                    <td class="numeric">
+                        {{ namespace["memory_limit_text"] }}
+                        {% if memory_severity != "normal" %}
+                        <span class="severity-badge severity-{{ memory_severity }}">
+                            {{ memory_severity|title }} Memory Limit
+                            (%{{ namespace["memory_limit_capacity_percent"] }})
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td class="numeric">{{ namespace["missing_cpu_request"] }}</td>
+                    <td class="numeric">{{ namespace["missing_cpu_limit"] }}</td>
+                    <td class="numeric">{{ namespace["missing_memory_request"] }}</td>
+                    <td class="numeric">{{ namespace["missing_memory_limit"] }}</td>
+                    <td class="numeric">{{ namespace["completely_undefined"] }}</td>
                 </tr>
+                {% else %}
+                <tr><td colspan="12" class="empty-message">Namespace verisi yok.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% endif %}
+    {% endif %}
 </main>
+{% if not error %}
+<script id="dashboard-data" type="application/json">{{ {
+    "cluster": selected_cluster,
+    "namespaces": data["resources"]["namespaces"] if page in ["resources", "workloads"] else [],
+    "problemPods": data["pods"]["problem_by_namespace"] if page in ["resources", "workloads"] else {},
+    "restartPods": data["restarts"]["by_namespace"] if page in ["resources", "workloads"] else {},
+    "restartItems": data["restarts"]["items"] if page == "workloads" else [],
+    "podSearchItems": data["search"]["pods"] if page == "workloads" else [],
+    "clusterOptions": cluster_options,
+    "missingResources": data["resources"]["missing_resources"] if page in ["resources", "workloads"] else {},
+    "missingApplicationRecords": data["resources"]["missing_resources"]["application"]["records"] if page == "resources" else [],
+    "missingAllRecords": data["resources"]["missing_resources"]["all"]["records"] if page == "resources" else [],
+    "executiveTrend": data["executive"]["trend"] if page == "overview" else {},
+    "executiveRankings": {"all": data["executive"]["rankings"]["all"], "kkb_apps": data["executive"]["rankings"]["kkb_apps"]} if page == "overview" else {},
+    "collectionDuration": data["collection_duration_seconds"]
+}|tojson }}</script>
+<script src="/static/missing_resources.js"></script>
+<script>
+    const initializeDashboard = () => {
+        if (window.__koccDashboardInitialized) return;
+        window.__koccDashboardInitialized = true;
+        const dashboardData = JSON.parse(
+            document.getElementById("dashboard-data").textContent
+        );
+        const loadedUrl = new URL(window.location.href);
+        if (loadedUrl.searchParams.has("refresh")) {
+            loadedUrl.searchParams.delete("refresh");
+            window.history.replaceState({}, "", loadedUrl.toString());
+        }
+        {% if page == "resources" %}
+        console.info(
+            `missing_resources_initialized application=${dashboardData.missingApplicationRecords.length} all=${dashboardData.missingAllRecords.length}`
+        );
+        {% endif %}
+        const state = {
+            activePopup: null,
+            refreshTimer: null,
+            refreshInProgress: false,
+            namespaceRows: [],
+            namespacePage: 1,
+            namespacePageSize: 100,
+            missingPage: 1,
+            missingPageSize: 50,
+            missingSortKey: "namespace",
+            missingSortDirection: "asc",
+        };
+        const escapeHtml = (value) => String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        const optionalCache = {workloads: new Map(), routes: null, pvcs: null, egressips: null};
+        const fetchJson = async (url) => {
+            const response = await fetch(url, {headers: {"Accept": "application/json"}});
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        };
+        {% if page == "resources" %}
+        try {
+        const rankingSize = document.getElementById("ranking-size");
+        const rankingKey = "dashboardRankingSize";
+        rankingSize.value = localStorage.getItem(rankingKey) || "10";
+        const updateRankings = () => {
+            const limit = Number(rankingSize.value);
+            localStorage.setItem(rankingKey, rankingSize.value);
+            document.querySelectorAll(".ranking-body tr[data-rank]")
+                .forEach((row) => {
+                    row.hidden = Number(row.dataset.rank) > limit;
+                });
+        };
+        rankingSize.addEventListener("change", updateRankings);
+        updateRankings();
+
+        const filter = document.getElementById("namespace-filter");
+        const search = document.getElementById("namespace-search");
+        const body = document.getElementById("namespace-resource-body");
+        const count = document.getElementById("namespace-result-count");
+        const rows = Array.from(body.querySelectorAll("tr[data-namespace]"));
+        state.namespaceRows = rows;
+        const namespaceNames = dashboardData.namespaces
+            .map((item) => item.namespace)
+            .sort((left, right) => left.localeCompare(right, "tr"));
+        const filterStorageKey = `namespaceFilter:${dashboardData.cluster}`;
+        const storedNamespace = localStorage.getItem(filterStorageKey) || "";
+        const rebuildNamespaceOptions = () => {
+            const previousValue = filter.value || storedNamespace;
+            filter.replaceChildren(new Option("All Namespaces", ""));
+            namespaceNames
+                .forEach((name) => filter.add(new Option(name, name)));
+            filter.value = Array.from(filter.options)
+                .some((option) => option.value === previousValue)
+                ? previousValue : "";
+        };
+        rebuildNamespaceOptions();
+        const updateNamespaceFilter = () => {
+            const selectedNamespace = filter.value;
+            const searchQuery = search.value.trim().toLocaleLowerCase("tr");
+            const matchingRows = rows.filter((row) =>
+                (!selectedNamespace ||
+                    row.dataset.namespace === selectedNamespace) &&
+                (!searchQuery || row.dataset.namespace
+                    .toLocaleLowerCase("tr").includes(searchQuery))
+            );
+            const pageCount = Math.max(
+                1, Math.ceil(matchingRows.length / state.namespacePageSize)
+            );
+            state.namespacePage = Math.min(state.namespacePage, pageCount);
+            const start = (state.namespacePage - 1) * state.namespacePageSize;
+            const visibleRows = new Set(matchingRows.slice(
+                start, start + state.namespacePageSize
+            ));
+            rows.forEach((row) => { row.hidden = !visibleRows.has(row); });
+            count.textContent = `${matchingRows.length} namespace`;
+            document.getElementById("namespace-page-range").textContent =
+                `${matchingRows.length ? start + 1 : 0}-${Math.min(start + state.namespacePageSize, matchingRows.length)} / ${matchingRows.length}`;
+            document.getElementById("namespace-page-number").textContent =
+                String(state.namespacePage);
+            document.getElementById("namespace-previous").disabled =
+                state.namespacePage <= 1;
+            document.getElementById("namespace-next").disabled =
+                state.namespacePage >= pageCount;
+            localStorage.setItem(filterStorageKey, selectedNamespace);
+        };
+        filter.addEventListener("change", () => {
+            state.namespacePage = 1;
+            updateNamespaceFilter();
+        });
+        search.addEventListener("input", () => {
+            state.namespacePage = 1;
+            updateNamespaceFilter();
+        });
+        document.getElementById("namespace-previous").addEventListener(
+            "click", () => { state.namespacePage -= 1; updateNamespaceFilter(); }
+        );
+        document.getElementById("namespace-next").addEventListener(
+            "click", () => { state.namespacePage += 1; updateNamespaceFilter(); }
+        );
+        updateNamespaceFilter();
+
+        const compareValues = (left, right, numeric, direction) => {
+            const comparison = numeric
+                ? Number(left) - Number(right)
+                : String(left).localeCompare(String(right), "tr");
+            return direction === "asc" ? comparison : -comparison;
+        };
+        document.querySelectorAll(".namespace-sort-button").forEach((button) => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.sort;
+                const numeric = button.dataset.type === "number";
+                const direction = button.dataset.direction === "asc"
+                    ? "desc" : "asc";
+                document.querySelectorAll(".namespace-sort-button")
+                    .forEach((item) => delete item.dataset.direction);
+                button.dataset.direction = direction;
+                rows.sort((left, right) => {
+                    const leftValue = left.getAttribute(`data-${key}`);
+                    const rightValue = right.getAttribute(`data-${key}`);
+                    return compareValues(
+                        leftValue, rightValue, numeric, direction
+                    );
+                });
+                rows.forEach((row) => body.appendChild(row));
+                updateNamespaceFilter();
+            });
+        });
+
+        const drilldown = document.getElementById("namespace-drilldown");
+        const renderWorkloads = (items) => items.length ? `
+            <div class="table-wrapper"><table><thead><tr><th>Type</th><th>Name</th><th>Desired</th><th>Ready</th><th>Available</th><th>CPU Req/Limit</th><th>Memory Req/Limit</th></tr></thead><tbody>
+            ${items.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.name)}</td><td>${item.desired_replicas}</td><td>${item.ready_replicas}</td><td>${item.available_replicas}</td><td>${escapeHtml(item.cpu_request_text)} / ${escapeHtml(item.cpu_limit_text)}</td><td>${escapeHtml(item.memory_request_text)} / ${escapeHtml(item.memory_limit_text)}</td></tr>`).join("")}
+            </tbody></table></div>` : "<p>No workload data</p>";
+        const openDrilldown = async (namespaceName) => {
+            const namespace = dashboardData.namespaces.find(
+                (item) => item.namespace === namespaceName
+            );
+            if (!namespace) return;
+            const problemPods = dashboardData.problemPods[namespaceName] || [];
+            const restartPods = dashboardData.restartPods[namespaceName] || [];
+            const missing = dashboardData.missingResources.all.records
+                .filter((item) => item.namespace === namespaceName)
+                .reduce((total, item) => total + item.missing_count, 0);
+            const list = (items, formatter, emptyText) => items.length
+                ? `<ul>${items.map((item) => `<li>${formatter(item)}</li>`).join("")}</ul>`
+                : `<p>${emptyText}</p>`;
+            drilldown.innerHTML = `
+                <h3>${escapeHtml(namespaceName)}</h3>
+                <p>${namespace.pod_count} pods · ${namespace.container_count} containers</p>
+                <p>CPU: ${escapeHtml(namespace.cpu_request_text)} request / ${escapeHtml(namespace.cpu_limit_text)} limit</p>
+                <p>Memory: ${escapeHtml(namespace.memory_request_text)} request / ${escapeHtml(namespace.memory_limit_text)} limit</p>
+                <p>Missing requests/limits: <strong>${missing}</strong></p>
+                <h4>Non-ready Pods</h4>
+                ${list(problemPods, (pod) => `${escapeHtml(pod.name)} — ${escapeHtml(pod.phase)} — ${pod.ready_containers}/${pod.total_containers} Ready`, "No non-ready pod data")}
+                <h4>Top Restart Pods</h4>
+                ${list(restartPods, (pod) => `${escapeHtml(pod.name)} — ${pod.restart_count} restarts — ${escapeHtml(pod.reason || "")}`, "No pod restarts")}
+                <h4>Workloads</h4>
+                <div id="drilldown-workloads" class="loading-inline">Loading workloads</div>
+                <button type="button" class="action-button" id="close-drilldown">Close</button>
+            `;
+            drilldown.classList.add("is-open");
+            drilldown.scrollIntoView({behavior: "smooth", block: "nearest"});
+            document.getElementById("close-drilldown").addEventListener(
+                "click", () => drilldown.classList.remove("is-open")
+            );
+            const workloadTarget = document.getElementById("drilldown-workloads");
+            try {
+                if (!optionalCache.workloads.has(namespaceName)) {
+                    optionalCache.workloads.set(namespaceName, await fetchJson(
+                        `/api/workloads?cluster=${encodeURIComponent(dashboardData.cluster)}&namespace=${encodeURIComponent(namespaceName)}`
+                    ));
+                }
+                const workloadData = optionalCache.workloads.get(namespaceName);
+                workloadTarget.classList.remove("loading-inline");
+                workloadTarget.innerHTML = workloadData.available
+                    ? renderWorkloads(workloadData.items)
+                    : "Workload data unavailable";
+            } catch (_error) {
+                workloadTarget.classList.remove("loading-inline");
+                workloadTarget.textContent = "Workload data unavailable";
+            }
+        };
+        document.querySelectorAll("[data-namespace-link]").forEach((link) => {
+            link.addEventListener("click", () => {
+                filter.value = link.dataset.namespaceLink;
+                state.namespacePage = 1;
+                updateNamespaceFilter();
+                openDrilldown(link.dataset.namespaceLink);
+            });
+        });
+        } catch (error) {
+            console.error("NamespaceResources init failed:", error);
+        }
+        {% endif %}
+
+        const closePopup = () => {
+            if (!state.activePopup) return;
+            state.activePopup.classList.remove("is-open");
+            state.activePopup.setAttribute("aria-expanded", "false");
+            state.activePopup = null;
+        };
+        const openPopup = (card) => {
+            if (state.activePopup === card) return;
+            closePopup();
+            state.activePopup = card;
+            card.classList.add("is-open");
+            card.setAttribute("aria-expanded", "true");
+        };
+        const togglePopup = (card) => {
+            if (state.activePopup === card) closePopup();
+            else openPopup(card);
+        };
+        document.querySelectorAll(".interactive-card").forEach((card) => {
+            card.setAttribute("aria-expanded", "false");
+            card.addEventListener("mouseenter", () => openPopup(card));
+            card.addEventListener("mouseleave", () => closePopup());
+            card.addEventListener("focusin", () => openPopup(card));
+            card.addEventListener("focusout", () => {
+                window.setTimeout(() => {
+                    if (!card.contains(document.activeElement)) closePopup();
+                }, 0);
+            });
+            card.addEventListener("click", (event) => {
+                if (event.target.closest("input, select, button, a, label, .popover")) {
+                    return;
+                }
+                togglePopup(card);
+            });
+            card.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    togglePopup(card);
+                }
+                if (event.key === "Escape") closePopup();
+            });
+        });
+        document.addEventListener("click", (event) => {
+            if (state.activePopup && !state.activePopup.contains(event.target)) {
+                closePopup();
+            }
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closePopup();
+        });
+
+        {% if page == "resources" %}
+        try {
+        const includeOpenShift = document.getElementById(
+            "include-openshift-namespaces"
+        );
+        const includeOpenShiftKey = "includeOpenShiftNamespaces";
+        includeOpenShift.checked = localStorage.getItem(includeOpenShiftKey) === "true";
+        const missingSearch = document.getElementById("missing-resource-search");
+        const missingBody = document.getElementById("missing-resource-body");
+        const missingRange = document.getElementById("missing-resource-range");
+        const missingPageNumber = document.getElementById("missing-page-number");
+        const missingPrevious = document.getElementById("missing-previous");
+        const missingNext = document.getElementById("missing-next");
+        const getMissingView = () => KoccMissingResources.buildMissingResourcesView(
+            dashboardData.missingAllRecords,
+            {
+                includeOpenShift: includeOpenShift.checked,
+                query: missingSearch.value,
+                sortKey: state.missingSortKey,
+                sortDirection: state.missingSortDirection,
+                page: state.missingPage,
+                pageSize: state.missingPageSize,
+            }
+        );
+        const getFilteredMissingRecords = () => getMissingView().records;
+        const missingStatus = (defined) => defined
+            ? '<span class="defined-mark" title="Defined">✓</span>'
+            : '<span class="missing-badge">Missing</span>';
+        const renderMissingResources = () => {
+            const view = getMissingView();
+            const records = view.records;
+            const missingCount = records.reduce(
+                (total, item) => total + item.missing_count, 0
+            );
+            const namespaceCount = new Set(
+                records.map((item) => item.namespace)
+            ).size;
+            document.getElementById("missing-resource-count").textContent =
+                missingCount;
+            document.getElementById("missing-resource-impact").textContent =
+                `${namespaceCount} namespace · ${records.length} container`;
+
+            const pageCount = view.pageCount;
+            state.missingPage = view.page;
+            const start = view.start;
+            const pageRecords = view.pageRecords;
+            if (!pageRecords.length) {
+                const message = missingSearch.value.trim()
+                    ? "No matching records"
+                    : "No missing resource definitions found";
+                missingBody.innerHTML = `<tr><td colspan="8" class="empty-message">${message}</td></tr>`;
+            } else {
+                missingBody.innerHTML = pageRecords.map((item) => `
+                    <tr data-missing-record>
+                        <td class="wrap-cell">${escapeHtml(item.namespace)}</td>
+                        <td class="wrap-cell">${escapeHtml(item.pod)}</td>
+                        <td class="wrap-cell">${escapeHtml(item.container)}</td>
+                        <td>${missingStatus(item.cpu_request)}</td>
+                        <td>${missingStatus(item.cpu_limit)}</td>
+                        <td>${missingStatus(item.memory_request)}</td>
+                        <td>${missingStatus(item.memory_limit)}</td>
+                        <td class="numeric"><strong>${item.missing_count}</strong></td>
+                    </tr>
+                `).join("");
+            }
+            const rangeStart = records.length ? start + 1 : 0;
+            const rangeEnd = Math.min(start + state.missingPageSize, records.length);
+            missingRange.textContent = `${rangeStart}-${rangeEnd} / ${records.length} records`;
+            missingPageNumber.textContent = String(state.missingPage);
+            missingPrevious.disabled = state.missingPage <= 1;
+            missingNext.disabled = state.missingPage >= pageCount;
+            localStorage.setItem(includeOpenShiftKey, includeOpenShift.checked);
+        };
+        includeOpenShift.addEventListener("change", () => {
+            state.missingPage = 1;
+            renderMissingResources();
+        });
+        missingSearch.addEventListener("input", () => {
+            state.missingPage = 1;
+            renderMissingResources();
+        });
+        missingPrevious.addEventListener("click", () => {
+            if (state.missingPage > 1) state.missingPage -= 1;
+            renderMissingResources();
+        });
+        missingNext.addEventListener("click", () => {
+            state.missingPage += 1;
+            renderMissingResources();
+        });
+        document.querySelectorAll(".missing-sort-button").forEach((button) => {
+            button.addEventListener("click", () => {
+                const key = button.dataset.sort;
+                const direction = state.missingSortKey === key &&
+                    state.missingSortDirection === "asc" ? "desc" : "asc";
+                document.querySelectorAll(".missing-sort-button")
+                    .forEach((item) => delete item.dataset.direction);
+                state.missingSortKey = key;
+                state.missingSortDirection = direction;
+                state.missingPage = 1;
+                button.dataset.direction = direction;
+                renderMissingResources();
+            });
+        });
+        renderMissingResources();
+
+        const downloadCsv = (filename, csvRows) => {
+            const csv = csvRows.map((row) => row.map((value) =>
+                `"${String(value).replaceAll('"', '""')}"`
+            ).join(",")).join("\n");
+            const url = URL.createObjectURL(
+                new Blob([csv], {type: "text/csv;charset=utf-8"})
+            );
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(url);
+        };
+        document.getElementById("export-csv").addEventListener("click", () => {
+            const headers = Array.from(
+                document.querySelectorAll("#namespace-resource-table thead th")
+            ).map((cell) => cell.textContent.trim().replace("↕", "").trim());
+            const filteredRows = rows.filter((row) =>
+                (!filter.value || row.dataset.namespace === filter.value) &&
+                (!search.value.trim() || row.dataset.namespace
+                    .toLocaleLowerCase("tr").includes(
+                        search.value.trim().toLocaleLowerCase("tr")
+                    ))
+            );
+            const csvRows = [headers, ...filteredRows.map((row) =>
+                Array.from(row.cells).map((cell) => cell.textContent.trim())
+            )];
+            downloadCsv(
+                `${dashboardData.cluster}-namespace-resources.csv`, csvRows
+            );
+        });
+        document.getElementById("export-missing-csv").addEventListener(
+            "click", () => {
+                const records = getFilteredMissingRecords();
+                const csvRows = [[
+                    "Namespace", "Pod", "Container", "CPU Request",
+                    "CPU Limit", "Memory Request", "Memory Limit",
+                    "Missing Count"
+                ], ...records.map((item) => [
+                    item.namespace,
+                    item.pod,
+                    item.container,
+                    item.cpu_request ? "Defined" : "Missing",
+                    item.cpu_limit ? "Defined" : "Missing",
+                    item.memory_request ? "Defined" : "Missing",
+                    item.memory_limit ? "Defined" : "Missing",
+                    item.missing_count,
+                ])];
+                downloadCsv(
+                    `${dashboardData.cluster}-missing-resources.csv`, csvRows
+                );
+            }
+        );
+        } catch (error) {
+            console.error("MissingResources init failed:", error);
+        }
+        try {
+            const takeOwnership = (element) => {
+                const replacement = element.cloneNode(true);
+                element.replaceWith(replacement);
+                return replacement;
+            };
+            const ownedSearch = takeOwnership(
+                document.getElementById("missing-resource-search")
+            );
+            const ownedInclude = takeOwnership(
+                document.getElementById("include-openshift-namespaces")
+            );
+            const ownedPrevious = takeOwnership(
+                document.getElementById("missing-previous")
+            );
+            const ownedNext = takeOwnership(
+                document.getElementById("missing-next")
+            );
+            const ownedExport = takeOwnership(
+                document.getElementById("export-missing-csv")
+            );
+            const ownedSortButtons = Array.from(
+                document.querySelectorAll(".missing-sort-button")
+            ).map(takeOwnership);
+            KoccMissingResources.createMissingResourcesController({
+                cluster: dashboardData.cluster,
+                endpoint: "/api/resources/missing",
+                csvEndpoint: "/api/resources/missing.csv",
+                search: ownedSearch,
+                includeOpenShift: ownedInclude,
+                body: document.getElementById("missing-resource-body"),
+                range: document.getElementById("missing-resource-range"),
+                pageNumber: document.getElementById("missing-page-number"),
+                previous: ownedPrevious,
+                next: ownedNext,
+                exportButton: ownedExport,
+                sortButtons: ownedSortButtons,
+            });
+        } catch (error) {
+            console.error("MissingResources enhancement failed:", error);
+        }
+        {% endif %}
+
+        {% if page == "workloads" %}
+        const workloadDetailNamespace = document.getElementById(
+            "workload-detail-namespace"
+        );
+        workloadDetailNamespace.addEventListener("change", async () => {
+            const target = document.getElementById("workload-detail-results");
+            const namespaceName = workloadDetailNamespace.value;
+            if (!namespaceName) { target.textContent = "Select a namespace."; return; }
+            target.classList.add("loading-inline");
+            const namespace = dashboardData.namespaces.find(
+                (item) => item.namespace === namespaceName
+            );
+            const problemPods = dashboardData.problemPods[namespaceName] || [];
+            const restartPods = dashboardData.restartPods[namespaceName] || [];
+            const missingCount = dashboardData.missingResources.all.records
+                .filter((item) => item.namespace === namespaceName)
+                .reduce((total, item) => total + item.missing_count, 0);
+            const summary = `<p><strong>${escapeHtml(namespaceName)}</strong> · ${namespace.pod_count} pods · ${namespace.container_count} containers · ${problemPods.length} non-ready · ${restartPods.filter((item) => item.reason === "CrashLoopBackOff").length} CrashLoopBackOff · ${missingCount} missing fields</p>`;
+            try {
+                const data = await fetchJson(
+                    `/api/workloads?cluster=${encodeURIComponent(dashboardData.cluster)}&namespace=${encodeURIComponent(namespaceName)}`
+                );
+                target.innerHTML = summary + (data.available && data.items.length
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Name</th><th>Desired</th><th>Ready</th><th>Available</th><th>CPU Request / Limit</th><th>Memory Request / Limit</th></tr></thead><tbody>${data.items.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.name)}</td><td>${item.desired_replicas}</td><td>${item.ready_replicas}</td><td>${item.available_replicas}</td><td>${escapeHtml(item.cpu_request_text)} / ${escapeHtml(item.cpu_limit_text)}</td><td>${escapeHtml(item.memory_request_text)} / ${escapeHtml(item.memory_limit_text)}</td></tr>`).join("")}</tbody></table></div>`
+                    : data.available ? "No workload data" : "Workload data unavailable");
+            } catch (_error) { target.textContent = "Workload data unavailable"; }
+            target.classList.remove("loading-inline");
+        });
+        const restartSize = document.getElementById("restart-ranking-size");
+        const restartSizeKey = "restartRankingSize";
+        restartSize.value = localStorage.getItem(restartSizeKey) || "10";
+        const renderRestartRanking = () => {
+            const selectedNamespace = document.getElementById(
+                "workload-namespace-filter"
+            ).value;
+            const limit = Number(restartSize.value);
+            const items = dashboardData.restartItems
+                .filter((item) => !selectedNamespace || item.namespace === selectedNamespace)
+                .slice(0, limit);
+            document.getElementById("restart-ranking").innerHTML = items.length
+                ? `<div class="table-wrapper"><table><thead><tr><th>#</th><th>Namespace</th><th>Pod</th><th>Restarts</th><th>Reason</th></tr></thead><tbody>${items.map((item, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${item.restart_count}</td><td>${escapeHtml(item.reason || "")}</td></tr>`).join("")}</tbody></table></div>`
+                : "No restart data";
+            localStorage.setItem(restartSizeKey, restartSize.value);
+        };
+        restartSize.addEventListener("change", renderRestartRanking);
+        document.getElementById("workload-namespace-filter").addEventListener(
+            "change", renderRestartRanking
+        );
+        renderRestartRanking();
+        const hydrateWorkloadSnapshot = async () => {
+            try {
+                const snapshot = await fetchJson(
+                    `/api/summary?cluster=${encodeURIComponent(dashboardData.cluster)}`
+                );
+                dashboardData.namespaces = snapshot.resources.namespaces || [];
+                dashboardData.problemPods = snapshot.pods.problem_by_namespace || {};
+                dashboardData.restartPods = snapshot.restarts.by_namespace || {};
+                dashboardData.restartItems = snapshot.restarts.items || [];
+                dashboardData.podSearchItems = snapshot.search.pods || [];
+                dashboardData.missingResources = snapshot.resources.missing_resources || {all: {records: []}};
+                const names = (snapshot.resources.namespace_options || []).slice().sort(
+                    (left, right) => left.localeCompare(right, "tr")
+                );
+                [workloadDetailNamespace, document.getElementById("workload-namespace-filter")]
+                    .forEach((select) => names.forEach((name) =>
+                        select.add(new Option(name, name))
+                    ));
+                renderRestartRanking();
+            } catch (error) {
+                console.error("Workload snapshot load failed:", error);
+                document.getElementById("restart-ranking").textContent =
+                    "Cluster pod data unavailable";
+            }
+        };
+        hydrateWorkloadSnapshot();
+        {% endif %}
+
+        {% if page in ["workloads", "routes", "platform"] %}
+        const loadRoutes = async () => {
+            if (!optionalCache.routes) optionalCache.routes = await fetchJson(
+                `/api/routes?cluster=${encodeURIComponent(dashboardData.cluster)}`
+            );
+            return optionalCache.routes;
+        };
+        {% endif %}
+
+        {% if page == "platform" %}
+        const egressState = {items: [], page: 1, pageSize: 25, sortKey: "status", direction: "desc"};
+        const renderEgress = () => {
+            const target = document.getElementById("egressip-results");
+            const query = document.getElementById("egress-search").value.trim().toLocaleLowerCase("tr");
+            const filtered = egressState.items.filter((item) => [item.name, item.egress_ip, item.namespace_selector, item.assigned_node, item.status].some((value) => String(value).toLocaleLowerCase("tr").includes(query)));
+            filtered.sort((left, right) => {
+                const a = String(left[egressState.sortKey] || "");
+                const b = String(right[egressState.sortKey] || "");
+                const compared = a.localeCompare(b, "tr", {numeric: true});
+                return egressState.direction === "desc" ? -compared : compared;
+            });
+            const pages = Math.max(1, Math.ceil(filtered.length / egressState.pageSize));
+            egressState.page = Math.min(egressState.page, pages);
+            const start = (egressState.page - 1) * egressState.pageSize;
+            const visible = filtered.slice(start, start + egressState.pageSize);
+            target.innerHTML = visible.length ? `<div class="table-wrapper"><table><thead><tr>${[["name","EgressIP Name"],["egress_ip","Egress IP"],["namespace_selector","Namespace Selector"],["assigned_node","Assigned Node"],["status","Status"]].map(([key,label]) => `<th><button type="button" class="sortable-header" data-egress-sort="${key}">${label}</button></th>`).join("")}</tr></thead><tbody>${visible.map((item) => `<tr class="${item.status === "Unassigned" ? "egress-unassigned" : ""}"><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.egress_ip)}</td><td>${escapeHtml(item.namespace_selector)}</td><td>${escapeHtml(item.assigned_node)}</td><td><span class="status-pill ${item.status.toLowerCase()}">${escapeHtml(item.status)}</span></td></tr>`).join("")}</tbody></table></div>` : "No matching EgressIP resources";
+            target.querySelectorAll("[data-egress-sort]").forEach((button) => button.addEventListener("click", () => {
+                const key = button.dataset.egressSort;
+                egressState.direction = egressState.sortKey === key && egressState.direction === "asc" ? "desc" : "asc";
+                egressState.sortKey = key; egressState.page = 1; renderEgress();
+            }));
+            document.getElementById("egress-result-info").textContent = filtered.length ? `${start + 1}-${Math.min(start + egressState.pageSize, filtered.length)} / ${filtered.length} EgressIP` : "0 EgressIP";
+            document.getElementById("egress-page-info").textContent = `Page ${egressState.page} / ${pages}`;
+            document.getElementById("egress-prev").disabled = egressState.page === 1;
+            document.getElementById("egress-next").disabled = egressState.page === pages;
+        };
+        document.getElementById("egress-search").addEventListener("input", () => { egressState.page = 1; renderEgress(); });
+        document.getElementById("egress-prev").addEventListener("click", () => { egressState.page -= 1; renderEgress(); });
+        document.getElementById("egress-next").addEventListener("click", () => { egressState.page += 1; renderEgress(); });
+        const loadPlatform = async () => {
+            const cluster = encodeURIComponent(dashboardData.cluster);
+            const [egress, pvcs, routes] = await Promise.all([
+                fetchJson(`/api/platform/egressips?cluster=${cluster}`).catch(() => ({available:false, items:[]})),
+                fetchJson(`/api/pvcs?cluster=${cluster}`).catch(() => ({available:false, items:[]})),
+                loadRoutes().catch(() => ({available:false, items:[]})),
+            ]);
+            const egressKpi = document.getElementById("egress-kpi");
+            const egressStatus = egress.available ? (egress.unassigned ? "Warning" : "Healthy") : "Unavailable";
+            egressKpi.innerHTML = egress.available
+                ? `<strong>${egress.total}</strong> total · ${egress.assigned} assigned<br><span class="${egress.unassigned ? "danger" : "healthy"}">${egress.unassigned} Unassigned${egress.unassigned ? " ⚠" : ""}</span>`
+                : egress.error_code === "permission_denied" ? `${escapeHtml(egress.message)}<br><small>Gerekli yetki: ${escapeHtml(egress.required_permission)}</small>` : "EgressIP verisi alınamadı.";
+            document.getElementById("egress-control-detail").textContent = egress.available ? `${egress.unassigned} Unassigned` : "API unavailable";
+            const controlStatus = document.getElementById("egress-control-status");
+            controlStatus.textContent = egressStatus;
+            controlStatus.className = `status-pill ${egressStatus.toLowerCase()}`;
+            const platformHealth = document.getElementById("platform-health-kpi");
+            const healthy = Number(platformHealth.dataset.healthy) + (egress.available && !egress.unassigned ? 1 : 0);
+            const total = Number(platformHealth.dataset.total);
+            const platformStatus = healthy === total ? "Healthy" : "Warning";
+            platformHealth.innerHTML = `<div class="kpi-value">${healthy}/${total} Healthy</div><span class="status-pill ${platformStatus.toLowerCase()}">${platformStatus}</span>`;
+            if (egress.available) { egressState.items = egress.items; renderEgress(); }
+            else document.getElementById("egressip-results").innerHTML = egress.error_code === "permission_denied" ? `<p>EgressIP verisi alınamadı.</p><p>${escapeHtml(egress.message)}</p><p>Gerekli yetki: <code>${escapeHtml(egress.required_permission)}</code></p>` : "EgressIP verisi alınamadı.";
+            document.getElementById("platform-storage").innerHTML = pvcs.available
+                ? `<strong>${pvcs.total} PVC</strong><br>${pvcs.bound} Bound · ${pvcs.pending} Pending · ${pvcs.lost || 0} Lost<br>${escapeHtml(pvcs.requested_capacity_text)} requested<br>StorageClasses: ${escapeHtml(Object.entries(pvcs.storage_classes || {}).map(([name,count]) => `${name} (${count})`).join(", ") || "N/A")}`
+                : "PVC data unavailable";
+            if (routes.available) {
+                const tls = routes.items.filter((item) => item.tls).length;
+                const wildcard = routes.items.filter((item) => item.wildcard).length;
+                const namespaces = new Set(routes.items.map((item) => item.namespace)).size;
+                document.getElementById("platform-routes").innerHTML = `<strong>${routes.items.length} Routes</strong><br>${tls} TLS · ${routes.items.length - tls} non-TLS<br>${namespaces} namespaces · ${wildcard} wildcard`;
+            } else document.getElementById("platform-routes").textContent = "Route data unavailable";
+            document.querySelectorAll("#platform-storage, #platform-routes, #egressip-results").forEach((item) => item.classList.remove("loading-inline"));
+        };
+        loadPlatform();
+        {% endif %}
+        {% if page == "routes" %}
+        const routeSearch = document.getElementById("route-search");
+        const routeResults = document.getElementById("route-results");
+        const renderRouteResults = async () => {
+            const query = routeSearch.value.trim().toLocaleLowerCase("tr");
+            routeResults.classList.add("loading-inline");
+            try {
+                const data = await loadRoutes();
+                const items = data.items.filter((item) => [
+                    item.namespace, item.name, item.host
+                ].some((value) => value.toLocaleLowerCase("tr").includes(query))).slice(0, 50);
+                routeResults.innerHTML = data.available && items.length
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Namespace</th><th>Route</th><th>Host</th><th>Service</th><th>TLS</th><th>Status</th></tr></thead><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td><a href="https://${escapeHtml(item.host)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.host)}</a></td><td>${escapeHtml(item.service)}</td><td>${item.tls ? "Yes" : "No"}</td><td>${escapeHtml(item.status)}</td></tr>`).join("")}</tbody></table></div>`
+                    : data.available ? "No matching routes" : "Route data unavailable";
+            } catch (_error) { routeResults.textContent = "Route data unavailable"; }
+            routeResults.classList.remove("loading-inline");
+        };
+        routeSearch.addEventListener("input", renderRouteResults);
+        renderRouteResults();
+        {% endif %}
+
+        {% if page == "storage" %}
+        const pvcSearch = document.getElementById("pvc-search");
+        const pvcNamespace = document.getElementById("pvc-namespace-filter");
+        const renderPvcs = async () => {
+            const target = document.getElementById("pvc-results");
+            target.classList.add("loading-inline");
+            try {
+                optionalCache.pvcs ||= await fetchJson(
+                    `/api/pvcs?cluster=${encodeURIComponent(dashboardData.cluster)}`
+                );
+                const data = optionalCache.pvcs;
+                if (pvcNamespace.options.length === 1) {
+                    [...new Set(data.items.map((item) => item.namespace))].sort()
+                        .forEach((name) => pvcNamespace.add(new Option(name, name)));
+                }
+                const query = pvcSearch.value.trim().toLocaleLowerCase("tr");
+                const items = data.items.filter((item) =>
+                    (!pvcNamespace.value || item.namespace === pvcNamespace.value) &&
+                    (!query || [item.namespace, item.name, item.storage_class]
+                        .some((value) => value.toLocaleLowerCase("tr").includes(query)))
+                );
+                target.innerHTML = data.available ? `<p><strong>${data.total}</strong> PVC · ${escapeHtml(data.requested_capacity_text)} requested · ${data.bound} Bound · ${data.pending} Pending</p><div class="table-wrapper"><table><thead><tr><th>Namespace</th><th>PVC</th><th>Requested</th><th>Status</th><th>StorageClass</th></tr></thead><tbody>${items.map((item) => `<tr><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.requested_capacity_text)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.storage_class)}</td></tr>`).join("")}</tbody></table></div>` : "PVC data unavailable";
+            } catch (_error) { target.textContent = "PVC data unavailable"; }
+            target.classList.remove("loading-inline");
+        };
+        pvcSearch.addEventListener("input", renderPvcs);
+        pvcNamespace.addEventListener("change", renderPvcs);
+        renderPvcs();
+        {% endif %}
+
+        {% if page == "workloads" %}
+        const globalSearch = document.getElementById("global-search");
+        const globalResults = document.getElementById("global-search-results");
+        globalSearch.addEventListener("input", async () => {
+            const query = globalSearch.value.trim().toLocaleLowerCase("tr");
+            if (!query) { globalResults.textContent = "Type to search"; return; }
+            globalResults.classList.add("loading-inline");
+            const localItems = dashboardData.podSearchItems.map((item) => item);
+            try {
+                const [routes, workloads] = await Promise.all([
+                    loadRoutes(),
+                    optionalCache.workloads.has("*")
+                        ? optionalCache.workloads.get("*")
+                        : fetchJson(`/api/workloads?cluster=${encodeURIComponent(dashboardData.cluster)}`)
+                ]);
+                optionalCache.workloads.set("*", workloads);
+                const allItems = localItems.concat(
+                    routes.available ? routes.items.map((item) => ({...item, type: "Route"})) : [],
+                    workloads.available ? workloads.items : []
+                ).filter((item) => [item.namespace, item.name, item.host || ""]
+                    .some((value) => value.toLocaleLowerCase("tr").includes(query)))
+                    .slice(0, 50);
+                globalResults.innerHTML = allItems.length
+                    ? `<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Namespace</th><th>Name</th><th>Status / Ready</th><th>Restarts / Replicas</th></tr></thead><tbody>${allItems.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${item.ready_replicas === undefined ? "N/A" : `${item.ready_replicas} Ready`}</td><td>${item.desired_replicas === undefined ? "N/A" : `${item.desired_replicas} desired`}</td></tr>`).join("")}</tbody></table></div>`
+                    : "No matching resources";
+            } catch (_error) { globalResults.textContent = "Optional search data unavailable"; }
+            globalResults.classList.remove("loading-inline");
+        });
+        {% endif %}
+
+        {% if page == "overview" %}
+        const requestToggleButtons = document.querySelectorAll(
+            "[data-request-toggle]"
+        );
+        const setRequestMode = (mode) => {
+            const safeMode = mode === "memory" ? "memory" : "cpu";
+            document.querySelectorAll("[data-request-mode]").forEach((panel) => {
+                panel.hidden = panel.dataset.requestMode !== safeMode;
+            });
+            requestToggleButtons.forEach((button) => {
+                const active = button.dataset.requestToggle === safeMode;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-pressed", String(active));
+            });
+        };
+        requestToggleButtons.forEach((button) => button.addEventListener(
+            "click", () => setRequestMode(button.dataset.requestToggle)
+        ));
+        setRequestMode("cpu");
+        document.querySelectorAll(".ranking-panel").forEach((panel) => {
+            const renderRanking = (requestedMode) => {
+                const mode = requestedMode === "kkb_apps" ? "kkb_apps" : "all";
+                const key = panel.dataset.rankingKey;
+                const items = (dashboardData.executiveRankings[mode]?.[key] || []).slice(0, 10);
+                const output = panel.querySelector("[data-ranking-output]");
+                output.replaceChildren();
+                if (!items.length) {
+                    const empty = document.createElement("p");
+                    empty.textContent = "Bu görünüm için veri yok.";
+                    output.append(empty);
+                } else {
+                    items.forEach((item) => {
+                        const row = document.createElement("div");
+                        row.className = "bar-row";
+                        row.title = `${item.namespace}: ${item.value_text} · cluster kapasitesinin %${item.capacity_percent}`;
+                        row.innerHTML = `<span>${escapeHtml(item.namespace)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(Number(item.capacity_percent), 100)}%"></div></div><strong>${escapeHtml(item.value_text)}</strong>`;
+                        output.append(row);
+                    });
+                }
+                panel.querySelectorAll("[data-ranking-mode]").forEach((candidate) => {
+                    const active = candidate.dataset.rankingMode === mode;
+                    candidate.classList.toggle("is-active", active);
+                    candidate.setAttribute("aria-pressed", String(active));
+                });
+            };
+            panel.querySelectorAll("[data-ranking-mode]").forEach((button) => {
+                button.addEventListener("click", () => renderRanking(button.dataset.rankingMode));
+            });
+            renderRanking("all");
+        });
+        const trendRoot = document.getElementById("executive-trends");
+        const trendKey = `executiveTrend:${dashboardData.cluster}`;
+        let trendHistory = [];
+        try {
+            trendHistory = JSON.parse(localStorage.getItem(trendKey) || "[]");
+            if (!Array.isArray(trendHistory)) trendHistory = [];
+        } catch (_error) { trendHistory = []; }
+        trendHistory.push({
+            timestamp: Date.now(),
+            cpu: Number(dashboardData.executiveTrend.cpu || 0),
+            memory: Number(dashboardData.executiveTrend.memory || 0),
+            health: Number(dashboardData.executiveTrend.health || 0),
+        });
+        trendHistory = trendHistory.slice(-30);
+        localStorage.setItem(trendKey, JSON.stringify(trendHistory));
+        ["cpu", "memory", "health"].forEach((key) => {
+            const values = trendHistory.map((item) => Number(item[key] || 0));
+            const ceiling = Math.max(100, ...values, 1);
+            const width = 300;
+            const height = 70;
+            const points = values.map((value, index) => {
+                const x = values.length === 1 ? width : index * width / (values.length - 1);
+                const y = height - Math.min(value, ceiling) / ceiling * height + 3;
+                return `${x.toFixed(1)},${y.toFixed(1)}`;
+            }).join(" ");
+            trendRoot.querySelector(`[data-sparkline="${key}"] polyline`)
+                .setAttribute("points", points);
+        });
+        {% endif %}
+
+        const root = document.documentElement;
+        const themeToggle = document.getElementById("theme-toggle");
+        const themeKey = "dashboardTheme";
+        const applyTheme = (theme) => {
+            const safeTheme = theme === "dark" ? "dark" : "light";
+            root.dataset.theme = safeTheme;
+            themeToggle.textContent = safeTheme === "dark" ? "Light mode" : "Dark mode";
+            localStorage.setItem(themeKey, safeTheme);
+        };
+        applyTheme(localStorage.getItem(themeKey) || "light");
+        themeToggle.addEventListener("click", () => applyTheme(
+            root.dataset.theme === "dark" ? "light" : "dark"
+        ));
+        const clusterSelect = document.getElementById("cluster");
+        const storedCluster = localStorage.getItem("selectedCluster");
+        if (!new URLSearchParams(window.location.search).has("cluster") &&
+                storedCluster && dashboardData.clusterOptions[storedCluster] &&
+                storedCluster !== dashboardData.cluster) {
+            window.location.replace(`${window.location.pathname}?cluster=${encodeURIComponent(storedCluster)}`);
+            return;
+        }
+        localStorage.setItem("selectedCluster", dashboardData.cluster);
+        clusterSelect.addEventListener("change", () =>
+            localStorage.setItem("selectedCluster", clusterSelect.value)
+        );
+
+        const refresh = document.getElementById("refresh-interval");
+        const manualRefresh = document.getElementById("manual-refresh");
+        const refreshStatus = document.getElementById("refresh-status");
+        const refreshWarning = document.getElementById(
+            "refresh-duration-warning"
+        );
+        const refreshKey = "dashboardRefreshSeconds";
+        refresh.value = localStorage.getItem(refreshKey) || "0";
+        const refreshPage = (forceRefresh = false) => {
+            if (state.refreshInProgress) return;
+            state.refreshInProgress = true;
+            if (state.refreshTimer) {
+                window.clearTimeout(state.refreshTimer);
+                state.refreshTimer = null;
+            }
+            closePopup();
+            manualRefresh.disabled = true;
+            refresh.disabled = true;
+            refreshStatus.textContent = "Refreshing...";
+            sessionStorage.setItem(
+                "dashboardScrollY", String(window.scrollY)
+            );
+            if (forceRefresh) {
+                const url = new URL(window.location.href);
+                url.searchParams.set("refresh", "true");
+                window.location.assign(url.toString());
+            } else {
+                window.location.reload();
+            }
+        };
+        const scheduleRefresh = () => {
+            if (state.refreshTimer) {
+                window.clearTimeout(state.refreshTimer);
+                state.refreshTimer = null;
+            }
+            localStorage.setItem(refreshKey, refresh.value);
+            const seconds = Number(refresh.value);
+            refreshWarning.classList.toggle(
+                "is-visible",
+                seconds === 15 && dashboardData.collectionDuration > 10
+            );
+            if (seconds > 0) {
+                state.refreshTimer = window.setTimeout(
+                    () => refreshPage(false),
+                    seconds * 1000
+                );
+            }
+        };
+        refresh.addEventListener("change", scheduleRefresh);
+        manualRefresh.addEventListener("click", () => refreshPage(true));
+        scheduleRefresh();
+        const savedScrollY = Number(
+            sessionStorage.getItem("dashboardScrollY") || "0"
+        );
+        if (savedScrollY > 0) {
+            window.requestAnimationFrame(() => window.scrollTo(0, savedScrollY));
+            sessionStorage.removeItem("dashboardScrollY");
+        }
+    };
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initializeDashboard);
+    } else {
+        initializeDashboard();
+    }
+</script>
+{% endif %}
+<footer>
+    Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.
+</footer>
 </body>
 </html>

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pod Diagnostics · OpenShift Clusters Monitoring Platform</title>
+    <style>
+        :root { --navy:#132b4f; --orange:#f58220; --border:#d8dee6; }
+        * { box-sizing:border-box; }
+        body { margin:0; background:#f4f5f5; color:#151515; font-family:Arial,sans-serif; }
+        header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 32px; color:white; background:var(--navy); border-bottom:4px solid var(--orange); }
+        .brand { display:flex; align-items:center; gap:14px; }
+        .brand img { width:54px; height:52px; padding:4px; object-fit:contain; background:white; border-radius:6px; }
+        h1 { margin:0; font-size:22px; }
+        header form { display:flex; align-items:center; gap:8px; }
+        select,input,button { padding:9px 11px; border:1px solid #8a8d90; border-radius:4px; background:white; }
+        nav { display:flex; gap:4px; padding:0 32px; overflow:auto; background:#0d213d; }
+        nav a { padding:11px 14px; color:#dbe5ef; text-decoration:none; white-space:nowrap; border-bottom:3px solid transparent; }
+        nav a.active,nav a:hover { color:white; border-color:var(--orange); background:rgba(255,255,255,.06); }
+        main { padding:24px 32px 48px; }
+        .toolbar { display:flex; gap:12px; align-items:end; flex-wrap:wrap; margin-bottom:16px; }
+        .field { display:grid; gap:5px; min-width:240px; }
+        .panel,.table-wrap { background:white; border:1px solid var(--border); border-top:3px solid var(--orange); border-radius:8px; }
+        .panel { padding:18px; }
+        .table-wrap { overflow-x:auto; }
+        table { width:100%; border-collapse:collapse; }
+        th,td { padding:11px 12px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+        th { position:sticky; top:0; background:#edf1f5; }
+        tbody tr:hover { background:#fff5eb; }
+        .badge { display:inline-block; padding:3px 7px; border-radius:10px; font-size:12px; font-weight:bold; }
+        .critical { color:#8a150d; background:#faeae8; }
+        .warning { color:#795600; background:#fdf4d7; }
+        .info { color:#004b95; background:#e7f1fa; }
+        .action { color:white; background:var(--navy); border-color:var(--navy); text-decoration:none; padding:7px 10px; border-radius:4px; white-space:nowrap; }
+        .loading::after { content:""; display:inline-block; width:12px; height:12px; margin-left:8px; border:2px solid #bbb; border-top-color:var(--orange); border-radius:50%; animation:spin .8s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        footer { padding:24px 8px 12px; color:#999; opacity:.75; text-align:center; font-size:11px; }
+        @media(max-width:700px){ header,main{padding-left:16px;padding-right:16px;} nav{padding:0 16px;} }
+    </style>
+</head>
+<body>
+<header>
+    <div class="brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>Pod Diagnostics</h1><small>Read-only troubleshooting</small></div></div>
+    <form method="get" action="/diagnostics"><label for="cluster">Cluster</label><select id="cluster" name="cluster" onchange="this.form.submit()">{% for key,item in cluster_options|dictsort %}<option value="{{ key }}"{% if key == selected_cluster %} selected{% endif %}>{{ item["name"] }}</option>{% endfor %}</select></form>
+</header>
+{% include "_navigation.html" %}
+<main>
+    <h2>Problemli Podlar · {{ selected_cluster_name }}</h2>
+    <div class="toolbar">
+        <div class="field"><label for="diagnostic-search">Search namespace / pod / reason</label><input id="diagnostic-search" type="search" placeholder="Ara..."></div>
+        <div class="field"><label for="diagnostic-namespace">Namespace</label><select id="diagnostic-namespace"><option value="">All Namespaces</option></select></div>
+        <span id="diagnostic-count"></span>
+    </div>
+    <div class="table-wrap">
+        <table><thead><tr><th>Namespace</th><th>Pod</th><th>Phase</th><th>Ready</th><th>Restarts</th><th>Main Reason</th><th>Node</th><th>Age</th><th>Diagnose</th></tr></thead><tbody id="diagnostic-body"><tr><td colspan="9" class="loading"><span class="spinner" aria-hidden="true"></span> Sorunlu podlar yükleniyor...</td></tr></tbody></table>
+    </div>
+</main>
+<footer>Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.</footer>
+<script>
+const cluster = {{ selected_cluster|tojson }};
+const escapeHtml = (value) => String(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+const formatAge = (seconds) => seconds >= 86400 ? `${Math.floor(seconds/86400)}d` : seconds >= 3600 ? `${Math.floor(seconds/3600)}h` : `${Math.floor(seconds/60)}m`;
+const state = {items:[]};
+const search = document.getElementById("diagnostic-search");
+const namespaceFilter = document.getElementById("diagnostic-namespace");
+const body = document.getElementById("diagnostic-body");
+const render = () => {
+    const query = search.value.trim().toLocaleLowerCase("tr");
+    const items = state.items.filter((item) => (!namespaceFilter.value || item.namespace === namespaceFilter.value) && (!query || [item.namespace,item.name,item.reason].some((value) => String(value).toLocaleLowerCase("tr").includes(query))));
+    document.getElementById("diagnostic-count").textContent = `${items.length} problem pod`;
+    body.innerHTML = items.length ? items.map((item) => `<tr><td>${escapeHtml(item.namespace)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.phase)}</td><td>${item.ready}/${item.total}</td><td>${item.restarts}</td><td><span class="badge ${escapeHtml(item.severity)}">${escapeHtml(item.reason)}</span></td><td>${escapeHtml(item.node)}</td><td>${formatAge(item.age_seconds)}</td><td><a class="action" href="/diagnostics/${encodeURIComponent(item.namespace)}/${encodeURIComponent(item.name)}?cluster=${encodeURIComponent(cluster)}">Diagnose</a></td></tr>`).join("") : '<tr><td colspan="9">No problem pods found</td></tr>';
+};
+search.addEventListener("input",render); namespaceFilter.addEventListener("change",render);
+fetch(`/api/diagnostics/pods?cluster=${encodeURIComponent(cluster)}`).then((response) => {if(!response.ok) throw new Error(); return response.json();}).then((data) => {state.items=data.items; [...new Set(state.items.map((item)=>item.namespace))].sort().forEach((name)=>namespaceFilter.add(new Option(name,name))); render();}).catch(()=>{body.innerHTML='<tr><td colspan="9">Pod diagnostics data unavailable</td></tr>';});
+</script>
+</body>
+</html>
