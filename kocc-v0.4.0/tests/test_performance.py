@@ -5,7 +5,7 @@ from app import performance
 
 def test_performance_log_contains_structured_fields(monkeypatch, caplog) -> None:
     monkeypatch.setattr(performance.time, "perf_counter", lambda: 2.5)
-    token = performance.set_perf_cluster("kkbtest")
+    token = performance.set_perf_cluster("ocptrdprod1")
     try:
         with caplog.at_level(logging.INFO, logger="kocc.performance"):
             performance.log_performance(
@@ -14,7 +14,7 @@ def test_performance_log_contains_structured_fields(monkeypatch, caplog) -> None
     finally:
         performance.reset_perf_cluster(token)
 
-    assert "cluster=kkbtest" in caplog.text
+    assert "cluster=ocptrdprod1" in caplog.text
     assert "op=api.list_pods" in caplog.text
     assert "duration_ms=500" in caplog.text
     assert "items=955" in caplog.text

@@ -78,9 +78,9 @@ def test_summary_contract_handles_missing_optional_metrics(
         dashboard_payload()
     )
 
-    data = prepare_dashboard_data("kkbtest")
+    data = prepare_dashboard_data("ocptrdprod1")
 
-    assert data["selected_cluster"] == "kkbtest"
+    assert data["selected_cluster"] == "ocptrdprod1"
     assert data["nodes"]["items"][0]["memory_capacity"] == 0
     assert data["nodes"]["items"][0]["memory_capacity_text"] == "0 B"
     assert data["nodes"]["role_counts"] == {
@@ -115,7 +115,7 @@ def test_dashboard_renders_nodes_items_key(
         dashboard_payload()
     )
 
-    response = client.get("/health-overview?cluster=kkbtest")
+    response = client.get("/health-overview?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert "master-0" in response.text
@@ -248,7 +248,7 @@ def test_dashboard_renders_empty_node_list(
     data["nodes"] = {"items": []}
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/health-overview?cluster=kkbtest")
+    response = client.get("/health-overview?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert "Node Detayları" in response.text
@@ -274,7 +274,7 @@ def test_template_renders_many_namespaces_and_filter_contract(
     ]
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert '<option value="">All Namespaces</option>' in response.text
@@ -290,21 +290,21 @@ def test_namespace_combobox_rebuilds_from_selected_cluster_data(
     _new_cluster_client: Mock,
     collector_class: Mock,
 ) -> None:
-    kkbtest = dashboard_payload()
-    kkbtest["resources"]["namespaces"] = [
+    ocptrdprod1 = dashboard_payload()
+    ocptrdprod1["resources"]["namespaces"] = [
         {"namespace": "zeta"},
         {"namespace": "alpha"},
         {"namespace": "beta"},
     ]
-    rmtest = dashboard_payload()
-    rmtest["resources"]["namespaces"] = [{"namespace": "remote-only"}]
+    ocptrdprod2 = dashboard_payload()
+    ocptrdprod2["resources"]["namespaces"] = [{"namespace": "remote-only"}]
     collector_class.return_value.collect_dashboard.side_effect = [
-        kkbtest,
-        rmtest,
+        ocptrdprod1,
+        ocptrdprod2,
     ]
 
-    local_response = client.get("/resources?cluster=kkbtest")
-    remote_response = client.get("/resources?cluster=rmtest")
+    local_response = client.get("/resources?cluster=ocptrdprod1")
+    remote_response = client.get("/resources?cluster=ocptrdprod2")
 
     assert local_response.status_code == 200
     assert local_response.text.index('value="alpha"') < local_response.text.index(
@@ -330,7 +330,7 @@ def test_namespace_combobox_handles_empty_namespace_list(
     data["resources"]["namespaces"] = []
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     select = response.text.split('<select id="namespace-filter"', 1)[1].split(
@@ -358,7 +358,7 @@ def test_overcommit_calculation_uses_capacity(
     )
     collector_class.return_value.collect_dashboard.return_value = data
 
-    result = prepare_dashboard_data("kkbtest")["resources"]["cluster"]
+    result = prepare_dashboard_data("ocptrdprod1")["resources"]["cluster"]
 
     assert result["cpu_limit_percent"] == 150.0
     assert result["cpu_overcommit_ratio"] == 1.5
@@ -390,7 +390,7 @@ def test_template_contains_popup_refresh_search_and_toggle_contract(
         dashboard_payload()
     )
 
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert '<option value="15">15 sec</option>' in response.text
@@ -402,7 +402,7 @@ def test_template_contains_popup_refresh_search_and_toggle_contract(
     assert "window.clearTimeout(state.refreshTimer)" in response.text
     assert "window.__koccDashboardInitialized" in response.text
     clear_dashboard_cache()
-    health_response = client.get("/health-overview?cluster=kkbtest")
+    health_response = client.get("/health-overview?cluster=ocptrdprod1")
     assert "CPU requests: kapasitenin" in health_response.text
 
 
@@ -421,7 +421,7 @@ def test_namespace_resource_numeric_sort_contract_supports_mixed_units(
     ]
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     cpu_values = [int(value) for value in re.findall(
@@ -472,7 +472,7 @@ def test_missing_resource_search_pagination_csv_and_single_flight_contract(
     }
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/resources?cluster=rmtest")
+    response = client.get("/resources?cluster=ocptrdprod2")
 
     assert response.status_code == 200
     assert "missingPageSize: 50" in response.text
@@ -504,7 +504,7 @@ def test_namespace_search_filters_rows_with_single_pipeline(
     ]
     collector_class.return_value.collect_dashboard.return_value = data
 
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert "const searchQuery = search.value.trim().toLocaleLowerCase" in response.text
@@ -529,7 +529,7 @@ def test_health_returns_200() -> None:
 
 
 def test_diagnostics_loading_text_is_turkish() -> None:
-    response = client.get("/diagnostics?cluster=kkbtest")
+    response = client.get("/diagnostics?cluster=ocptrdprod1")
     assert response.status_code == 200
     assert "Sorunlu podlar yükleniyor..." in response.text
 
@@ -553,9 +553,9 @@ def test_diagnostics_pages_are_lazy_and_render(
     new_cluster_client: Mock,
     collector_class: Mock,
 ) -> None:
-    listing = client.get("/diagnostics?cluster=kkbtest")
+    listing = client.get("/diagnostics?cluster=ocptrdprod1")
     detail = client.get(
-        "/diagnostics/apps/api-123?cluster=kkbtest"
+        "/diagnostics/apps/api-123?cluster=ocptrdprod1"
     )
 
     assert listing.status_code == 200
@@ -569,7 +569,7 @@ def test_diagnostics_pages_are_lazy_and_render(
 
 def test_diagnostic_log_tail_validation() -> None:
     response = client.get(
-        "/api/diagnostics/apps/api-123?cluster=kkbtest&tail=42"
+        "/api/diagnostics/apps/api-123?cluster=ocptrdprod1&tail=42"
     )
     assert response.status_code == 400
 
@@ -577,18 +577,35 @@ def test_diagnostic_log_tail_validation() -> None:
 @patch("app.main.prepare_dashboard_data")
 def test_cache_is_cluster_isolated(prepare_data: Mock) -> None:
     prepare_data.side_effect = [
-        {"selected_cluster": "kkbtest"},
-        {"selected_cluster": "rmtest"},
+        {"selected_cluster": "ocptrdprod1"},
+        {"selected_cluster": "ocptrdprod2"},
     ]
 
-    first = cached_dashboard_data("kkbtest")
-    second = cached_dashboard_data("kkbtest")
-    remote = cached_dashboard_data("rmtest")
+    first = cached_dashboard_data("ocptrdprod1")
+    second = cached_dashboard_data("ocptrdprod1")
+    remote = cached_dashboard_data("ocptrdprod2")
 
     assert first["cache"]["hit"] is False
     assert second["cache"]["hit"] is True
-    assert remote["selected_cluster"] == "rmtest"
+    assert remote["selected_cluster"] == "ocptrdprod2"
     assert prepare_data.call_count == 2
+
+
+@patch("app.main.prepare_dashboard_data")
+def test_production_cache_isolated_across_all_three_clusters(
+    prepare_data: Mock,
+) -> None:
+    prepare_data.side_effect = lambda cluster: {"selected_cluster": cluster}
+    results = {
+        key: cached_dashboard_data(key)
+        for key in ("ocptrdprod1", "ocptrdprod2", "ocptrddr1")
+    }
+    assert {key: value["selected_cluster"] for key, value in results.items()} == {
+        "ocptrdprod1": "ocptrdprod1",
+        "ocptrdprod2": "ocptrdprod2",
+        "ocptrddr1": "ocptrddr1",
+    }
+    assert prepare_data.call_count == 3
 
 
 @patch("app.main.prepare_dashboard_data")
@@ -598,8 +615,8 @@ def test_cache_hit_and_miss_are_logged(
     prepare_data.return_value = {"snapshot": True}
 
     with caplog.at_level("INFO", logger="kocc.performance"):
-        cached_dashboard_data("kkbtest")
-        cached_dashboard_data("kkbtest")
+        cached_dashboard_data("ocptrdprod1")
+        cached_dashboard_data("ocptrdprod1")
 
     assert "op=cache.snapshot" in caplog.text
     assert "cache_hit=false" in caplog.text
@@ -612,9 +629,9 @@ def test_cache_force_refresh_bypasses_fresh_snapshot(
 ) -> None:
     prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
     with caplog.at_level("INFO", logger="kocc"):
-        assert cached_dashboard_data("kkbtest")["generation"] == 1
-        assert cached_dashboard_data("kkbtest")["generation"] == 1
-        assert cached_dashboard_data("kkbtest", force_refresh=True)["generation"] == 2
+        assert cached_dashboard_data("ocptrdprod1")["generation"] == 1
+        assert cached_dashboard_data("ocptrdprod1")["generation"] == 1
+        assert cached_dashboard_data("ocptrdprod1", force_refresh=True)["generation"] == 2
     assert prepare_data.call_count == 2
     assert "cache=MISS" in caplog.text
     assert "cache=HIT" in caplog.text
@@ -628,8 +645,8 @@ def test_overview_and_resources_share_cluster_snapshot(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
-    assert client.get("/?cluster=kkbtest").status_code == 200
-    assert client.get("/resources?cluster=kkbtest").status_code == 200
+    assert client.get("/?cluster=ocptrdprod1").status_code == 200
+    assert client.get("/resources?cluster=ocptrdprod1").status_code == 200
     collector_class.return_value.collect_dashboard.assert_called_once()
 
 
@@ -638,8 +655,8 @@ def test_overview_and_resources_share_cluster_snapshot(
 def test_cache_expiry_recollects(prepare_data: Mock) -> None:
     prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
 
-    assert cached_dashboard_data("kkbtest")["generation"] == 1
-    assert cached_dashboard_data("kkbtest")["generation"] == 2
+    assert cached_dashboard_data("ocptrdprod1")["generation"] == 1
+    assert cached_dashboard_data("ocptrdprod1")["generation"] == 2
     assert prepare_data.call_count == 2
 
 
@@ -653,8 +670,8 @@ def test_cache_serves_marked_stale_snapshot_after_failure(
         RuntimeError("temporary cluster failure"),
     ]
 
-    cached_dashboard_data("kkbtest")
-    stale = cached_dashboard_data("kkbtest")
+    cached_dashboard_data("ocptrdprod1")
+    stale = cached_dashboard_data("ocptrdprod1")
 
     assert stale["generation"] == 1
     assert stale["cache"]["stale"] is True
@@ -664,7 +681,7 @@ def test_cache_serves_marked_stale_snapshot_after_failure(
 def test_api_summary_returns_dashboard_contract(prepare_data: Mock) -> None:
     prepare_data.return_value = dashboard_payload()
 
-    response = client.get("/api/summary?cluster=kkbtest")
+    response = client.get("/api/summary?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     body = response.json()
@@ -684,7 +701,7 @@ def test_unknown_cluster_returns_400() -> None:
 def test_unexpected_errors_do_not_leak_details(new_cluster_client: Mock) -> None:
     new_cluster_client.side_effect = RuntimeError("sensitive internal detail")
 
-    response = client.get("/api/summary?cluster=kkbtest")
+    response = client.get("/api/summary?cluster=ocptrdprod1")
 
     assert response.status_code == 500
     assert "sensitive internal detail" not in response.text
@@ -701,7 +718,7 @@ def test_optional_workload_api_isolated_failure(
     )
 
     response = client.get(
-        "/api/workloads?cluster=kkbtest&namespace=empty"
+        "/api/workloads?cluster=ocptrdprod1&namespace=empty"
     )
 
     assert response.status_code == 200
@@ -729,7 +746,7 @@ def test_pvc_api_formats_requested_capacity(
         }],
     }
 
-    response = client.get("/api/pvcs?cluster=kkbtest")
+    response = client.get("/api/pvcs?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert response.json()["requested_capacity_text"] == "1 GiB"
@@ -749,7 +766,7 @@ def test_route_api_contract(
         "service": "web",
     }]
 
-    response = client.get("/api/routes?cluster=rmtest")
+    response = client.get("/api/routes?cluster=ocptrdprod2")
 
     assert response.status_code == 200
     assert response.json()["items"][0]["host"] == "portal.example"
@@ -774,7 +791,7 @@ def test_template_contains_p3_p4_contracts(
     }
     for route, expected in pages.items():
         clear_dashboard_cache()
-        response = client.get(f"{route}?cluster=kkbtest")
+        response = client.get(f"{route}?cluster=ocptrdprod1")
         assert response.status_code == 200
         assert expected in response.text
         assert "dashboardTheme" in response.text
@@ -791,7 +808,7 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     collector = collector_class.return_value
     collector.collect_dashboard.return_value = dashboard_payload()
 
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/?cluster=ocptrdprod1")
 
     assert response.status_code == 200
     assert "Executive Summary" in response.text
@@ -804,8 +821,8 @@ def test_overview_is_compact_and_lazy_apis_are_not_called(
     assert "Namespace Resource Özeti" not in response.text
     assert "Missing Requests / Limits</h2>" not in response.text
     assert "Route Search" not in response.text
-    assert 'href="/resources?cluster=kkbtest"' in response.text
-    assert 'href="/workloads?cluster=kkbtest"' in response.text
+    assert 'href="/resources?cluster=ocptrdprod1"' in response.text
+    assert 'href="/workloads?cluster=ocptrdprod1"' in response.text
     collector.get_workload_summary.assert_not_called()
     collector.get_pvc_summary.assert_not_called()
     collector.collect_dashboard.assert_called_once()
@@ -975,7 +992,7 @@ def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
 @patch("app.main.cached_dashboard_data")
 def test_lightweight_pages_do_not_collect_dashboard(cached_data: Mock) -> None:
     for route in ("/workloads", "/storage", "/routes", "/diagnostics"):
-        response = client.get(f"{route}?cluster=kkbtest")
+        response = client.get(f"{route}?cluster=ocptrdprod1")
         assert response.status_code == 200
     cached_data.assert_not_called()
 
@@ -986,7 +1003,7 @@ def test_platform_page_renders_without_loading_lazy_apis(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
-    response = client.get("/platform?cluster=kkbtest")
+    response = client.get("/platform?cluster=ocptrdprod1")
     assert response.status_code == 200
     assert "Platform Overview" in response.text
     assert "EgressIP" in response.text
@@ -999,7 +1016,7 @@ def test_egressip_api_failure_is_isolated(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.get_egressip_summary.side_effect = RuntimeError("denied")
-    result = optional_cluster_data("kkbtest", "egressips")
+    result = optional_cluster_data("ocptrdprod1", "egressips")
     assert result == {"available": False, "items": []}
 
 
@@ -1009,7 +1026,7 @@ def test_egressip_403_returns_friendly_permission_contract(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.get_egressip_summary.side_effect = ApiException(status=403)
-    result = optional_cluster_data("rmtest", "egressips")
+    result = optional_cluster_data("ocptrdprod2", "egressips")
     assert result["available"] is False
     assert result["error_code"] == "permission_denied"
     assert result["required_permission"] == "get/list egressips.k8s.ovn.org"
@@ -1019,9 +1036,9 @@ def test_egressip_403_returns_friendly_permission_contract(
 @patch("app.main.optional_cluster_data")
 def test_platform_widget_cache_is_cluster_scoped_for_sixty_seconds(loader: Mock) -> None:
     loader.return_value = {"available": True, "total": 1, "items": []}
-    first = cached_platform_data("kkbtest", "egressips")
-    second = cached_platform_data("kkbtest", "egressips")
-    remote = cached_platform_data("rmtest", "egressips")
+    first = cached_platform_data("ocptrdprod1", "egressips")
+    second = cached_platform_data("ocptrdprod1", "egressips")
+    remote = cached_platform_data("ocptrdprod2", "egressips")
     assert first == second == remote
     assert loader.call_count == 2
 
@@ -1034,7 +1051,7 @@ def test_shared_navigation_is_consistent_on_all_portal_pages(
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
     expected = ["Overview", "Resources", "Workloads", "Platform", "Health", "Diagnostics"]
     for route in ("/", "/resources", "/workloads", "/platform", "/health-overview", "/storage", "/routes", "/diagnostics", "/diagnostics/ns/pod"):
-        response = client.get(f"{route}?cluster=kkbtest")
+        response = client.get(f"{route}?cluster=ocptrdprod1")
         assert response.status_code == 200
         nav = response.text.split('aria-label="Dashboard navigation"', 1)[1].split("</nav>", 1)[0]
         assert all(label in nav for label in expected)
@@ -1070,7 +1087,7 @@ def test_active_request_and_unhandled_exception_logging(caplog) -> None:
         app.add_api_route("/_test_unhandled", explode)
     non_raising_client = TestClient(app, raise_server_exceptions=False)
     with caplog.at_level("INFO", logger="kocc"):
-        response = non_raising_client.get("/_test_unhandled?cluster=kkbtest")
+        response = non_raising_client.get("/_test_unhandled?cluster=ocptrdprod1")
         healthy = non_raising_client.get("/api/clusters")
     assert response.status_code == 500
     assert healthy.status_code == 200
@@ -1128,7 +1145,7 @@ def test_rendered_resources_javascript_parses(
     if not bun:
         pytest.skip("bun is not installed")
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
-    response = client.get("/resources?cluster=kkbtest")
+    response = client.get("/resources?cluster=ocptrdprod1")
     scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", response.text, re.S)
     inline = next(script for script in scripts if "initializeDashboard" in script)
     completed = subprocess.run(
@@ -1147,7 +1164,7 @@ def test_rendered_executive_javascript_parses(
     if not bun:
         pytest.skip("bun is not installed")
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
-    response = client.get("/?cluster=kkbtest")
+    response = client.get("/?cluster=ocptrdprod1")
     scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", response.text, re.S)
     inline = next(script for script in scripts if "initializeDashboard" in script)
     completed = subprocess.run(
@@ -1203,10 +1220,10 @@ def test_dedicated_missing_resources_api_and_csv_share_filter(
         "resources": {"missing_resources": {"all": {"records": records}}}
     }
     response = client.get(
-        "/api/resources/missing?cluster=rmtest&q=sandbox&page=1&page_size=50"
+        "/api/resources/missing?cluster=ocptrdprod2&q=sandbox&page=1&page_size=50"
     )
     csv_response = client.get(
-        "/api/resources/missing.csv?cluster=rmtest&q=sandbox"
+        "/api/resources/missing.csv?cluster=ocptrdprod2&q=sandbox"
     )
     assert response.status_code == 200
     assert response.json()["total"] == 1
@@ -1226,7 +1243,7 @@ def test_resources_server_side_fallback_search(
                "items": [], "more_count": 0, "records": records}
     data["resources"]["missing_resources"] = {"application": summary, "all": summary}
     collector_class.return_value.collect_dashboard.return_value = data
-    response = client.get("/resources?cluster=kkbtest&missing_q=sandbox")
+    response = client.get("/resources?cluster=ocptrdprod1&missing_q=sandbox")
     tbody = response.text.split('id="missing-resource-body"', 1)[1].split("</tbody>", 1)[0]
     assert "sandbox-a" in tbody
     assert "conjur" not in tbody
@@ -1269,8 +1286,8 @@ def test_diagnostics_reuses_compact_dashboard_snapshot(
     }]
     collector = collector_class.return_value
     collector.collect_dashboard.return_value = data
-    assert client.get("/?cluster=kkbtest").status_code == 200
-    response = client.get("/api/diagnostics/pods?cluster=kkbtest")
+    assert client.get("/?cluster=ocptrdprod1").status_code == 200
+    response = client.get("/api/diagnostics/pods?cluster=ocptrdprod1")
     assert response.status_code == 200
     assert response.json()["items"][0]["name"] == "api"
     collector.get_problem_pods.assert_not_called()
@@ -1282,6 +1299,6 @@ def test_diagnostics_collects_when_dashboard_snapshot_is_absent(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.get_problem_pods.return_value = []
-    response = client.get("/api/diagnostics/pods?cluster=rmtest")
+    response = client.get("/api/diagnostics/pods?cluster=ocptrdprod2")
     assert response.status_code == 200
     collector_class.return_value.get_problem_pods.assert_called_once()

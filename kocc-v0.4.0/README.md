@@ -1,5 +1,30 @@
 # OpenShift Clusters Monitoring Platform v0.4.0
 
+## Production Phase 1
+
+Production portal `ocp-monitoring-portal-prod` namespace'inde çalışır ve yalnız
+şu cluster registry'sini sunar:
+
+- `ocptrdprod1` (`OCPTRDPROD1`): local in-cluster bağlantı ve varsayılan cluster
+- `ocptrdprod2` (`OCPTRDPROD2`): `/etc/portal/clusters/ocptrdprod2.kubeconfig`
+- `ocptrddr1` (`OCPTRDDR1`): `/etc/portal/clusters/ocptrddr1.kubeconfig`
+
+Production kaynakları `openshift/kocc-prod.yaml`, iki remote cluster için ortak
+read-only RBAC şablonu `openshift/kocc-remote-readonly.yaml` dosyasındadır.
+Gerçek kubeconfig içerikleri Git'e eklenmez. Secret operasyonel olarak oluşturulur:
+
+```bash
+oc project ocp-monitoring-portal-prod
+oc create secret generic kocc-remote-clusters \
+  --from-file=ocptrdprod2.kubeconfig=./ocptrdprod2.kubeconfig \
+  --from-file=ocptrddr1.kubeconfig=./ocptrddr1.kubeconfig
+oc apply -f openshift/kocc-prod.yaml
+```
+
+Remote RBAC şablonu her remote cluster'a ayrı uygulanır. Kubeconfig içindeki
+kimlik `system:serviceaccount:prod-portal-integration:portal-monitor` olmalıdır;
+uygulama host, token, CA veya kullanıcı adını hardcode etmez.
+
 Bu release, OpenShift Clusters Monitoring Platform'a ilk multi-cluster
 altyapısını ekler.
 

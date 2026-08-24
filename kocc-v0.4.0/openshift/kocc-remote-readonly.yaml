@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-portal-integration
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portal-monitor
+  namespace: prod-portal-integration
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: portal-monitor-readonly
+rules:
+  - apiGroups: [""]
+    resources: [nodes, namespaces, pods, persistentvolumeclaims]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get, list]
+  - apiGroups: [config.openshift.io]
+    resources: [clusterversions, clusteroperators]
+    verbs: [get, list]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list]
+  - apiGroups: [k8s.ovn.org]
+    resources: [egressips]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portal-monitor-readonly
+subjects:
+  - kind: ServiceAccount
+    name: portal-monitor
+    namespace: prod-portal-integration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: portal-monitor-readonly

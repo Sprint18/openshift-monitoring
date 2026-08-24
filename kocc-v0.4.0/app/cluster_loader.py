@@ -6,30 +6,42 @@ from pathlib import Path
 from kubernetes import client, config
 
 
+REMOTE_CLUSTER_DIR = Path("/etc/portal/clusters")
+
+
 @dataclass(frozen=True)
 class ClusterDefinition:
     key: str
     name: str
     connection_type: str
-    kubeconfig_path: str | None = None
     kubeconfig_context: str | None = None
+
+    @property
+    def kubeconfig_path(self) -> Path | None:
+        if self.connection_type != "kubeconfig":
+            return None
+        return REMOTE_CLUSTER_DIR / f"{self.key}.kubeconfig"
 
 
 CLUSTERS: dict[str, ClusterDefinition] = {
-    "kkbtest": ClusterDefinition(
-        key="kkbtest",
-        name="KKBTEST",
+    "ocptrdprod1": ClusterDefinition(
+        key="ocptrdprod1",
+        name="OCPTRDPROD1",
         connection_type="incluster",
     ),
-    "rmtest": ClusterDefinition(
-        key="rmtest",
-        name="RMTEST",
+    "ocptrdprod2": ClusterDefinition(
+        key="ocptrdprod2",
+        name="OCPTRDPROD2",
         connection_type="kubeconfig",
-        kubeconfig_path="/etc/portal/clusters/rmtest.kubeconfig",
+    ),
+    "ocptrddr1": ClusterDefinition(
+        key="ocptrddr1",
+        name="OCPTRDDR1",
+        connection_type="kubeconfig",
     ),
 }
 
-DEFAULT_CLUSTER = "kkbtest"
+DEFAULT_CLUSTER = "ocptrdprod1"
 
 
 class ClusterNotFoundError(ValueError):
@@ -72,7 +84,7 @@ def new_cluster_client(cluster_key: str) -> client.ApiClient:
                 f"{definition.name} için kubeconfig yolu tanımlı değil."
             )
 
-        kubeconfig_path = Path(definition.kubeconfig_path)
+        kubeconfig_path = definition.kubeconfig_path
         if not kubeconfig_path.is_file():
             raise ClusterConfigurationError(
                 f"{definition.name} kubeconfig dosyası bulunamadı: {kubeconfig_path}"
