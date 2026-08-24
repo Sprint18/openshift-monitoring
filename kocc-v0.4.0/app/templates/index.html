@@ -402,6 +402,8 @@
         .status-pill.healthy { color: #075f40; background: #d5f2e5; }
         .status-pill.warning, .status-pill.high { color: #874400; background: #fff0d5; }
         .status-pill.critical, .status-pill.unavailable { color: #8b1620; background: #fde4e6; }
+        .status-pill.unassigned { color: #8b1620; background: #fde4e6; }
+        .egress-unassigned { background: #fff1df !important; }
         .risk-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
         .risk-card { text-align: center; padding: 18px; border: 1px solid var(--surface-border); border-radius: 10px; }
         .risk-value { font-size: 30px; font-weight: 800; margin: 10px 0; }
@@ -664,18 +666,7 @@
         </form>
     </div>
 </header>
-<nav class="primary-nav" aria-label="Dashboard navigation">
-    {% for route, label, page_key in [
-        ("/", "Overview", "overview"),
-        ("/resources", "Resources", "resources"),
-        ("/workloads", "Workloads", "workloads"),
-        ("/platform", "Platform", "platform"),
-        ("/health-overview", "Health", "health"),
-        ("/diagnostics", "Diagnostics", "diagnostics")
-    ] %}
-    <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
-    {% endfor %}
-</nav>
+{% include "_navigation.html" %}
 
 <main>
     <div class="table-toolbar">
@@ -788,16 +779,8 @@
     <div class="executive-grid">
         {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
         <section class="executive-panel ranking-panel" data-ranking-key="{{ key }}">
-            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All</button><button type="button" data-ranking-mode="application" title="sandbox- / uat- / test- / beta- / prod-">KKB Apps</button></div></div>
-            {% for ranking_mode in ["all", "application"] %}<div class="bar-chart" data-ranking-list="{{ ranking_mode }}" {% if ranking_mode == "application" %}hidden{% endif %}>
-                {% for item in executive["rankings"][ranking_mode][key] %}
-                <div class="bar-row" title="{{ item['namespace'] }}: {{ item['value_text'] }} · cluster kapasitesinin %{{ item['capacity_percent'] }}">
-                    <span>{{ item["namespace"] }}</span>
-                    <div class="bar-track"><div class="bar-fill" style="width: {{ [item['capacity_percent'], 100]|min }}%"></div></div>
-                    <strong>{{ item["value_text"] }}</strong>
-                </div>
-                {% else %}<p>Bu görünüm için veri yok.</p>{% endfor %}
-            </div>{% endfor %}
+            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All</button><button type="button" data-ranking-mode="kkb_apps" title="sandbox- / uat- / test- / beta- / prod-">KKB Apps</button></div></div>
+            <div class="bar-chart" data-ranking-output></div>
         </section>
         {% endfor %}
     </div>
@@ -863,7 +846,7 @@
         </div>
     </section>
     <section class="executive-panel"><h2>Critical Controls</h2><div class="control-list" id="critical-controls">{% for control in controls %}<a class="control-row" href="{{ '/diagnostics' if control['name'] == 'Conjur Pods' else '/health-overview' }}?cluster={{ selected_cluster }}"><span>{{ control["name"] }}</span><span>{{ control["detail"] }}</span><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></a>{% endfor %}<a class="control-row" href="/health-overview?cluster={{ selected_cluster }}"><span>Cluster Operators</span><span>{{ operators["healthy"] if operators["available"] else "API unavailable" }}</span><span class="status-pill {{ 'healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'warning' }}">{{ 'Healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'Warning' }}</span></a><div class="control-row"><span>EgressIP</span><span id="egress-control-detail">Loading…</span><span id="egress-control-status" class="status-pill unavailable">Unavailable</span></div></div></section>
-    <section class="executive-panel" id="egressip-section"><h2>EgressIP</h2><div id="egressip-results" class="loading-inline">Loading EgressIP data…</div></section>
+    <section class="executive-panel" id="egressip-section"><h2>EgressIP</h2><div class="table-toolbar"><label>Search <input id="egress-search" type="search" placeholder="Name, IP, namespace, node, status"></label><span id="egress-result-info"></span></div><div id="egressip-results" class="loading-inline">Loading EgressIP data…</div><div class="pagination-controls"><button type="button" id="egress-prev">Previous</button><span id="egress-page-info">Page 1 / 1</span><button type="button" id="egress-next">Next</button></div></section>
     <div class="executive-grid"><section class="executive-panel"><h2>Storage Overview</h2><div id="platform-storage" class="loading-inline">Loading storage data…</div><p><a href="/storage?cluster={{ selected_cluster }}">View Storage →</a></p></section><section class="executive-panel"><h2>Route Overview</h2><div id="platform-routes" class="loading-inline">Loading route data…</div><p><a href="/routes?cluster={{ selected_cluster }}">View Routes →</a></p></section></div>
     {% endif %}
 
@@ -1444,6 +1427,7 @@
     "missingApplicationRecords": data["resources"]["missing_resources"]["application"]["records"] if page == "resources" else [],
     "missingAllRecords": data["resources"]["missing_resources"]["all"]["records"] if page == "resources" else [],
     "executiveTrend": data["executive"]["trend"] if page == "overview" else {},
+    "executiveRankings": {"all": data["executive"]["rankings"]["all"], "kkb_apps": data["executive"]["rankings"]["kkb_apps"]} if page == "overview" else {},
     "collectionDuration": data["collection_duration_seconds"]
 }|tojson }}</script>
 <script src="/static/missing_resources.js"></script>
@@ -2005,6 +1989,35 @@
         {% endif %}
 
         {% if page == "platform" %}
+        const egressState = {items: [], page: 1, pageSize: 25, sortKey: "status", direction: "desc"};
+        const renderEgress = () => {
+            const target = document.getElementById("egressip-results");
+            const query = document.getElementById("egress-search").value.trim().toLocaleLowerCase("tr");
+            const filtered = egressState.items.filter((item) => [item.name, item.egress_ip, item.namespace_selector, item.assigned_node, item.status].some((value) => String(value).toLocaleLowerCase("tr").includes(query)));
+            filtered.sort((left, right) => {
+                const a = String(left[egressState.sortKey] || "");
+                const b = String(right[egressState.sortKey] || "");
+                const compared = a.localeCompare(b, "tr", {numeric: true});
+                return egressState.direction === "desc" ? -compared : compared;
+            });
+            const pages = Math.max(1, Math.ceil(filtered.length / egressState.pageSize));
+            egressState.page = Math.min(egressState.page, pages);
+            const start = (egressState.page - 1) * egressState.pageSize;
+            const visible = filtered.slice(start, start + egressState.pageSize);
+            target.innerHTML = visible.length ? `<div class="table-wrapper"><table><thead><tr>${[["name","EgressIP Name"],["egress_ip","Egress IP"],["namespace_selector","Namespace Selector"],["assigned_node","Assigned Node"],["status","Status"]].map(([key,label]) => `<th><button type="button" class="sortable-header" data-egress-sort="${key}">${label}</button></th>`).join("")}</tr></thead><tbody>${visible.map((item) => `<tr class="${item.status === "Unassigned" ? "egress-unassigned" : ""}"><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.egress_ip)}</td><td>${escapeHtml(item.namespace_selector)}</td><td>${escapeHtml(item.assigned_node)}</td><td><span class="status-pill ${item.status.toLowerCase()}">${escapeHtml(item.status)}</span></td></tr>`).join("")}</tbody></table></div>` : "No matching EgressIP resources";
+            target.querySelectorAll("[data-egress-sort]").forEach((button) => button.addEventListener("click", () => {
+                const key = button.dataset.egressSort;
+                egressState.direction = egressState.sortKey === key && egressState.direction === "asc" ? "desc" : "asc";
+                egressState.sortKey = key; egressState.page = 1; renderEgress();
+            }));
+            document.getElementById("egress-result-info").textContent = filtered.length ? `${start + 1}-${Math.min(start + egressState.pageSize, filtered.length)} / ${filtered.length} EgressIP` : "0 EgressIP";
+            document.getElementById("egress-page-info").textContent = `Page ${egressState.page} / ${pages}`;
+            document.getElementById("egress-prev").disabled = egressState.page === 1;
+            document.getElementById("egress-next").disabled = egressState.page === pages;
+        };
+        document.getElementById("egress-search").addEventListener("input", () => { egressState.page = 1; renderEgress(); });
+        document.getElementById("egress-prev").addEventListener("click", () => { egressState.page -= 1; renderEgress(); });
+        document.getElementById("egress-next").addEventListener("click", () => { egressState.page += 1; renderEgress(); });
         const loadPlatform = async () => {
             const cluster = encodeURIComponent(dashboardData.cluster);
             const [egress, pvcs, routes] = await Promise.all([
@@ -2016,7 +2029,7 @@
             const egressStatus = egress.available ? (egress.unassigned ? "Warning" : "Healthy") : "Unavailable";
             egressKpi.innerHTML = egress.available
                 ? `<strong>${egress.total}</strong> total · ${egress.assigned} assigned<br><span class="${egress.unassigned ? "danger" : "healthy"}">${egress.unassigned} Unassigned${egress.unassigned ? " ⚠" : ""}</span>`
-                : "EgressIP API unavailable";
+                : egress.error_code === "permission_denied" ? `${escapeHtml(egress.message)}<br><small>Gerekli yetki: ${escapeHtml(egress.required_permission)}</small>` : "EgressIP verisi alınamadı.";
             document.getElementById("egress-control-detail").textContent = egress.available ? `${egress.unassigned} Unassigned` : "API unavailable";
             const controlStatus = document.getElementById("egress-control-status");
             controlStatus.textContent = egressStatus;
@@ -2026,9 +2039,8 @@
             const total = Number(platformHealth.dataset.total);
             const platformStatus = healthy === total ? "Healthy" : "Warning";
             platformHealth.innerHTML = `<div class="kpi-value">${healthy}/${total} Healthy</div><span class="status-pill ${platformStatus.toLowerCase()}">${platformStatus}</span>`;
-            document.getElementById("egressip-results").innerHTML = egress.available
-                ? (egress.items.length ? `<div class="table-wrapper"><table><thead><tr><th>EgressIP Name</th><th>Egress IP</th><th>Namespace Selector</th><th>Assigned Node</th><th>Status</th></tr></thead><tbody>${egress.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.egress_ip)}</td><td>${escapeHtml(item.namespace_selector)}</td><td>${escapeHtml(item.assigned_node)}</td><td><span class="status-pill ${item.status.toLowerCase()}">${escapeHtml(item.status)}</span></td></tr>`).join("")}</tbody></table></div>` : "No EgressIP resources")
-                : "EgressIP API unavailable";
+            if (egress.available) { egressState.items = egress.items; renderEgress(); }
+            else document.getElementById("egressip-results").innerHTML = egress.error_code === "permission_denied" ? `<p>EgressIP verisi alınamadı.</p><p>${escapeHtml(egress.message)}</p><p>Gerekli yetki: <code>${escapeHtml(egress.required_permission)}</code></p>` : "EgressIP verisi alınamadı.";
             document.getElementById("platform-storage").innerHTML = pvcs.available
                 ? `<strong>${pvcs.total} PVC</strong><br>${pvcs.bound} Bound · ${pvcs.pending} Pending · ${pvcs.lost || 0} Lost<br>${escapeHtml(pvcs.requested_capacity_text)} requested<br>StorageClasses: ${escapeHtml(Object.entries(pvcs.storage_classes || {}).map(([name,count]) => `${name} (${count})`).join(", ") || "N/A")}`
                 : "PVC data unavailable";
@@ -2143,19 +2155,35 @@
         ));
         setRequestMode("cpu");
         document.querySelectorAll(".ranking-panel").forEach((panel) => {
-            panel.querySelectorAll("[data-ranking-mode]").forEach((button) => {
-                button.addEventListener("click", () => {
-                    const mode = button.dataset.rankingMode === "application" ? "application" : "all";
-                    panel.querySelectorAll("[data-ranking-list]").forEach((list) => {
-                        list.hidden = list.dataset.rankingList !== mode;
+            const renderRanking = (requestedMode) => {
+                const mode = requestedMode === "kkb_apps" ? "kkb_apps" : "all";
+                const key = panel.dataset.rankingKey;
+                const items = (dashboardData.executiveRankings[mode]?.[key] || []).slice(0, 10);
+                const output = panel.querySelector("[data-ranking-output]");
+                output.replaceChildren();
+                if (!items.length) {
+                    const empty = document.createElement("p");
+                    empty.textContent = "Bu görünüm için veri yok.";
+                    output.append(empty);
+                } else {
+                    items.forEach((item) => {
+                        const row = document.createElement("div");
+                        row.className = "bar-row";
+                        row.title = `${item.namespace}: ${item.value_text} · cluster kapasitesinin %${item.capacity_percent}`;
+                        row.innerHTML = `<span>${escapeHtml(item.namespace)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.min(Number(item.capacity_percent), 100)}%"></div></div><strong>${escapeHtml(item.value_text)}</strong>`;
+                        output.append(row);
                     });
-                    panel.querySelectorAll("[data-ranking-mode]").forEach((candidate) => {
-                        const active = candidate.dataset.rankingMode === mode;
-                        candidate.classList.toggle("is-active", active);
-                        candidate.setAttribute("aria-pressed", String(active));
-                    });
+                }
+                panel.querySelectorAll("[data-ranking-mode]").forEach((candidate) => {
+                    const active = candidate.dataset.rankingMode === mode;
+                    candidate.classList.toggle("is-active", active);
+                    candidate.setAttribute("aria-pressed", String(active));
                 });
+            };
+            panel.querySelectorAll("[data-ranking-mode]").forEach((button) => {
+                button.addEventListener("click", () => renderRanking(button.dataset.rankingMode));
             });
+            renderRanking("all");
         });
         const trendRoot = document.getElementById("executive-trends");
         const trendKey = `executiveTrend:${dashboardData.cluster}`;

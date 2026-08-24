@@ -7,6 +7,7 @@ import io
 import math
 import threading
 import time
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,9 +42,25 @@ from app.resource_parser import format_cpu, format_memory
 
 logger = logging.getLogger("kocc")
 
+
+@asynccontextmanager
+async def app_lifespan(application: FastAPI):
+    logger.info(
+        "app_start pid=%s version=%s timestamp=%s",
+        os.getpid(), application.version, datetime.now(timezone.utc).isoformat(),
+    )
+    try:
+        yield
+    finally:
+        logger.info(
+            "app_shutdown pid=%s timestamp=%s",
+            os.getpid(), datetime.now(timezone.utc).isoformat(),
+        )
+
 app = FastAPI(
     title="OpenShift Clusters Monitoring Platform",
     version="0.4.0",
+    lifespan=app_lifespan,
 )
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
@@ -63,49 +80,59 @@ def positive_env_seconds(name: str, default: int) -> int:
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
-    "KOCC_SNAPSHOT_TTL_SECONDS", 60
+    "KOCC_SNAPSHOT_TTL_SECONDS", 120
 )
 DIAGNOSTIC_CACHE_TTL_SECONDS = positive_env_seconds(
-    "KOCC_DIAGNOSTICS_CACHE_TTL_SECONDS", 60
+    "KOCC_DIAGNOSTICS_CACHE_TTL_SECONDS", 120
 )
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _diagnostic_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _platform_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
-logger.info(
-    "OpenShift Clusters Monitoring Platform started version=%s pid=%s startup_timestamp=%s",
-    app.version,
-    os.getpid(),
-    datetime.now(timezone.utc).isoformat(),
-)
+_active_requests = 0
+_active_requests_lock = threading.Lock()
 
 
 @app.middleware("http")
 async def request_timing_middleware(request: Request, call_next: Any) -> Any:
+    global _active_requests
     started = time.perf_counter()
     status = 500
     cluster_key = request.query_params.get("cluster", DEFAULT_CLUSTER).lower()
     perf_token = set_perf_cluster(cluster_key)
     path_token = set_perf_path(request.url.path)
+    with _active_requests_lock:
+        _active_requests += 1
+        active_at_start = _active_requests
     try:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.exception(
+                "unhandled_exception path=%s exception_type=%s duration_ms=%s active_requests=%s",
+                request.url.path, type(exc).__name__,
+                round((time.perf_counter() - started) * 1000), active_at_start,
+            )
+            raise
         status = response.status_code
         return response
     finally:
         duration_ms = round((time.perf_counter() - started) * 1000)
-        logger.info(
-            "request path=%s status=%s duration_ms=%s",
-            request.url.path,
-            status,
-            duration_ms,
-        )
-        log_performance(
-            "total.request",
-            started,
-            item_count=1,
-            extra={"path": request.url.path, "status": status},
-        )
+        with _active_requests_lock:
+            _active_requests -= 1
+            active_at_end = _active_requests
+        if request.url.path not in {"/health", "/ready"}:
+            logger.info(
+                "request path=%s cluster=%s status=%s duration_ms=%s active_requests=%s active_requests_after=%s",
+                request.url.path, cluster_key, status, duration_ms,
+                active_at_start, active_at_end,
+            )
+            log_performance(
+                "total.request", started, item_count=1,
+                extra={"path": request.url.path, "status": status,
+                       "active_requests": active_at_start},
+            )
         reset_perf_cluster(perf_token)
         reset_perf_path(path_token)
 
@@ -602,7 +629,7 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
                 "cpu_limit": ranking("cpu", "limit", namespaces),
                 "memory_limit": ranking("memory", "limit", namespaces),
             },
-            "application": {
+            "kkb_apps": {
                 "cpu_request": ranking("cpu", "request", applications),
                 "memory_request": ranking("memory", "request", applications),
                 "cpu_limit": ranking("cpu", "limit", applications),
@@ -1252,6 +1279,20 @@ def optional_cluster_data(
                 "available": True,
                 "items": collector.get_route_summary(),
             }
+        except ApiException as exc:
+            if loader == "egressips" and exc.status == 403:
+                logger.warning(
+                    "platform.egressips denied cluster=%s operation=list status_code=403",
+                    cluster_key,
+                )
+                return {
+                    "available": False, "items": [],
+                    "error_code": "permission_denied",
+                    "message": "Remote cluster kullanıcısında gerekli read yetkisi bulunmuyor.",
+                    "required_permission": "get/list egressips.k8s.ovn.org",
+                }
+            logger.warning("%s data unavailable for cluster %s status_code=%s", loader, cluster_key, exc.status)
+            return {"available": False, "items": [], "error_code": "api_unavailable"}
         except Exception as exc:
             logger.warning(
                 "%s data unavailable for cluster %s: %s",
@@ -1436,6 +1477,7 @@ def diagnostics_template_context(
         "selected_cluster": cluster_key,
         "selected_cluster_name": definitions[cluster_key].name,
         "release": app.version,
+        "page": "diagnostics",
         "namespace": namespace,
         "pod_name": pod_name,
     }

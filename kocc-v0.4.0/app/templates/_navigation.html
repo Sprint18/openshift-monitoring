@@ -1,0 +1,12 @@
+<nav class="primary-nav" aria-label="Dashboard navigation">
+    {% for route, label, page_key in [
+        ("/", "Overview", "overview"),
+        ("/resources", "Resources", "resources"),
+        ("/workloads", "Workloads", "workloads"),
+        ("/platform", "Platform", "platform"),
+        ("/health-overview", "Health", "health"),
+        ("/diagnostics", "Diagnostics", "diagnostics")
+    ] %}
+    <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+</nav>

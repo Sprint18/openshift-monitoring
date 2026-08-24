@@ -43,9 +43,7 @@
     <div class="brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>Pod Diagnostics</h1><small>Read-only troubleshooting</small></div></div>
     <form method="get" action="/diagnostics"><label for="cluster">Cluster</label><select id="cluster" name="cluster" onchange="this.form.submit()">{% for key,item in cluster_options|dictsort %}<option value="{{ key }}"{% if key == selected_cluster %} selected{% endif %}>{{ item["name"] }}</option>{% endfor %}</select></form>
 </header>
-<nav aria-label="Dashboard navigation">
-    <a href="/?cluster={{ selected_cluster }}">Overview</a><a href="/resources?cluster={{ selected_cluster }}">Resources</a><a href="/workloads?cluster={{ selected_cluster }}">Workloads</a><a href="/storage?cluster={{ selected_cluster }}">Storage</a><a href="/routes?cluster={{ selected_cluster }}">Routes</a><a href="/health-overview?cluster={{ selected_cluster }}">Health</a><a class="active" href="/diagnostics?cluster={{ selected_cluster }}">Diagnostics</a>
-</nav>
+{% include "_navigation.html" %}
 <main>
     <h2>Problemli Podlar · {{ selected_cluster_name }}</h2>
     <div class="toolbar">

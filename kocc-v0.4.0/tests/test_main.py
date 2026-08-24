@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from kubernetes.client.exceptions import ApiException
 
 from app.main import (
     DASHBOARD_CACHE_TTL_SECONDS,
@@ -618,7 +619,7 @@ def test_cache_force_refresh_bypasses_fresh_snapshot(
     assert "cache=MISS" in caplog.text
     assert "cache=HIT" in caplog.text
     assert "cache=BYPASS" in caplog.text
-    assert "ttl_ms=60000" in caplog.text
+    assert "ttl_ms=120000" in caplog.text
 
 
 @patch("app.main.ClusterCollector")
@@ -957,11 +958,14 @@ def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
     assert executive["cpu"]["applications_percent"] == 40
     assert executive["cpu"]["unused_percent"] == 20
     assert executive["rankings"]["cpu_request"][0]["namespace"] == "sandbox-app"
-    assert executive["rankings"]["application"]["cpu_request"][0]["namespace"] == "sandbox-app"
+    assert executive["rankings"]["kkb_apps"]["cpu_request"][0]["namespace"] == "sandbox-app"
     assert all(
-        not is_platform_namespace(item["namespace"])
-        for item in executive["rankings"]["application"]["cpu_request"]
+        is_kkb_application_namespace(item["namespace"])
+        for item in executive["rankings"]["kkb_apps"]["cpu_request"]
     )
+    for mode in ("all", "kkb_apps"):
+        for key in ("cpu_request", "memory_request", "cpu_limit", "memory_limit"):
+            assert len(executive["rankings"][mode][key]) <= 10
     assert executive["gauges"]["cpu"]["risk"] == "high"
     assert executive["hotspots"][2]["namespace"] == "sandbox-app"
     assert any("CPU limitleri" in item for item in executive["insights"])
@@ -999,6 +1003,19 @@ def test_egressip_api_failure_is_isolated(
     assert result == {"available": False, "items": []}
 
 
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_egressip_403_returns_friendly_permission_contract(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_egressip_summary.side_effect = ApiException(status=403)
+    result = optional_cluster_data("rmtest", "egressips")
+    assert result["available"] is False
+    assert result["error_code"] == "permission_denied"
+    assert result["required_permission"] == "get/list egressips.k8s.ovn.org"
+    assert "response body" not in result["message"].lower()
+
+
 @patch("app.main.optional_cluster_data")
 def test_platform_widget_cache_is_cluster_scoped_for_sixty_seconds(loader: Mock) -> None:
     loader.return_value = {"available": True, "total": 1, "items": []}
@@ -1007,6 +1024,58 @@ def test_platform_widget_cache_is_cluster_scoped_for_sixty_seconds(loader: Mock)
     remote = cached_platform_data("rmtest", "egressips")
     assert first == second == remote
     assert loader.call_count == 2
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_shared_navigation_is_consistent_on_all_portal_pages(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    expected = ["Overview", "Resources", "Workloads", "Platform", "Health", "Diagnostics"]
+    for route in ("/", "/resources", "/workloads", "/platform", "/health-overview", "/storage", "/routes", "/diagnostics", "/diagnostics/ns/pod"):
+        response = client.get(f"{route}?cluster=kkbtest")
+        assert response.status_code == 200
+        nav = response.text.split('aria-label="Dashboard navigation"', 1)[1].split("</nav>", 1)[0]
+        assert all(label in nav for label in expected)
+        assert ">Storage<" not in nav
+        assert ">Routes<" not in nav
+
+
+def test_overview_top10_toggle_replaces_rows_and_egress_uses_25_page_contract() -> None:
+    source = (Path(__file__).parents[1] / "app/templates/index.html").read_text()
+    assert "output.replaceChildren()" in source
+    assert 'data-ranking-mode="kkb_apps"' in source
+    assert "slice(0, 10)" in source
+    assert "pageSize: 25" in source
+    assert 'id="egress-search"' in source
+    assert "egressState.page = 1" in source
+    assert "Unassigned" in source
+
+
+def test_cache_defaults_and_request_observability_contract() -> None:
+    assert DASHBOARD_CACHE_TTL_SECONDS == 120
+    assert DIAGNOSTIC_CACHE_TTL_SECONDS == 120
+    source = (Path(__file__).parents[1] / "app/main.py").read_text()
+    assert "active_requests=" in source
+    assert "unhandled_exception path=" in source
+    assert 'request.url.path not in {"/health", "/ready"}' in source
+
+
+def test_active_request_and_unhandled_exception_logging(caplog) -> None:
+    async def explode() -> None:
+        raise RuntimeError("test failure")
+
+    if not any(getattr(route, "path", None) == "/_test_unhandled" for route in app.routes):
+        app.add_api_route("/_test_unhandled", explode)
+    non_raising_client = TestClient(app, raise_server_exceptions=False)
+    with caplog.at_level("INFO", logger="kocc"):
+        response = non_raising_client.get("/_test_unhandled?cluster=kkbtest")
+        healthy = non_raising_client.get("/api/clusters")
+    assert response.status_code == 500
+    assert healthy.status_code == 200
+    assert "unhandled_exception path=/_test_unhandled exception_type=RuntimeError" in caplog.text
+    assert "active_requests=1" in caplog.text
 
 
 def test_missing_resources_canonical_search_and_filtered_pagination() -> None:

@@ -87,8 +87,12 @@ Collector `collect_nodes`, `collect_pods`, `collect_namespaces`,
 `resource_summary`, `collect_version`, `collect_operators` ve toplam süreyi
 INFO seviyesinde ölçer; credential veya Secret loglamaz.
 
-Başarılı dashboard snapshot'ları cluster anahtarı bazında thread-safe 15 saniye
-cache'lenir. Eşzamanlı aynı-cluster talepleri tek collection üzerinde birleşir;
+Başarılı dashboard snapshot'ları cluster anahtarı bazında thread-safe ve
+varsayılan 120 saniye cache'lenir. Diagnostics cache varsayılanı da 120
+saniyedir. Bu değerler `KOCC_SNAPSHOT_TTL_SECONDS` ve
+`KOCC_DIAGNOSTICS_CACHE_TTL_SECONDS` ile değiştirilebilir. Manuel Refresh
+snapshot cache'ini bypass eder; normal sayfa geçişleri ve auto refresh etmez.
+Eşzamanlı aynı-cluster talepleri tek collection üzerinde birleşir;
 KKBTEST ve RMTEST lock/cache alanları ayrıdır. Yeni collection hata verirse son
 başarılı snapshot `Stale snapshot` ve data age bilgisiyle sunulur. Tek Uvicorn
 worker korunur; böylece process başına cache kopyası ve ilave bellek baskısı
@@ -100,17 +104,21 @@ azaltılmıştır.
 Restart/502 kök nedenini cluster üzerinde doğrulamak için:
 
 ```bash
+oc get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState}'
 oc get pods -l app.kubernetes.io/name=kocc
 oc describe pod <pod>
 oc logs <pod> --previous
+oc get events --sort-by=.lastTimestamp | tail -50
+oc adm top pod <pod> --containers
 oc describe pod -l app.kubernetes.io/name=kocc
 oc get pod -l app.kubernetes.io/name=kocc -o jsonpath='{range .items[*]}{.metadata.name}{" reason="}{.status.containerStatuses[0].lastState.terminated.reason}{" exit="}{.status.containerStatuses[0].lastState.terminated.exitCode}{" restarts="}{.status.containerStatuses[0].restartCount}{"\n"}{end}'
 oc logs deployment/kocc --previous
 oc get events --sort-by=.lastTimestamp
 ```
 
-`OOMKilled`, probe failure, process exit code ve Route/Service endpoint olayları
-görülmeden tek bir restart kök nedeni kesin kabul edilmemelidir.
+`OOMKilled`, `exitCode`, `signal`, liveness/readiness failure, node eviction,
+container restart reason ve Route/Service endpoint olayları görülmeden tek bir
+restart kök nedeni kesin kabul edilmemelidir.
 
 ## Read-only Pod Diagnostics
 
@@ -360,11 +368,11 @@ yazılır. Snapshot cache loglarında hit/miss, stale fallback ve snapshot yaş�
 görülebilir. Bu ölçümler gerçek cluster ağ/API gecikmesini ancak deployment
 sonrasında gösterir.
 
-Dashboard snapshot'ı cluster başına varsayılan 60 saniye tutulur; Overview ve Resources
+Dashboard snapshot'ı cluster başına varsayılan 120 saniye tutulur; Overview ve Resources
 aynı snapshot'ı paylaşır. Manuel Refresh cache'i bir kez bypass eder. Workloads,
 Storage ve Routes HTML kabukları full dashboard collection beklemeden render
 edilir ve kendi read-only API verilerini lazy-load eder. Diagnostics problem-pod
-listesi de varsayılan 60 saniyelik ayrı bir sonuç cache'i kullanır. Süreler
+listesi de varsayılan 120 saniyelik ayrı bir sonuç cache'i kullanır. Süreler
 `KOCC_SNAPSHOT_TTL_SECONDS` ve `KOCC_DIAGNOSTICS_CACHE_TTL_SECONDS` environment
 değişkenleriyle pozitif tam saniye olarak ayarlanabilir. Auto Refresh cache'i
 bypass etmez; yalnız manuel Refresh zorunlu collection başlatır.
