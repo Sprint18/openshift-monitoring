@@ -25,6 +25,15 @@ KKBTEST in-cluster ServiceAccount için ClusterRole yalnız
 verir. RMTEST aynı çağrıyı remote kubeconfig'ten oluşturulan ApiClient ile yapar.
 Collector cluster adını veya authentication yöntemini bilmez.
 
+Platform sayfasındaki EgressIP görünümü `k8s.ovn.org/v1` kaynaklarını yalnız
+`get/list` yetkileriyle ve cluster-bazlı 60 saniyelik sonuç cache'iyle lazy-load
+eder. Local ServiceAccount ve remote kubeconfig kullanıcısının yetkisini
+doğrulayın:
+
+```bash
+oc auth can-i list egressips.k8s.ovn.org
+```
+
 Missing Requests / Limits özeti varsayılan olarak yalnız adı `openshift-` ile
 başlayan namespace'leri hariç tutar. UI'daki `Include OpenShift namespaces`
 seçeneği açıldığında aynı, önceden toplanmış Pod verisinin tümü gösterilir; bu
@@ -65,8 +74,9 @@ alır ve bütün widget'ları bu snapshot'tan üretir. `/health` hiçbir Kuberne
 - `/`: yüksek seviyeli Overview
 - `/resources`: namespace resources, Top CPU/Memory request/limit ve missing resources
 - `/workloads`: restart sıralaması ve Pod/Deployment/StatefulSet/DaemonSet araması
-- `/storage`: PVC requested capacity, durum ve StorageClass tablosu
-- `/routes`: Route/namespace/host arama tablosu
+- `/platform`: Platform Health, Critical Controls ve lazy EgressIP/PVC/Route özeti
+- `/storage`: backward-compatible PVC detay ekranı
+- `/routes`: backward-compatible Route detay ekranı
 - `/health-overview`: operator, node, pod ve collection diagnostics
 - `/diagnostics`: lazy, read-only problem Pod listesi
 - `/diagnostics/{namespace}/{pod}`: container state, event, log ve rule-based analiz

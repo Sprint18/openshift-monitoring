@@ -20,6 +20,7 @@ DIAGNOSTIC_REASONS = {
     "CreateContainerConfigError", "CreateContainerError", "RunContainerError",
     "ContainerCannotRun", "Error", "Evicted",
 }
+HIGH_RESTART_THRESHOLD = 10
 
 logger = logging.getLogger("kocc.collector")
 
@@ -125,6 +126,11 @@ class ClusterCollector:
             "requested_capacity": sum(item["requested_capacity"] for item in items),
             "bound": sum(item["status"] == "Bound" for item in items),
             "pending": sum(item["status"] == "Pending" for item in items),
+            "lost": sum(item["status"] == "Lost" for item in items),
+            "storage_classes": dict(sorted(
+                (storage_class, sum(item["storage_class"] == storage_class for item in items))
+                for storage_class in {item["storage_class"] for item in items}
+            )),
             "items": ranked,
         }
 
@@ -145,6 +151,7 @@ class ClusterCollector:
                 "host": spec.get("host", ""),
                 "service": spec.get("to", {}).get("name", ""),
                 "tls": bool(spec.get("tls")),
+                "wildcard": spec.get("wildcardPolicy") == "Subdomain",
                 "status": "Admitted" if any(
                     condition.get("type") == "Admitted"
                     and condition.get("status") == "True"
@@ -153,6 +160,45 @@ class ClusterCollector:
                 ) else "Unknown",
             })
         return sorted(routes, key=lambda item: (item["namespace"], item["name"]))
+
+    def get_egressip_summary(self) -> dict[str, Any]:
+        response = self.custom_api.list_cluster_custom_object(
+            group="k8s.ovn.org", version="v1", plural="egressips",
+            _request_timeout=API_REQUEST_TIMEOUT,
+        )
+        items: list[dict[str, Any]] = []
+        for resource in response.get("items", []):
+            metadata = resource.get("metadata", {})
+            spec = resource.get("spec", {})
+            selector = spec.get("namespaceSelector", {})
+            labels = selector.get("matchLabels", {})
+            expressions = selector.get("matchExpressions", [])
+            selector_parts = [f"{key}={value}" for key, value in sorted(labels.items())]
+            selector_parts.extend(
+                f'{item.get("key", "?")} {item.get("operator", "?")} {",".join(item.get("values", []))}'
+                for item in expressions
+            )
+            assignments = {
+                item.get("egressIP"): item.get("node")
+                for item in resource.get("status", {}).get("items", [])
+                if item.get("egressIP")
+            }
+            for address in spec.get("egressIPs", []) or []:
+                node = assignments.get(address) or ""
+                items.append({
+                    "name": metadata.get("name", "unknown"),
+                    "egress_ip": address,
+                    "namespace_selector": ", ".join(selector_parts) or "All namespaces",
+                    "assigned_node": node or "Unassigned",
+                    "status": "Healthy" if node else "Unassigned",
+                })
+        items.sort(key=lambda item: (item["name"], item["egress_ip"]))
+        unassigned = sum(item["status"] == "Unassigned" for item in items)
+        return {
+            "total": len(items), "assigned": len(items) - unassigned,
+            "unassigned": unassigned, "items": items,
+            "status": "Warning" if unassigned else "Healthy",
+        }
 
     @staticmethod
     def diagnostic_container(container: Any, status: Any | None) -> dict[str, Any]:
@@ -589,20 +635,26 @@ class ClusterCollector:
                     if getattr(pod.status, "phase", None) != "Succeeded":
                         matches.append(pod)
             ready = 0
+            highest_restart = 0
             for pod in matches:
                 statuses = getattr(pod.status, "container_statuses", None) or []
                 expected = len(getattr(pod.spec, "containers", None) or [])
+                highest_restart = max(highest_restart, sum(
+                    int(getattr(status, "restart_count", 0) or 0)
+                    for status in statuses
+                ))
                 if (
                     getattr(pod.status, "phase", None) == "Running"
                     and expected > 0
                     and sum(bool(getattr(status, "ready", False)) for status in statuses) == expected
                 ):
                     ready += 1
-            status = "Unavailable" if not matches else "Healthy" if ready == len(matches) else "Warning"
+            status = "Unavailable" if not matches else "Healthy" if ready == len(matches) and highest_restart < HIGH_RESTART_THRESHOLD else "Warning"
             result.append({
                 "name": label, "total": len(matches), "ready": ready,
                 "status": status,
                 "detail": "Data unavailable" if not matches else f"{ready} / {len(matches)} Ready",
+                "highest_restart": highest_restart,
             })
         return result
 

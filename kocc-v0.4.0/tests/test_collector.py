@@ -448,10 +448,40 @@ def test_pvc_and_route_parsing(
         "namespace": "app",
         "name": "portal",
         "host": "portal.example",
-        "service": "web",
-        "tls": False,
-        "status": "Unknown",
-    }]
+            "service": "web",
+            "tls": False,
+            "wildcard": False,
+            "status": "Unknown",
+        }]
+
+
+@patch("app.collector.client.AppsV1Api")
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
+def test_egressip_parses_assigned_unassigned_and_multiple_addresses(
+    _core_api_class: Mock,
+    custom_api_class: Mock,
+    _apps_api_class: Mock,
+) -> None:
+    custom_api_class.return_value.list_cluster_custom_object.return_value = {
+        "items": [{
+            "metadata": {"name": "egress-app"},
+            "spec": {
+                "egressIPs": ["10.60.0.4", "10.60.0.5"],
+                "namespaceSelector": {"matchLabels": {"env": "uat"}},
+            },
+            "status": {"items": [{"egressIP": "10.60.0.4", "node": "worker-1"}]},
+        }]
+    }
+    collector = ClusterCollector(Mock())
+
+    result = collector.get_egressip_summary()
+
+    assert result["total"] == 2
+    assert result["assigned"] == 1
+    assert result["unassigned"] == 1
+    assert result["status"] == "Warning"
+    assert result["items"][1]["assigned_node"] == "Unassigned"
 
 
 @patch("app.collector.client.AppsV1Api")

@@ -14,6 +14,7 @@ from app.main import (
     DIAGNOSTIC_CACHE_TTL_SECONDS,
     app,
     cached_dashboard_data,
+    cached_platform_data,
     clear_dashboard_cache,
     collection_time_severity,
     capacity_risk_level,
@@ -22,8 +23,10 @@ from app.main import (
     format_istanbul_time,
     health_score,
     is_platform_namespace,
+    is_kkb_application_namespace,
     missing_resources_page,
     namespace_request_distribution,
+    optional_cluster_data,
     positive_env_seconds,
     prepare_dashboard_data,
     resource_severity,
@@ -880,6 +883,15 @@ def test_platform_namespace_classifier_is_centralized() -> None:
     assert is_platform_namespace("sandbox-app") is False
 
 
+def test_kkb_application_classifier_uses_only_approved_prefixes() -> None:
+    for namespace in ("sandbox-x", "uat-x", "test-x", "beta-x", "prod-x"):
+        assert is_kkb_application_namespace(namespace) is True
+    for namespace in (
+        "openshift-storage", "conjur", "dynatrace", "istio-system", "default",
+    ):
+        assert is_kkb_application_namespace(namespace) is False
+
+
 def test_capacity_risk_and_egressip_alarm_rules() -> None:
     assert [capacity_risk_level(value) for value in (99, 100, 150, 250)] == [
         "healthy", "warning", "high", "critical",
@@ -962,6 +974,39 @@ def test_lightweight_pages_do_not_collect_dashboard(cached_data: Mock) -> None:
         response = client.get(f"{route}?cluster=kkbtest")
         assert response.status_code == 200
     cached_data.assert_not_called()
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_platform_page_renders_without_loading_lazy_apis(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    response = client.get("/platform?cluster=kkbtest")
+    assert response.status_code == 200
+    assert "Platform Overview" in response.text
+    assert "EgressIP" in response.text
+    assert "/api/platform/egressips" in response.text
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_egressip_api_failure_is_isolated(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.get_egressip_summary.side_effect = RuntimeError("denied")
+    result = optional_cluster_data("kkbtest", "egressips")
+    assert result == {"available": False, "items": []}
+
+
+@patch("app.main.optional_cluster_data")
+def test_platform_widget_cache_is_cluster_scoped_for_sixty_seconds(loader: Mock) -> None:
+    loader.return_value = {"available": True, "total": 1, "items": []}
+    first = cached_platform_data("kkbtest", "egressips")
+    second = cached_platform_data("kkbtest", "egressips")
+    remote = cached_platform_data("rmtest", "egressips")
+    assert first == second == remote
+    assert loader.call_count == 2
 
 
 def test_missing_resources_canonical_search_and_filtered_pagination() -> None:

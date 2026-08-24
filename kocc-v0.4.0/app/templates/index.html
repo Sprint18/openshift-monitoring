@@ -669,8 +669,7 @@
         ("/", "Overview", "overview"),
         ("/resources", "Resources", "resources"),
         ("/workloads", "Workloads", "workloads"),
-        ("/storage", "Storage", "storage"),
-        ("/routes", "Routes", "routes"),
+        ("/platform", "Platform", "platform"),
         ("/health-overview", "Health", "health"),
         ("/diagnostics", "Diagnostics", "diagnostics")
     ] %}
@@ -781,34 +780,15 @@
                 <article><h3>Namespace Summary</h3><dl><div><dt>Total Namespaces</dt><dd>{{ chart["total_namespaces"] }}</dd></div><div><dt>Namespaces ≥ %{{ chart["slice_threshold_percent"] }}</dt><dd>{{ chart["threshold_namespace_count"] }}</dd></div><div><dt>Displayed Namespace Slices</dt><dd>{{ chart["visible_namespace_count"] }}</dd></div><div><dt>Grouped under Others</dt><dd>{{ chart["grouped_namespace_count"] }}</dd></div></dl></article>
                 <article><h3>Risk Summary</h3><dl><div><dt>Top Namespace</dt><dd>{{ chart["top_namespace"] }}</dd></div><div><dt>Request</dt><dd>{{ chart["top_value_text"] }}</dd></div><div><dt>Share</dt><dd>%{{ chart["top_share"] }}</dd></div></dl>{% if chart["concentration"] != "healthy" %}<span class="concentration-badge {{ chart['concentration'] }}">{{ "Critical" if chart["concentration"] == "critical" else "High" }} concentration</span>{% endif %}</article>
             </div>
-            <article class="platform-summary"><h3>Platform vs Application</h3><div class="allocation-track" title="Platform %{{ allocation['platform_percent'] }} · Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}"><span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span><span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span><span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span></div><div class="allocation-legend"><span>OpenShift / Platform <strong>%{{ allocation["platform_percent"] }}</strong></span><span>Application Workloads <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused Capacity <strong>%{{ allocation["unused_percent"] }}</strong></span></div></article>
+            <article class="platform-summary"><h3>KKB Applications vs Platform/Other</h3><div class="allocation-track" title="Platform/Other %{{ allocation['platform_percent'] }} · KKB Applications %{{ allocation['applications_percent'] }} · Unused %{{ allocation['unused_percent'] }}"><span class="allocation-platform" style="width: {{ allocation['platform_percent'] }}%"></span><span class="allocation-applications" style="width: {{ allocation['applications_percent'] }}%"></span><span class="allocation-unused" style="width: {{ allocation['unused_percent'] }}%"></span></div><div class="allocation-legend"><span>Platform / Other <strong>%{{ allocation["platform_percent"] }}</strong></span><span>KKB Applications <strong>%{{ allocation["applications_percent"] }}</strong></span><span>Unused Capacity <strong>%{{ allocation["unused_percent"] }}</strong></span></div></article>
         </div>
         {% endfor %}
     </section>
 
-    <section class="executive-panel" aria-labelledby="platform-overview-title">
-        <h2 id="platform-overview-title">Platform Overview</h2>
-        <div class="platform-overview-grid">
-            <article class="overview-mini-card"><h3>Routes</h3><p>{{ executive["platform_overview"]["routes"]["message"] }}</p><a href="/routes?cluster={{ selected_cluster }}">Routes ekranını aç →</a></article>
-            <article class="overview-mini-card"><h3>Storage (PVC)</h3><p>{{ executive["platform_overview"]["storage"]["message"] }}</p><a href="/storage?cluster={{ selected_cluster }}">Storage ekranını aç →</a></article>
-            {% set platform_nodes = executive["platform_overview"]["nodes"] %}
-            <article class="overview-mini-card"><h3>Nodes</h3><dl><div><dt>Total</dt><dd>{{ platform_nodes["total"] }}</dd></div><div><dt>Ready</dt><dd>{{ platform_nodes["ready"] }}</dd></div><div><dt>NotReady</dt><dd>{{ platform_nodes["not_ready"] }}</dd></div><div><dt>CPU Capacity</dt><dd>{{ platform_nodes["cpu_capacity"] }}</dd></div><div><dt>Memory Capacity</dt><dd>{{ platform_nodes["memory_capacity"] }}</dd></div></dl></article>
-            {% set platform_operators = executive["platform_overview"]["operators"] %}
-            <article class="overview-mini-card"><h3>Cluster Operators</h3>{% if platform_operators["available"] %}<dl><div><dt>Healthy</dt><dd>{{ platform_operators["healthy"] }}</dd></div><div><dt>Degraded</dt><dd>{{ platform_operators["degraded"] }}</dd></div><div><dt>Progressing</dt><dd>{{ platform_operators["progressing"] }}</dd></div><div><dt>Unavailable</dt><dd>{{ platform_operators["unavailable"] }}</dd></div></dl>{% else %}<p>ClusterOperator API unavailable</p>{% endif %}</article>
-            {% set conjur = executive["platform_overview"]["conjur"] %}
-            <article class="overview-mini-card"><h3>Conjur (Critical)</h3><p><span class="status-pill {{ conjur['status']|lower }}">{{ conjur["status"] }}</span></p><p>{{ conjur["detail"] }}</p></article>
-        </div>
-    </section>
-
-    <div class="executive-grid">
-        <section class="executive-panel"><h2>EgressIP Overview</h2>{% set egress = executive["egressips"] %}{% if egress["available"] %}<p><span class="status-pill {{ 'warning' if egress['unassigned'] else 'healthy' }}">{{ egress["status"] }}</span> · {{ egress["total"] }} EgressIP · {{ egress["unassigned"] }} unassigned</p>{% else %}<p>EgressIP data unavailable in cached dashboard snapshot.</p>{% endif %}</section>
-        <section class="executive-panel"><h2>Critical Controls</h2><div class="control-list">{% for control in executive["critical_controls"] %}<div class="control-row"><span>{{ control["name"] }}</span><span>{{ control["detail"] }}</span><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></div>{% else %}<p>Critical control data unavailable.</p>{% endfor %}</div></section>
-    </div>
-
     <div class="executive-grid">
         {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
         <section class="executive-panel ranking-panel" data-ranking-key="{{ key }}">
-            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All Namespaces</button><button type="button" data-ranking-mode="application">Application (KKB) Only</button></div></div>
+            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All</button><button type="button" data-ranking-mode="application" title="sandbox- / uat- / test- / beta- / prod-">KKB Apps</button></div></div>
             {% for ranking_mode in ["all", "application"] %}<div class="bar-chart" data-ranking-list="{{ ranking_mode }}" {% if ranking_mode == "application" %}hidden{% endif %}>
                 {% for item in executive["rankings"][ranking_mode][key] %}
                 <div class="bar-row" title="{{ item['namespace'] }}: {{ item['value_text'] }} · cluster kapasitesinin %{{ item['capacity_percent'] }}">
@@ -831,6 +811,7 @@
                 <article class="risk-card" title="{{ gauge['explanation'] }}"><strong>{{ label }}</strong><div class="risk-value">%{{ gauge["percent"] }}</div><span class="status-pill {{ gauge['risk'] }}">{{ gauge["risk"]|capitalize }}</span><div class="risk-scale" aria-hidden="true"><span></span><span></span><span></span><span></span></div><p>{{ gauge["explanation"] }}</p></article>
                 {% endfor %}
             </div>
+            <p class="chart-note">Status: &lt;100 Healthy · 100–150 Warning · 150–250 High · ≥250 Critical</p>
         </section>
     </div>
 
@@ -860,6 +841,30 @@
             <div><h3>Önerilen aksiyonlar</h3><ul>{% for action in executive["actions"] %}<li><a href="{{ action['href'] }}?cluster={{ selected_cluster }}">{{ action["text"] }}</a></li>{% else %}<li>Acil aksiyon önerisi yok.</li>{% endfor %}</ul></div>
         </div>
     </section>
+    {% endif %}
+
+    {% if page == "platform" %}
+    {% set controls = data.get("platform_controls", []) %}
+    {% set control_map = {} %}{% for control in controls %}{% set _ = control_map.update({control["name"]: control}) %}{% endfor %}
+    {% set conjur = control_map.get("Conjur Pods", {"status":"Unavailable", "detail":"Data unavailable", "highest_restart":0}) %}
+    {% set operators = data["cluster_operators"] %}
+    {% set healthy_controls = controls|selectattr("status", "equalto", "Healthy")|list|length %}
+    <section class="executive-panel">
+        <h2>Platform Overview</h2>
+        <div class="executive-summary-cards">
+            <article><h3>Platform Health</h3><div id="platform-health-kpi" data-healthy="{{ healthy_controls + (1 if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 0) }}" data-total="{{ controls|length + 2 }}"><div class="kpi-value">{{ healthy_controls }}/{{ controls|length + 2 }} Healthy</div><span class="status-pill warning">Loading EgressIP…</span></div></article>
+            <article><h3>EgressIP Status</h3><div id="egress-kpi">Loading…</div></article>
+            <article><h3>Conjur Status</h3><div class="kpi-value">{{ conjur["detail"] }}</div><span class="status-pill {{ conjur['status']|lower }}">{{ conjur["status"] }}</span>{% if conjur["highest_restart"] %}<p>Highest restart: {{ conjur["highest_restart"] }}</p>{% endif %}<p><a href="/diagnostics?cluster={{ selected_cluster }}">Diagnostics →</a></p></article>
+        </div>
+        <div class="platform-overview-grid" style="margin-top:14px">
+            <article class="overview-mini-card"><h3>Nodes</h3><dl><div><dt>Total</dt><dd>{{ data["nodes"]["total"] }}</dd></div><div><dt>Ready</dt><dd>{{ data["nodes"]["ready"] }}</dd></div><div><dt>NotReady</dt><dd>{{ data["nodes"]["not_ready"] }}</dd></div></dl></article>
+            <article class="overview-mini-card"><h3>Cluster Operators</h3>{% if operators["available"] %}<dl><div><dt>Healthy</dt><dd>{{ operators["healthy"] }}</dd></div><div><dt>Degraded</dt><dd>{{ operators["degraded"] }}</dd></div><div><dt>Progressing</dt><dd>{{ operators["progressing"] }}</dd></div><div><dt>Unavailable</dt><dd>{{ operators["unavailable"] }}</dd></div></dl>{% else %}<p>Unavailable</p>{% endif %}</article>
+            {% for name in ["DNS (CoreDNS)", "Ingress Controller", "Image Registry", "Monitoring Stack"] %}{% set control = control_map.get(name, {"status":"Unavailable", "detail":"Data unavailable"}) %}<article class="overview-mini-card"><h3>{{ name }}</h3><p>{{ control["detail"] }}</p><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></article>{% endfor %}
+        </div>
+    </section>
+    <section class="executive-panel"><h2>Critical Controls</h2><div class="control-list" id="critical-controls">{% for control in controls %}<a class="control-row" href="{{ '/diagnostics' if control['name'] == 'Conjur Pods' else '/health-overview' }}?cluster={{ selected_cluster }}"><span>{{ control["name"] }}</span><span>{{ control["detail"] }}</span><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></a>{% endfor %}<a class="control-row" href="/health-overview?cluster={{ selected_cluster }}"><span>Cluster Operators</span><span>{{ operators["healthy"] if operators["available"] else "API unavailable" }}</span><span class="status-pill {{ 'healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'warning' }}">{{ 'Healthy' if operators['available'] and not operators['degraded'] and not operators['unavailable'] else 'Warning' }}</span></a><div class="control-row"><span>EgressIP</span><span id="egress-control-detail">Loading…</span><span id="egress-control-status" class="status-pill unavailable">Unavailable</span></div></div></section>
+    <section class="executive-panel" id="egressip-section"><h2>EgressIP</h2><div id="egressip-results" class="loading-inline">Loading EgressIP data…</div></section>
+    <div class="executive-grid"><section class="executive-panel"><h2>Storage Overview</h2><div id="platform-storage" class="loading-inline">Loading storage data…</div><p><a href="/storage?cluster={{ selected_cluster }}">View Storage →</a></p></section><section class="executive-panel"><h2>Route Overview</h2><div id="platform-routes" class="loading-inline">Loading route data…</div><p><a href="/routes?cluster={{ selected_cluster }}">View Routes →</a></p></section></div>
     {% endif %}
 
     {% if page == "health" %}
@@ -1477,7 +1482,7 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#039;");
-        const optionalCache = {workloads: new Map(), routes: null, pvcs: null};
+        const optionalCache = {workloads: new Map(), routes: null, pvcs: null, egressips: null};
         const fetchJson = async (url) => {
             const response = await fetch(url, {headers: {"Accept": "application/json"}});
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1990,13 +1995,52 @@
         hydrateWorkloadSnapshot();
         {% endif %}
 
-        {% if page in ["workloads", "routes"] %}
+        {% if page in ["workloads", "routes", "platform"] %}
         const loadRoutes = async () => {
             if (!optionalCache.routes) optionalCache.routes = await fetchJson(
                 `/api/routes?cluster=${encodeURIComponent(dashboardData.cluster)}`
             );
             return optionalCache.routes;
         };
+        {% endif %}
+
+        {% if page == "platform" %}
+        const loadPlatform = async () => {
+            const cluster = encodeURIComponent(dashboardData.cluster);
+            const [egress, pvcs, routes] = await Promise.all([
+                fetchJson(`/api/platform/egressips?cluster=${cluster}`).catch(() => ({available:false, items:[]})),
+                fetchJson(`/api/pvcs?cluster=${cluster}`).catch(() => ({available:false, items:[]})),
+                loadRoutes().catch(() => ({available:false, items:[]})),
+            ]);
+            const egressKpi = document.getElementById("egress-kpi");
+            const egressStatus = egress.available ? (egress.unassigned ? "Warning" : "Healthy") : "Unavailable";
+            egressKpi.innerHTML = egress.available
+                ? `<strong>${egress.total}</strong> total · ${egress.assigned} assigned<br><span class="${egress.unassigned ? "danger" : "healthy"}">${egress.unassigned} Unassigned${egress.unassigned ? " ⚠" : ""}</span>`
+                : "EgressIP API unavailable";
+            document.getElementById("egress-control-detail").textContent = egress.available ? `${egress.unassigned} Unassigned` : "API unavailable";
+            const controlStatus = document.getElementById("egress-control-status");
+            controlStatus.textContent = egressStatus;
+            controlStatus.className = `status-pill ${egressStatus.toLowerCase()}`;
+            const platformHealth = document.getElementById("platform-health-kpi");
+            const healthy = Number(platformHealth.dataset.healthy) + (egress.available && !egress.unassigned ? 1 : 0);
+            const total = Number(platformHealth.dataset.total);
+            const platformStatus = healthy === total ? "Healthy" : "Warning";
+            platformHealth.innerHTML = `<div class="kpi-value">${healthy}/${total} Healthy</div><span class="status-pill ${platformStatus.toLowerCase()}">${platformStatus}</span>`;
+            document.getElementById("egressip-results").innerHTML = egress.available
+                ? (egress.items.length ? `<div class="table-wrapper"><table><thead><tr><th>EgressIP Name</th><th>Egress IP</th><th>Namespace Selector</th><th>Assigned Node</th><th>Status</th></tr></thead><tbody>${egress.items.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.egress_ip)}</td><td>${escapeHtml(item.namespace_selector)}</td><td>${escapeHtml(item.assigned_node)}</td><td><span class="status-pill ${item.status.toLowerCase()}">${escapeHtml(item.status)}</span></td></tr>`).join("")}</tbody></table></div>` : "No EgressIP resources")
+                : "EgressIP API unavailable";
+            document.getElementById("platform-storage").innerHTML = pvcs.available
+                ? `<strong>${pvcs.total} PVC</strong><br>${pvcs.bound} Bound · ${pvcs.pending} Pending · ${pvcs.lost || 0} Lost<br>${escapeHtml(pvcs.requested_capacity_text)} requested<br>StorageClasses: ${escapeHtml(Object.entries(pvcs.storage_classes || {}).map(([name,count]) => `${name} (${count})`).join(", ") || "N/A")}`
+                : "PVC data unavailable";
+            if (routes.available) {
+                const tls = routes.items.filter((item) => item.tls).length;
+                const wildcard = routes.items.filter((item) => item.wildcard).length;
+                const namespaces = new Set(routes.items.map((item) => item.namespace)).size;
+                document.getElementById("platform-routes").innerHTML = `<strong>${routes.items.length} Routes</strong><br>${tls} TLS · ${routes.items.length - tls} non-TLS<br>${namespaces} namespaces · ${wildcard} wildcard`;
+            } else document.getElementById("platform-routes").textContent = "Route data unavailable";
+            document.querySelectorAll("#platform-storage, #platform-routes, #egressip-results").forEach((item) => item.classList.remove("loading-inline"));
+        };
+        loadPlatform();
         {% endif %}
         {% if page == "routes" %}
         const routeSearch = document.getElementById("route-search");

@@ -70,6 +70,7 @@ DIAGNOSTIC_CACHE_TTL_SECONDS = positive_env_seconds(
 )
 _dashboard_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _diagnostic_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_platform_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
 logger.info(
@@ -284,6 +285,7 @@ PLATFORM_NAMESPACE_PREFIXES = ("openshift-", "kube-")
 PLATFORM_NAMESPACE_NAMES = {
     "default", "istio-system", "openshift-monitoring", "dynatrace",
 }
+KKB_APPLICATION_PREFIXES = ("sandbox-", "uat-", "test-", "beta-", "prod-")
 OVERCOMMIT_WARNING_PERCENT = 100
 OVERCOMMIT_CRITICAL_PERCENT = 150
 OVERCOMMIT_HIGH_PERCENT = 150
@@ -295,6 +297,10 @@ def is_platform_namespace(namespace: str) -> bool:
         namespace in PLATFORM_NAMESPACE_NAMES
         or namespace.startswith(PLATFORM_NAMESPACE_PREFIXES)
     )
+
+
+def is_kkb_application_namespace(namespace: str) -> bool:
+    return namespace.startswith(KKB_APPLICATION_PREFIXES)
 
 
 def risk_level(value: float, warning: float, critical: float) -> str:
@@ -472,8 +478,8 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
     """Build executive-only data from the existing cached snapshot."""
     namespaces = data["resources"]["namespaces"]
     cluster = data["resources"]["cluster"]
-    platform = [item for item in namespaces if is_platform_namespace(item["namespace"])]
-    applications = [item for item in namespaces if not is_platform_namespace(item["namespace"])]
+    applications = [item for item in namespaces if is_kkb_application_namespace(item["namespace"])]
+    platform = [item for item in namespaces if not is_kkb_application_namespace(item["namespace"])]
 
     def total(items: list[dict[str, Any]], key: str) -> int:
         return sum(int(item.get(key, 0) or 0) for item in items)
@@ -927,6 +933,7 @@ def clear_dashboard_cache() -> None:
         _dashboard_cache.clear()
         _cluster_cache_locks.clear()
         _diagnostic_cache.clear()
+        _platform_cache.clear()
 
 
 def _cached_dashboard_data(
@@ -1239,6 +1246,8 @@ def optional_cluster_data(
                         item["requested_capacity"]
                     )
                 return {"available": True, **result}
+            if loader == "egressips":
+                return {"available": True, **collector.get_egressip_summary()}
             return {
                 "available": True,
                 "items": collector.get_route_summary(),
@@ -1253,6 +1262,26 @@ def optional_cluster_data(
             return {"available": False, "items": []}
     finally:
         api_client.close()
+
+
+def cached_platform_data(cluster_key: str, loader: str) -> dict[str, Any]:
+    """Cache lazy Platform widgets per cluster for 60 seconds."""
+    started = time.perf_counter()
+    key = (cluster_key, loader)
+    now = time.monotonic()
+    with _dashboard_cache_lock:
+        cached = _platform_cache.get(key)
+        if cached and now - cached[0] < 60:
+            result = deepcopy(cached[1])
+            if loader == "egressips":
+                log_performance("platform.egressips", started, item_count=result.get("total", 0), cache_hit=True)
+            return result
+    result = optional_cluster_data(cluster_key, loader)
+    with _dashboard_cache_lock:
+        _platform_cache[key] = (time.monotonic(), deepcopy(result))
+    if loader == "egressips":
+        log_performance("platform.egressips", started, item_count=result.get("total", 0), cache_hit=False)
+    return result
 
 
 @app.get("/api/workloads")
@@ -1271,7 +1300,7 @@ def api_pvcs(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> dict[str, Any]:
     try:
-        return optional_cluster_data(cluster.lower(), "pvc")
+        return cached_platform_data(cluster.lower(), "pvc")
     except Exception as exc:
         raise_http_error(exc)
 
@@ -1281,7 +1310,17 @@ def api_routes(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> dict[str, Any]:
     try:
-        return optional_cluster_data(cluster.lower(), "routes")
+        return cached_platform_data(cluster.lower(), "routes")
+    except Exception as exc:
+        raise_http_error(exc)
+
+
+@app.get("/api/platform/egressips")
+def api_platform_egressips(
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> dict[str, Any]:
+    try:
+        return cached_platform_data(cluster.lower(), "egressips")
     except Exception as exc:
         raise_http_error(exc)
 
@@ -1563,6 +1602,15 @@ def workloads_page(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> HTMLResponse:
     return render_dashboard_page(request, cluster, "workloads")
+
+
+@app.get("/platform", response_class=HTMLResponse)
+def platform_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+    refresh: bool = Query(default=False),
+) -> HTMLResponse:
+    return render_dashboard_page(request, cluster, "platform", refresh)
 
 
 @app.get("/storage", response_class=HTMLResponse)
