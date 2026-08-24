@@ -223,6 +223,31 @@ def test_pod_summary_reports_all_ready(
 
 @patch("app.collector.client.CustomObjectsApi")
 @patch("app.collector.client.CoreV1Api")
+def test_platform_controls_are_derived_from_existing_pods(
+    _core_api_class: Mock,
+    _custom_api_class: Mock,
+) -> None:
+    collector = ClusterCollector(Mock())
+    pods = [
+        pod(
+            "openshift-etcd", "Running", [container()], name="etcd-master",
+            statuses=[container_status(True)],
+        ),
+        pod(
+            "openshift-monitoring", "Running", [container()], name="prometheus-k8s",
+            statuses=[container_status(False)],
+        ),
+    ]
+
+    controls = {item["name"]: item for item in collector.get_platform_controls(pods)}
+
+    assert controls["Etcd"]["status"] == "Healthy"
+    assert controls["Monitoring Stack"]["status"] == "Warning"
+    assert controls["Conjur Pods"]["status"] == "Unavailable"
+
+
+@patch("app.collector.client.CustomObjectsApi")
+@patch("app.collector.client.CoreV1Api")
 def test_restart_summary_detects_crashloop_and_ranks_restarts(
     _core_api_class: Mock,
     _custom_api_class: Mock,

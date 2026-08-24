@@ -16,6 +16,8 @@ from app.main import (
     cached_dashboard_data,
     clear_dashboard_cache,
     collection_time_severity,
+    capacity_risk_level,
+    egressip_overview,
     executive_dashboard,
     format_istanbul_time,
     health_score,
@@ -878,6 +880,18 @@ def test_platform_namespace_classifier_is_centralized() -> None:
     assert is_platform_namespace("sandbox-app") is False
 
 
+def test_capacity_risk_and_egressip_alarm_rules() -> None:
+    assert [capacity_risk_level(value) for value in (99, 100, 150, 250)] == [
+        "healthy", "warning", "high", "critical",
+    ]
+    overview = egressip_overview([
+        {"name": "egress-a", "namespace": "app", "assigned_node": "worker-1"},
+        {"name": "egress-b", "namespace": "app", "assigned_node": ""},
+    ])
+    assert overview["status"] == "Attention Required"
+    assert overview["unassigned"] == 1
+
+
 def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
     gib = 1024 ** 3
     data = {
@@ -931,7 +945,12 @@ def test_executive_dashboard_calculations_and_deterministic_insights() -> None:
     assert executive["cpu"]["applications_percent"] == 40
     assert executive["cpu"]["unused_percent"] == 20
     assert executive["rankings"]["cpu_request"][0]["namespace"] == "sandbox-app"
-    assert executive["gauges"]["cpu"]["risk"] == "critical"
+    assert executive["rankings"]["application"]["cpu_request"][0]["namespace"] == "sandbox-app"
+    assert all(
+        not is_platform_namespace(item["namespace"])
+        for item in executive["rankings"]["application"]["cpu_request"]
+    )
+    assert executive["gauges"]["cpu"]["risk"] == "high"
     assert executive["hotspots"][2]["namespace"] == "sandbox-app"
     assert any("CPU limitleri" in item for item in executive["insights"])
     assert any(action["href"] == "/diagnostics" for action in executive["actions"])

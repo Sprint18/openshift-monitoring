@@ -357,6 +357,7 @@
         .executive-kpi .kpi-icon { font-size: 20px; opacity: .85; }
         .executive-kpi .kpi-value { font-size: 30px; font-weight: 800; margin: 10px 0 4px; }
         .executive-kpi .kpi-label { font-size: 12px; line-height: 1.35; opacity: .92; }
+        .kpi-info { float: right; font-size: 13px; opacity: .8; }
         .executive-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 18px 0; }
         .executive-panel { background: white; border: 1px solid var(--surface-border); border-radius: 14px; padding: 20px; box-shadow: 0 6px 20px rgba(17, 42, 77, .07); }
         .executive-panel h2, .executive-panel h3 { margin-top: 0; }
@@ -384,6 +385,28 @@
         .gauge-wrap { display: flex; justify-content: space-around; gap: 25px; text-align: center; }
         .gauge-chart { width: 170px; height: 170px; }
         .gauge-value { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; font-size: 25px; font-weight: 800; }
+        .ranking-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .ranking-toggle { display: inline-flex; border: 1px solid var(--surface-border); border-radius: 8px; overflow: hidden; }
+        .ranking-toggle button { border: 0; padding: 7px 10px; background: #eef2f6; color: var(--kkb-navy); cursor: pointer; font-weight: 700; }
+        .ranking-toggle button.is-active { color: white; background: var(--kkb-navy); }
+        .platform-overview-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+        .overview-mini-card { border: 1px solid var(--surface-border); border-radius: 10px; padding: 14px; background: #fafbfd; }
+        .overview-mini-card h3 { color: var(--kkb-navy); margin-bottom: 10px; }
+        .overview-mini-card dl { margin: 0; display: grid; gap: 7px; }
+        .overview-mini-card dl div { display: flex; justify-content: space-between; gap: 8px; }
+        .overview-mini-card dt { color: #6a6e73; font-size: 12px; }
+        .overview-mini-card dd { margin: 0; font-weight: 700; text-align: right; }
+        .control-list { display: grid; gap: 0; }
+        .control-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--surface-border); }
+        .status-pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+        .status-pill.healthy { color: #075f40; background: #d5f2e5; }
+        .status-pill.warning, .status-pill.high { color: #874400; background: #fff0d5; }
+        .status-pill.critical, .status-pill.unavailable { color: #8b1620; background: #fde4e6; }
+        .risk-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+        .risk-card { text-align: center; padding: 18px; border: 1px solid var(--surface-border); border-radius: 10px; }
+        .risk-value { font-size: 30px; font-weight: 800; margin: 10px 0; }
+        .risk-scale { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; height: 9px; overflow: hidden; border-radius: 999px; margin: 12px 0; }
+        .risk-scale span:nth-child(1) { background:#20a874 }.risk-scale span:nth-child(2) { background:#e7aa22 }.risk-scale span:nth-child(3) { background:#ef7d00 }.risk-scale span:nth-child(4) { background:#d93644 }
         .hotspot-list { display: grid; gap: 9px; }
         .hotspot-row { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 12px; padding: 11px; border-radius: 9px; background: #f3f6f9; color: inherit; text-decoration: none; }
         .hotspot-row:hover { outline: 2px solid rgba(239,125,0,.35); }
@@ -427,12 +450,14 @@
         .platform-summary { margin-top: 14px; }
         @media (max-width: 1500px) {
             .executive-kpis { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+            .platform-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
         @media (max-width: 1000px) {
             .executive-grid { grid-template-columns: 1fr; }
             .executive-kpis { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
             .namespace-chart-layout { grid-template-columns: 1fr; }
             .executive-summary-cards { grid-template-columns: 1fr; }
+            .platform-overview-grid, .risk-grid { grid-template-columns: 1fr; }
         }
         .metric-row {
             display: flex;
@@ -568,6 +593,8 @@
         [data-theme="dark"] .drilldown,
         [data-theme="dark"] .popover { background: #17263a; color: #eef2f6; }
         [data-theme="dark"] .executive-panel { background: #17263a; color: #eef2f6; border-color: #344b67; }
+        [data-theme="dark"] .overview-mini-card, [data-theme="dark"] .risk-card { background:#1e3047; border-color:#405775; }
+        [data-theme="dark"] .overview-mini-card h3 { color:#fff; }
         [data-theme="dark"] .donut-chart::after,
         [data-theme="dark"] .gauge-chart::after { background: #17263a; }
         [data-theme="dark"] .hotspot-row { background: #20334b; color: #eef2f6; }
@@ -709,8 +736,8 @@
         <h2 id="executive-summary-title">Executive Summary</h2>
         <div class="executive-kpis">
             {% for kpi in executive["kpis"] %}
-            <article class="executive-kpi {{ kpi['risk'] }}" title="{{ kpi['label'] }}: {{ kpi['value'] }}">
-                <div class="kpi-icon" aria-hidden="true">{{ kpi["icon"] }}</div>
+            <article class="executive-kpi {{ kpi['risk'] }}" title="{{ kpi['label'] }}: {{ kpi['value'] }}{% if kpi.get('detail') %} · {{ kpi['detail'] }}{% endif %}">
+                <span class="kpi-info" aria-hidden="true">ⓘ</span><div class="kpi-icon" aria-hidden="true">{{ kpi["icon"] }}</div>
                 <div class="kpi-value">{{ kpi["value"] }}</div>
                 <div class="kpi-label">{{ kpi["label"] }}</div>
             </article>
@@ -759,34 +786,49 @@
         {% endfor %}
     </section>
 
+    <section class="executive-panel" aria-labelledby="platform-overview-title">
+        <h2 id="platform-overview-title">Platform Overview</h2>
+        <div class="platform-overview-grid">
+            <article class="overview-mini-card"><h3>Routes</h3><p>{{ executive["platform_overview"]["routes"]["message"] }}</p><a href="/routes?cluster={{ selected_cluster }}">Routes ekranını aç →</a></article>
+            <article class="overview-mini-card"><h3>Storage (PVC)</h3><p>{{ executive["platform_overview"]["storage"]["message"] }}</p><a href="/storage?cluster={{ selected_cluster }}">Storage ekranını aç →</a></article>
+            {% set platform_nodes = executive["platform_overview"]["nodes"] %}
+            <article class="overview-mini-card"><h3>Nodes</h3><dl><div><dt>Total</dt><dd>{{ platform_nodes["total"] }}</dd></div><div><dt>Ready</dt><dd>{{ platform_nodes["ready"] }}</dd></div><div><dt>NotReady</dt><dd>{{ platform_nodes["not_ready"] }}</dd></div><div><dt>CPU Capacity</dt><dd>{{ platform_nodes["cpu_capacity"] }}</dd></div><div><dt>Memory Capacity</dt><dd>{{ platform_nodes["memory_capacity"] }}</dd></div></dl></article>
+            {% set platform_operators = executive["platform_overview"]["operators"] %}
+            <article class="overview-mini-card"><h3>Cluster Operators</h3>{% if platform_operators["available"] %}<dl><div><dt>Healthy</dt><dd>{{ platform_operators["healthy"] }}</dd></div><div><dt>Degraded</dt><dd>{{ platform_operators["degraded"] }}</dd></div><div><dt>Progressing</dt><dd>{{ platform_operators["progressing"] }}</dd></div><div><dt>Unavailable</dt><dd>{{ platform_operators["unavailable"] }}</dd></div></dl>{% else %}<p>ClusterOperator API unavailable</p>{% endif %}</article>
+            {% set conjur = executive["platform_overview"]["conjur"] %}
+            <article class="overview-mini-card"><h3>Conjur (Critical)</h3><p><span class="status-pill {{ conjur['status']|lower }}">{{ conjur["status"] }}</span></p><p>{{ conjur["detail"] }}</p></article>
+        </div>
+    </section>
+
+    <div class="executive-grid">
+        <section class="executive-panel"><h2>EgressIP Overview</h2>{% set egress = executive["egressips"] %}{% if egress["available"] %}<p><span class="status-pill {{ 'warning' if egress['unassigned'] else 'healthy' }}">{{ egress["status"] }}</span> · {{ egress["total"] }} EgressIP · {{ egress["unassigned"] }} unassigned</p>{% else %}<p>EgressIP data unavailable in cached dashboard snapshot.</p>{% endif %}</section>
+        <section class="executive-panel"><h2>Critical Controls</h2><div class="control-list">{% for control in executive["critical_controls"] %}<div class="control-row"><span>{{ control["name"] }}</span><span>{{ control["detail"] }}</span><span class="status-pill {{ control['status']|lower }}">{{ control["status"] }}</span></div>{% else %}<p>Critical control data unavailable.</p>{% endfor %}</div></section>
+    </div>
+
     <div class="executive-grid">
         {% for key, title in [("cpu_request", "Top 10 Namespace by CPU Requests"), ("memory_request", "Top 10 Namespace by Memory Requests"), ("cpu_limit", "Top 10 CPU Limits"), ("memory_limit", "Top 10 Memory Limits")] %}
-        <section class="executive-panel">
-            <h2>{{ title }}</h2>
-            <div class="bar-chart">
-                {% for item in executive["rankings"][key] %}
+        <section class="executive-panel ranking-panel" data-ranking-key="{{ key }}">
+            <div class="ranking-heading"><h2>{{ title }}</h2><div class="ranking-toggle" role="group" aria-label="{{ title }} görünümü"><button type="button" class="is-active" data-ranking-mode="all">All Namespaces</button><button type="button" data-ranking-mode="application">Application (KKB) Only</button></div></div>
+            {% for ranking_mode in ["all", "application"] %}<div class="bar-chart" data-ranking-list="{{ ranking_mode }}" {% if ranking_mode == "application" %}hidden{% endif %}>
+                {% for item in executive["rankings"][ranking_mode][key] %}
                 <div class="bar-row" title="{{ item['namespace'] }}: {{ item['value_text'] }} · cluster kapasitesinin %{{ item['capacity_percent'] }}">
                     <span>{{ item["namespace"] }}</span>
                     <div class="bar-track"><div class="bar-fill" style="width: {{ [item['capacity_percent'], 100]|min }}%"></div></div>
                     <strong>{{ item["value_text"] }}</strong>
                 </div>
-                {% else %}<p>Veri yok.</p>{% endfor %}
-            </div>
+                {% else %}<p>Bu görünüm için veri yok.</p>{% endfor %}
+            </div>{% endfor %}
         </section>
         {% endfor %}
     </div>
 
     <div class="executive-grid">
         <section class="executive-panel">
-            <h2>Capacity Risk Gauge</h2>
-            <div class="gauge-wrap">
+            <h2>Capacity Risk</h2>
+            <div class="risk-grid">
                 {% for resource, label in [("cpu", "CPU Overcommit"), ("memory", "Memory Overcommit")] %}
                 {% set gauge = executive["gauges"][resource] %}
-                {% set gauge_color = '#20a874' if gauge['risk'] == 'healthy' else '#f39a32' if gauge['risk'] == 'warning' else '#e14b53' %}
-                <div>
-                    <div class="gauge-chart" title="{{ label }}: %{{ gauge['percent'] }}" style="background: conic-gradient({{ gauge_color }} 0 {{ [gauge['percent'] / 2, 100]|min }}%, #e8edf3 {{ [gauge['percent'] / 2, 100]|min }}% 100%);"><span class="gauge-value">%{{ gauge["percent"] }}</span></div>
-                    <strong>{{ label }}</strong>
-                </div>
+                <article class="risk-card" title="{{ gauge['explanation'] }}"><strong>{{ label }}</strong><div class="risk-value">%{{ gauge["percent"] }}</div><span class="status-pill {{ gauge['risk'] }}">{{ gauge["risk"]|capitalize }}</span><div class="risk-scale" aria-hidden="true"><span></span><span></span><span></span><span></span></div><p>{{ gauge["explanation"] }}</p></article>
                 {% endfor %}
             </div>
         </section>
@@ -2056,6 +2098,21 @@
             "click", () => setRequestMode(button.dataset.requestToggle)
         ));
         setRequestMode("cpu");
+        document.querySelectorAll(".ranking-panel").forEach((panel) => {
+            panel.querySelectorAll("[data-ranking-mode]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    const mode = button.dataset.rankingMode === "application" ? "application" : "all";
+                    panel.querySelectorAll("[data-ranking-list]").forEach((list) => {
+                        list.hidden = list.dataset.rankingList !== mode;
+                    });
+                    panel.querySelectorAll("[data-ranking-mode]").forEach((candidate) => {
+                        const active = candidate.dataset.rankingMode === mode;
+                        candidate.classList.toggle("is-active", active);
+                        candidate.setAttribute("aria-pressed", String(active));
+                    });
+                });
+            });
+        });
         const trendRoot = document.getElementById("executive-trends");
         const trendKey = `executiveTrend:${dashboardData.cluster}`;
         let trendHistory = [];

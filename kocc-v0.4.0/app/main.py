@@ -286,6 +286,8 @@ PLATFORM_NAMESPACE_NAMES = {
 }
 OVERCOMMIT_WARNING_PERCENT = 100
 OVERCOMMIT_CRITICAL_PERCENT = 150
+OVERCOMMIT_HIGH_PERCENT = 150
+OVERCOMMIT_CRITICAL_EXECUTIVE_PERCENT = 250
 
 
 def is_platform_namespace(namespace: str) -> bool:
@@ -301,6 +303,37 @@ def risk_level(value: float, warning: float, critical: float) -> str:
     if value >= warning:
         return "warning"
     return "healthy"
+
+
+def capacity_risk_level(value: float) -> str:
+    if value >= OVERCOMMIT_CRITICAL_EXECUTIVE_PERCENT:
+        return "critical"
+    if value >= OVERCOMMIT_HIGH_PERCENT:
+        return "high"
+    if value >= OVERCOMMIT_WARNING_PERCENT:
+        return "warning"
+    return "healthy"
+
+
+def egressip_overview(items: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Normalize optional cached EgressIP data without performing an API call."""
+    normalized = []
+    for item in items or []:
+        node = item.get("assigned_node") or ""
+        normalized.append({
+            "name": item.get("name", "unknown"),
+            "namespace": item.get("namespace", "N/A"),
+            "assigned_node": node or "Unassigned",
+            "status": "Healthy" if node else "Unassigned",
+        })
+    unassigned = sum(item["status"] == "Unassigned" for item in normalized)
+    return {
+        "available": items is not None,
+        "items": normalized,
+        "total": len(normalized),
+        "unassigned": unassigned,
+        "status": "Attention Required" if unassigned else "Healthy",
+    }
 
 
 def allocation_distribution(
@@ -462,12 +495,12 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
         ),
     }
 
-    def ranking(resource: str, mode: str) -> list[dict[str, Any]]:
+    def ranking(resource: str, mode: str, source: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key = f"{resource}_{mode}"
         capacity = cluster[f"{resource}_capacity"]
         formatter = format_cpu if resource == "cpu" else format_memory
         ranked = sorted(
-            namespaces,
+            source,
             key=lambda item: (-int(item.get(key, 0) or 0), item["namespace"]),
         )[:EXECUTIVE_TOP_LIMIT]
         return [{
@@ -500,13 +533,15 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
     capacity_pressure = max(cpu["request_capacity_percent"], memory["request_capacity_percent"])
     health = data["health"]
     operators = data["cluster_operators"]
+    nodes = data.get("nodes", {"total": 0, "ready": 0, "not_ready": 0})
     missing_count = data["resources"]["missing_resources"]["application"]["count"]
+    pod_reasons = data["pods"].get("reason_counts", {})
     kpis = [
         {"label": "Overall Health Score", "value": f'{health["score"]}/100', "risk": health["status"].lower(), "icon": "♥"},
         {"label": "Cluster Request Allocation", "value": f"%{capacity_pressure}", "risk": risk_level(capacity_pressure, 75, 90), "icon": "◫"},
         {"label": "CPU Overcommit", "value": f"%{cpu_limit_percent}", "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "⚙"},
         {"label": "Memory Overcommit", "value": f"%{memory_limit_percent}", "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT), "icon": "▦"},
-        {"label": "Problem Pods", "value": data["pods"]["problem_count"], "risk": risk_level(data["pods"]["problem_count"], 1, 10), "icon": "!"},
+        {"label": "Problem Pods", "value": data["pods"]["problem_count"], "risk": risk_level(data["pods"]["problem_count"], 1, 10), "icon": "!", "detail": f'CrashLoopBackOff {pod_reasons.get("CrashLoopBackOff", 0)} · ImagePullBackOff {pod_reasons.get("ImagePullBackOff", 0)} · Pending {data["pods"].get("pending", 0)}'},
         {"label": "Missing Resources", "value": missing_count, "risk": risk_level(missing_count, 1, 100), "icon": "∅"},
         {"label": "Cluster Operators Healthy", "value": operators["healthy"] if operators["available"] else "N/A", "risk": "healthy" if operators["available"] and not operators["degraded"] and not operators["unavailable"] else "critical", "icon": "✓"},
     ]
@@ -551,15 +586,41 @@ def executive_dashboard(data: dict[str, Any]) -> dict[str, Any]:
         "kpis": kpis, "cpu": cpu, "memory": memory,
         "request_distributions": request_distributions,
         "rankings": {
-            "cpu_request": ranking("cpu", "request"),
-            "memory_request": ranking("memory", "request"),
-            "cpu_limit": ranking("cpu", "limit"),
-            "memory_limit": ranking("memory", "limit"),
+            "cpu_request": ranking("cpu", "request", namespaces),
+            "memory_request": ranking("memory", "request", namespaces),
+            "cpu_limit": ranking("cpu", "limit", namespaces),
+            "memory_limit": ranking("memory", "limit", namespaces),
+            "all": {
+                "cpu_request": ranking("cpu", "request", namespaces),
+                "memory_request": ranking("memory", "request", namespaces),
+                "cpu_limit": ranking("cpu", "limit", namespaces),
+                "memory_limit": ranking("memory", "limit", namespaces),
+            },
+            "application": {
+                "cpu_request": ranking("cpu", "request", applications),
+                "memory_request": ranking("memory", "request", applications),
+                "cpu_limit": ranking("cpu", "limit", applications),
+                "memory_limit": ranking("memory", "limit", applications),
+            },
         },
         "gauges": {
-            "cpu": {"percent": cpu_limit_percent, "risk": risk_level(cpu_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},
-            "memory": {"percent": memory_limit_percent, "risk": risk_level(memory_limit_percent, OVERCOMMIT_WARNING_PERCENT, OVERCOMMIT_CRITICAL_PERCENT)},
+            "cpu": {"percent": cpu_limit_percent, "risk": capacity_risk_level(cpu_limit_percent), "explanation": f"Tanımlı CPU limitleri fiziksel kapasitenin {cpu_limit_percent / 100:.2f} katı."},
+            "memory": {"percent": memory_limit_percent, "risk": capacity_risk_level(memory_limit_percent), "explanation": f"Tanımlı Memory limitleri fiziksel kapasitenin {memory_limit_percent / 100:.2f} katı."},
         },
+        "platform_overview": {
+            "nodes": {
+                "total": nodes.get("total", 0), "ready": nodes.get("ready", 0),
+                "not_ready": nodes.get("not_ready", 0),
+                "cpu_capacity": format_cpu(cluster["cpu_capacity"]),
+                "memory_capacity": format_memory(cluster["memory_capacity"]),
+            },
+            "operators": operators,
+            "routes": {"available": False, "message": "Base snapshot'ta toplanmıyor"},
+            "storage": {"available": False, "message": "Base snapshot'ta toplanmıyor"},
+            "conjur": next((item for item in data.get("platform_controls", []) if item["name"] == "Conjur Pods"), {"status": "Unavailable", "detail": "Data unavailable"}),
+        },
+        "critical_controls": data.get("platform_controls", []),
+        "egressips": egressip_overview(data.get("egressips") if "egressips" in data else None),
         "hotspots": [
             {"label": "En yüksek CPU request", "namespace": cpu_top[0], "value": format_cpu(cpu_top[1]), "href": "/resources"},
             {"label": "En yüksek Memory request", "namespace": memory_top[0], "value": format_memory(memory_top[1]), "href": "/resources"},

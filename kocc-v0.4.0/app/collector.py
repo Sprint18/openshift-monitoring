@@ -494,6 +494,7 @@ class ClusterCollector:
             ).items
         phase_counts: dict[str, int] = defaultdict(int)
         problem_items: list[dict[str, Any]] = []
+        reason_counts: dict[str, int] = defaultdict(int)
         now = datetime.now(timezone.utc)
 
         for pod in pods:
@@ -510,6 +511,8 @@ class ClusterCollector:
             if phase == "Running" and ready_containers == total_containers:
                 continue
 
+            reason = self.pod_reason(pod)
+            reason_counts[reason or phase] += 1
             problem_items.append(
                 {
                     "namespace": pod.metadata.namespace or "default",
@@ -517,7 +520,7 @@ class ClusterCollector:
                     "phase": phase,
                     "ready_containers": ready_containers,
                     "total_containers": total_containers,
-                    "reason": self.pod_reason(pod),
+                    "reason": reason,
                     "restarts": sum(
                         getattr(status, "restart_count", 0) or 0
                         for status in statuses
@@ -549,6 +552,7 @@ class ClusterCollector:
             "succeeded": phase_counts["Succeeded"],
             "unknown": phase_counts["Unknown"],
             "phase_counts": dict(sorted(phase_counts.items())),
+            "reason_counts": dict(sorted(reason_counts.items())),
             "problem_count": len(problem_items),
             "problem_items": problem_items[:DETAIL_LIMIT],
             "problem_more_count": max(0, len(problem_items) - DETAIL_LIMIT),
@@ -562,6 +566,45 @@ class ClusterCollector:
                 for item in problem_items
             ],
         }
+
+    @staticmethod
+    def get_platform_controls(pods: list[client.V1Pod]) -> list[dict[str, Any]]:
+        """Derive critical control health from the already collected pod list."""
+        controls = (
+            ("Conjur Pods", ("conjur",), ("conjur",)),
+            ("Kube API Server", ("openshift-kube-apiserver",), ()),
+            ("Etcd", ("openshift-etcd",), ()),
+            ("DNS (CoreDNS)", ("openshift-dns",), ()),
+            ("Ingress Controller", ("openshift-ingress",), ()),
+            ("Image Registry", ("openshift-image-registry",), ()),
+            ("Monitoring Stack", ("openshift-monitoring",), ()),
+        )
+        result: list[dict[str, Any]] = []
+        for label, namespaces, name_tokens in controls:
+            matches = []
+            for pod in pods:
+                namespace = (getattr(pod.metadata, "namespace", "") or "").lower()
+                name = (getattr(pod.metadata, "name", "") or "").lower()
+                if namespace in namespaces or any(token in name for token in name_tokens):
+                    if getattr(pod.status, "phase", None) != "Succeeded":
+                        matches.append(pod)
+            ready = 0
+            for pod in matches:
+                statuses = getattr(pod.status, "container_statuses", None) or []
+                expected = len(getattr(pod.spec, "containers", None) or [])
+                if (
+                    getattr(pod.status, "phase", None) == "Running"
+                    and expected > 0
+                    and sum(bool(getattr(status, "ready", False)) for status in statuses) == expected
+                ):
+                    ready += 1
+            status = "Unavailable" if not matches else "Healthy" if ready == len(matches) else "Warning"
+            result.append({
+                "name": label, "total": len(matches), "ready": ready,
+                "status": status,
+                "detail": "Data unavailable" if not matches else f"{ready} / {len(matches)} Ready",
+            })
+        return result
 
     @staticmethod
     def pod_reason(pod: client.V1Pod) -> str:
@@ -1041,6 +1084,7 @@ class ClusterCollector:
             "nodes": node_summary,
             "pods": pod_summary,
             "restarts": restart_summary,
+            "platform_controls": self.get_platform_controls(pods),
             "cluster_operators": operators,
             "namespace_count": self.get_namespace_count(namespaces),
             "resources": resource_summary,
