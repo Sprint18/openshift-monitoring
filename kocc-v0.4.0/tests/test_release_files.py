@@ -110,6 +110,18 @@ def test_deployment_excludes_dynatrace_and_preserves_secret_volume() -> None:
     assert secret["defaultMode"] == 0o440
 
 
+def test_test_deployment_mounts_existing_sqlite_pvc_with_fs_group() -> None:
+    deployment = manifest_resources()["Deployment"]
+    pod_spec = deployment["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    assert pod_spec["securityContext"] == {"fsGroup": 1002940000}
+    assert {"name": "kocc-data", "mountPath": "/data"} in container["volumeMounts"]
+    assert {
+        "name": "kocc-data",
+        "persistentVolumeClaim": {"claimName": "kocc-data"},
+    } in pod_spec["volumes"]
+
+
 def test_secret_template_targets_the_deployment_project() -> None:
     secret_template = PROJECT_ROOT / "openshift" / "rmtest-secret-template.yaml"
     secret = yaml.safe_load(secret_template.read_text())

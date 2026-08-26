@@ -1,5 +1,18 @@
 # OpenShift Clusters Monitoring Platform v0.4.0
 
+## SQLite Persistence Phase-1 (test)
+
+Test deployment mevcut `kocc-data` PVC'sini `/data` altında mount eder ve
+SQLite veritabanını `/data/kocc.db` konumunda otomatik oluşturur. WAL mode ve
+5000 ms busy timeout kullanılır. Schema migration'ları `schema_version`
+tablosunda izlenir; ilk migration `cluster_snapshot` ve
+`workload_image_snapshot` tablolarını oluşturur.
+
+Persistence yalnız başarılı, yeni Kubernetes collection sonrasında çalışır.
+Cache hit yeni kayıt üretmez ve aynı cluster için minimum kayıt aralığı beş
+dakikadır. SQLite initialization veya insert hataları dashboard/API yanıtını
+engellemez. Phase-1 UI ve REST endpointleri SQLite'tan veri okumaz.
+
 Bu release, OpenShift Clusters Monitoring Platform'a ilk multi-cluster
 altyapısını ekler.
 

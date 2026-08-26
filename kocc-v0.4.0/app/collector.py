@@ -51,6 +51,35 @@ class ClusterCollector:
             totals["memory_limit"] += memory_to_bytes(limits.get("memory"))
         return totals
 
+    @staticmethod
+    def workload_image_records(pods: list[client.V1Pod]) -> list[dict[str, str]]:
+        """Build persistence-only image records from the already listed Pods."""
+        records: list[dict[str, str]] = []
+        for pod in pods:
+            if getattr(pod.status, "phase", None) == "Succeeded":
+                continue
+            owners = getattr(pod.metadata, "owner_references", None) or []
+            owner = next(
+                (item for item in owners if getattr(item, "controller", False)),
+                owners[0] if owners else None,
+            )
+            kind = getattr(owner, "kind", None) or "Pod"
+            workload = getattr(owner, "name", None) or pod.metadata.name
+            containers = list(getattr(pod.spec, "containers", None) or [])
+            containers.extend(getattr(pod.spec, "init_containers", None) or [])
+            for container_item in containers:
+                image = getattr(container_item, "image", None)
+                if not image:
+                    continue
+                records.append({
+                    "namespace": pod.metadata.namespace or "default",
+                    "kind": kind,
+                    "workload": workload,
+                    "container": container_item.name,
+                    "image": image,
+                })
+        return records
+
     def get_workload_summary(self, namespace: str | None = None) -> list[dict[str, Any]]:
         calls = (
             ("Deployment", self.apps_api.list_namespaced_deployment
@@ -1150,6 +1179,9 @@ class ClusterCollector:
                     for pod in pods
                     if pod.status.phase != "Succeeded"
                 ],
+            },
+            "_persistence": {
+                "workload_images": self.workload_image_records(pods),
             },
         }
         log_performance("total.collection", collection_started)

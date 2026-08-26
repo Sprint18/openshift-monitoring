@@ -622,6 +622,42 @@ def test_cache_force_refresh_bypasses_fresh_snapshot(
     assert "ttl_ms=120000" in caplog.text
 
 
+@patch("app.main.snapshot_repository")
+@patch("app.main.prepare_dashboard_data")
+def test_sqlite_persistence_runs_only_after_successful_cache_miss(
+    prepare_data: Mock, repository: Mock,
+) -> None:
+    prepare_data.return_value = {
+        "nodes": {"total": 1, "ready": 1},
+        "pods": {"total": 2, "running": 2},
+        "namespace_count": 1,
+        "collection_duration_seconds": 0.5,
+        "_persistence": {"workload_images": []},
+    }
+    first = cached_dashboard_data("kkbtest")
+    second = cached_dashboard_data("kkbtest")
+    assert first["cache"]["hit"] is False
+    assert second["cache"]["hit"] is True
+    repository.save_snapshot.assert_called_once()
+    assert "_persistence" not in first
+
+
+@patch("app.main.snapshot_repository")
+@patch("app.main.prepare_dashboard_data")
+def test_sqlite_failure_never_blocks_dashboard(
+    prepare_data: Mock, repository: Mock,
+) -> None:
+    prepare_data.return_value = {
+        "nodes": {"total": 1, "ready": 1},
+        "pods": {"total": 1, "running": 1},
+        "namespace_count": 1,
+        "collection_duration_seconds": 0.1,
+    }
+    repository.save_snapshot.side_effect = OSError("read-only filesystem")
+    result = cached_dashboard_data("rmtest")
+    assert result["cache"]["hit"] is False
+
+
 @patch("app.main.ClusterCollector")
 @patch("app.main.new_cluster_client")
 def test_overview_and_resources_share_cluster_snapshot(

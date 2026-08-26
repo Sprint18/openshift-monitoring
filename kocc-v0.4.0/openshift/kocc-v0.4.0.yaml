@@ -151,6 +151,8 @@ spec:
         dynatrace.com/inject: "false"
     spec:
       serviceAccountName: kocc
+      securityContext:
+        fsGroup: 1002940000
       containers:
         - name: kocc
           image: image-registry.openshift-image-registry.svc:5000/ocp-monitoring-portal-test/kocc:0.4.0
@@ -186,6 +188,8 @@ spec:
             - name: remote-clusters
               mountPath: /etc/portal/clusters
               readOnly: true
+            - name: kocc-data
+              mountPath: /data
       volumes:
         - name: remote-clusters
           secret:
@@ -194,6 +198,9 @@ spec:
               - key: rmtest.kubeconfig
                 path: rmtest.kubeconfig
             defaultMode: 0440
+        - name: kocc-data
+          persistentVolumeClaim:
+            claimName: kocc-data
 ---
 apiVersion: v1
 kind: Service

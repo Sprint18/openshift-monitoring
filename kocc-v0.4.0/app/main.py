@@ -30,6 +30,8 @@ from app.cluster_loader import (
 )
 from app.collector import ClusterCollector
 from app.diagnostics import analyze_pod_diagnostics
+from app.db.database import Database
+from app.db.repository import SnapshotRepository
 from app.performance import (
     log_performance,
     get_perf_path,
@@ -41,6 +43,46 @@ from app.performance import (
 from app.resource_parser import format_cpu, format_memory
 
 logger = logging.getLogger("kocc")
+SQLITE_DATABASE_PATH = Path(os.getenv("KOCC_SQLITE_PATH", "/data/kocc.db"))
+snapshot_repository = SnapshotRepository(Database(SQLITE_DATABASE_PATH))
+
+
+def initialize_persistence() -> None:
+    try:
+        snapshot_repository.initialize()
+    except Exception as exc:
+        logger.warning(
+            "sqlite_init_failed exception_type=%s", type(exc).__name__
+        )
+
+
+def persist_collected_snapshot(cluster_key: str, data: dict[str, Any]) -> None:
+    persistence = data.pop("_persistence", {})
+    snapshot = {
+        "nodes_total": data.get("nodes", {}).get("total"),
+        "nodes_ready": data.get("nodes", {}).get("ready"),
+        "pods_total": data.get("pods", {}).get("total"),
+        "pods_running": data.get("pods", {}).get("running"),
+        "namespaces_total": data.get("namespace_count"),
+        "deployments_total": None,
+        "statefulsets_total": None,
+        "daemonsets_total": None,
+        "routes_total": None,
+        "pvcs_total": None,
+        "events_warning": None,
+        "collection_duration_ms": round(
+            float(data.get("collection_duration_seconds", 0)) * 1000
+        ),
+    }
+    try:
+        snapshot_repository.save_snapshot(
+            cluster_key, snapshot, persistence.get("workload_images", [])
+        )
+    except Exception as exc:
+        logger.warning(
+            "sqlite_snapshot_failed cluster=%s exception_type=%s",
+            cluster_key, type(exc).__name__,
+        )
 
 
 @asynccontextmanager
@@ -49,6 +91,7 @@ async def app_lifespan(application: FastAPI):
         "app_start pid=%s version=%s timestamp=%s",
         os.getpid(), application.version, datetime.now(timezone.utc).isoformat(),
     )
+    initialize_persistence()
     try:
         yield
     finally:
@@ -1041,6 +1084,7 @@ def _cached_dashboard_data(
                 )
                 return data
             raise
+        persist_collected_snapshot(cluster_key, data)
         with _dashboard_cache_lock:
             _dashboard_cache[cluster_key] = (time.monotonic(), deepcopy(data))
     data["cache"] = {"hit": False, "age_seconds": 0.0}
