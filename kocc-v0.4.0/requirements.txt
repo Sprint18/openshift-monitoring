@@ -3,3 +3,4 @@ starlette==0.47.3
 uvicorn==0.35.0
 jinja2==3.1.6
 kubernetes==33.1.0
+google-auth==2.56.3
