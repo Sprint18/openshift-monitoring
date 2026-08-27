@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kocc-ai-backend
+  namespace: test-openshift-ai-assistant
+data:
+  AI_LLM_BASE_URL: https://llm.kkb.com.tr
+  AI_LLM_MODEL: ""
+  AI_LLM_TIMEOUT_SECONDS: "20"
+  AI_MCP_KKBTEST_URL: http://openshift-mcp:8080/mcp
+  AI_MCP_TIMEOUT_SECONDS: "10"
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: kocc-ai-backend
+  namespace: test-openshift-ai-assistant
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: kocc-ai-backend
+  namespace: test-openshift-ai-assistant
+spec:
+  runPolicy: Serial
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      env:
+        - name: PIP_INDEX_URL
+          value: https://nexus.kkb.com.tr/repository/pypi-all/simple
+        - name: PIP_TRUSTED_HOST
+          value: nexus.kkb.com.tr
+  output:
+    to:
+      kind: ImageStreamTag
+      name: kocc-ai-backend:phase1
+      namespace: test-openshift-ai-assistant
+  triggers: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kocc-ai-backend
+  namespace: test-openshift-ai-assistant
+  annotations:
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"kocc-ai-backend:phase1","namespace":"test-openshift-ai-assistant"},"fieldPath":"spec.template.spec.containers[?(@.name==\"kocc-ai-backend\")].image","paused":false}]
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kocc-ai-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kocc-ai-backend
+      annotations:
+        dynatrace.com/inject: "false"
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kocc-ai-backend
+          image: image-registry.openshift-image-registry.svc:5000/test-openshift-ai-assistant/kocc-ai-backend:phase1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: kocc-ai-backend
+          env:
+            - name: AI_LLM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kocc-ai-llm
+                  key: api-token
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 30
+            timeoutSeconds: 25
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kocc-ai-backend
+  namespace: test-openshift-ai-assistant
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kocc-ai-backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
