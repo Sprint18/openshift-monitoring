@@ -29,13 +29,17 @@ def test_configuration_defaults_and_missing_token(monkeypatch) -> None:
     for name in (
         "AI_LLM_BASE_URL", "AI_LLM_API_TOKEN", "AI_LLM_MODEL",
         "AI_LLM_TIMEOUT_SECONDS", "AI_MCP_KKBTEST_URL",
-        "AI_MCP_TIMEOUT_SECONDS",
+        "AI_MCP_TIMEOUT_SECONDS", "AI_AGENT_MAX_ITERATIONS",
+        "AI_AGENT_MAX_TOOL_CALLS", "AI_AGENT_MAX_TOOL_RESULT_CHARS",
+        "AI_AGENT_MAX_USER_CHARS",
     ):
         monkeypatch.delenv(name, raising=False)
     configured = load_settings()
     assert configured.llm_base_url == "https://llm.kkb.com.tr"
     assert configured.llm_api_token is None
     assert configured.mcp_kkbtest_url == "http://openshift-mcp:8080/mcp"
+    assert configured.agent_max_iterations == 6
+    assert configured.agent_max_tool_calls == 10
     with pytest.raises(LLMUnavailable):
         LLMClient(configured).check()
 
@@ -43,6 +47,22 @@ def test_configuration_defaults_and_missing_token(monkeypatch) -> None:
 def test_configuration_rejects_invalid_timeout(monkeypatch) -> None:
     monkeypatch.setenv("AI_MCP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValueError, match="AI_MCP_TIMEOUT_SECONDS"):
+        load_settings()
+
+
+def test_agent_configuration_limits(monkeypatch) -> None:
+    monkeypatch.setenv("AI_AGENT_MAX_ITERATIONS", "10")
+    monkeypatch.setenv("AI_AGENT_MAX_TOOL_CALLS", "12")
+    monkeypatch.setenv("AI_AGENT_MAX_TOOL_RESULT_CHARS", "50000")
+    monkeypatch.setenv("AI_AGENT_MAX_USER_CHARS", "9000")
+    configured = load_settings()
+    assert configured.agent_max_iterations == 10
+    assert configured.agent_max_tool_calls == 12
+    assert configured.agent_max_tool_result_chars == 50000
+    assert configured.agent_max_user_chars == 9000
+
+    monkeypatch.setenv("AI_AGENT_MAX_ITERATIONS", "11")
+    with pytest.raises(ValueError, match="AI_AGENT_MAX_ITERATIONS"):
         load_settings()
 
 
@@ -101,8 +121,12 @@ def test_chat_missing_token_and_cluster_routing() -> None:
     assert unknown.status_code == 404
 
 
+@patch("app.main.MCPClient")
 @patch("app.llm_client.urllib.request.urlopen")
-def test_llm_network_error_is_controlled(urlopen: Mock) -> None:
+def test_llm_network_error_is_controlled(
+    urlopen: Mock, mcp_class: Mock
+) -> None:
+    mcp_class.return_value.list_tools.return_value = []
     urlopen.side_effect = urllib.error.URLError("internal network detail")
     client = TestClient(create_app(settings(token="not-a-real-token")))
     response = client.post("/api/v1/chat", json={
@@ -113,12 +137,65 @@ def test_llm_network_error_is_controlled(urlopen: Mock) -> None:
     assert "internal network detail" not in response.text
 
 
+@patch("app.main.MCPClient")
+def test_message_size_limit_is_controlled(mcp_class: Mock) -> None:
+    limited = settings(token="token")
+    limited = Settings(**{
+        **limited.__dict__, "agent_max_user_chars": 5,
+    })
+    response = TestClient(create_app(limited)).post("/api/v1/chat", json={
+        "cluster": "kkbtest", "message": "too long",
+    })
+    assert response.status_code == 400
+    assert response.json() == {"error": "message_too_large"}
+    mcp_class.assert_not_called()
+
+
 def test_sse_response_parser() -> None:
     result = parse_mcp_body(
         "text/event-stream",
         b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
     )
     assert result["result"] == {}
+
+
+@pytest.mark.parametrize("response", [
+    {},
+    {"choices": []},
+    {"choices": [{}]},
+    {"choices": [{"message": None}]},
+    {"choices": [{"message": {"content": None, "tool_calls": None}}]},
+    {"choices": [{"message": {"content": 42}}]},
+    {"choices": [{"message": {"content": None, "tool_calls": {}}}]},
+])
+def test_llm_malformed_responses_are_controlled(response: dict) -> None:
+    client = LLMClient(settings(token="token"))
+    client._request = Mock(return_value=response)
+    with pytest.raises(LLMUnavailable):
+        client.chat_completion([{"role": "user", "content": "test"}])
+
+
+def test_llm_tool_call_payload_uses_openai_compatible_fields() -> None:
+    client = LLMClient(settings(token="token"))
+    client._request = Mock(return_value={
+        "choices": [{"message": {
+            "content": None,
+            "tool_calls": [{"id": "one", "function": {
+                "name": "resources_list", "arguments": "{}",
+            }}],
+        }}],
+    })
+    tools = [{"type": "function", "function": {
+        "name": "resources_list", "parameters": {"type": "object"},
+    }}]
+    result = client.chat_completion(
+        [{"role": "user", "content": "test"}], tools, "auto"
+    )
+    assert result["tool_calls"][0]["id"] == "one"
+    payload = client._request.call_args.args[1]
+    assert payload["tools"] == tools
+    assert payload["tool_choice"] == "auto"
+    assert "temperature" not in payload
 
 
 class FakeResponse:

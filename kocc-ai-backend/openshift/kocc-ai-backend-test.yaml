@@ -9,6 +9,10 @@ data:
   AI_LLM_TIMEOUT_SECONDS: "20"
   AI_MCP_KKBTEST_URL: http://openshift-mcp:8080/mcp
   AI_MCP_TIMEOUT_SECONDS: "10"
+  AI_AGENT_MAX_ITERATIONS: "6"
+  AI_AGENT_MAX_TOOL_CALLS: "10"
+  AI_AGENT_MAX_TOOL_RESULT_CHARS: "40000"
+  AI_AGENT_MAX_USER_CHARS: "8000"
 ---
 apiVersion: image.openshift.io/v1
 kind: ImageStream

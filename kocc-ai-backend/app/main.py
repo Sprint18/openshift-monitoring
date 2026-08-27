@@ -9,6 +9,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.agent import AgentLimitReached, AgentLoop
 from app.clusters import UnknownClusterError, cluster_registry, selected_cluster
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
@@ -20,7 +21,7 @@ logger = logging.getLogger("kocc_ai")
 
 class ChatRequest(BaseModel):
     cluster: str
-    message: str = Field(min_length=1, max_length=8000)
+    message: str = Field(min_length=1)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -120,15 +121,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.post("/api/v1/chat")
     def chat(payload: ChatRequest) -> JSONResponse:
+        if len(payload.message) > configuration.agent_max_user_chars:
+            return JSONResponse({"error": "message_too_large"}, status_code=400)
         try:
-            selected_cluster(application.state.clusters, payload.cluster)
+            selected, mcp_client = mcp_for(payload.cluster)
         except UnknownClusterError:
             return JSONResponse({"error": "unknown_cluster"}, status_code=404)
+        if not application.state.llm_client.is_configured():
+            return JSONResponse({"error": "llm_unavailable"}, status_code=503)
         try:
-            answer = application.state.llm_client.chat(payload.message)
-            return JSONResponse({"cluster": payload.cluster, "answer": answer})
+            result = AgentLoop(
+                configuration, application.state.llm_client, mcp_client
+            ).run(payload.message)
+            return JSONResponse({
+                "cluster": selected.id,
+                "answer": result.answer,
+                "tool_calls": result.tool_calls,
+            })
+        except MCPUnavailable:
+            return JSONResponse({"error": "mcp_unavailable"}, status_code=503)
         except LLMUnavailable:
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
+        except AgentLimitReached as exc:
+            error = "agent_iteration_limit"
+            if str(exc) == "tool_call_limit":
+                error = "agent_tool_call_limit"
+            return JSONResponse({"error": error}, status_code=503)
 
     return application
 
