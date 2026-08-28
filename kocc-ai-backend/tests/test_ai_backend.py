@@ -182,6 +182,35 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
     }
 
 
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_ai_chat_operational_log_contains_only_safe_metadata(
+    mcp_class: Mock, agent_class: Mock, caplog
+) -> None:
+    secret_prompt = "private-user-question-never-log"
+    agent_class.return_value.run.return_value = AgentResult(
+        answer="Grounded",
+        tool_calls=[{"name": "resources_list", "status": "success"}],
+        evidence_items=[{
+            "tool": "resources_list", "status": "success",
+            "facts": {"resource_count": 34},
+        }],
+        iterations=1,
+    )
+    with caplog.at_level("INFO", logger="kocc_ai"):
+        response = TestClient(create_app(settings(token="secret-token"))).post(
+            "/api/v1/chat",
+            json={"cluster": "kkbtest", "message": secret_prompt},
+        )
+    assert response.status_code == 200
+    assert "ai_chat_complete cluster=kkbtest outcome=success" in caplog.text
+    assert "tools=resources_list:success" in caplog.text
+    assert "facts=True iterations=1" in caplog.text
+    assert secret_prompt not in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "mcp.example" not in caplog.text
+
+
 def test_sse_response_parser() -> None:
     result = parse_mcp_body(
         "text/event-stream",

@@ -129,10 +129,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": "unknown_cluster"}, status_code=404)
         if not application.state.llm_client.is_configured():
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
+        started = time.perf_counter()
         try:
             result = AgentLoop(
                 configuration, application.state.llm_client, mcp_client
             ).run(payload.message)
+            tool_summary = ",".join(
+                f"{item['name']}:{item['status']}" for item in result.tool_calls
+            ) or "none"
+            logger.info(
+                "ai_chat_complete cluster=%s outcome=success tools=%s facts=%s iterations=%s duration_ms=%s",
+                selected.id,
+                tool_summary,
+                any("facts" in item for item in result.evidence),
+                result.iterations,
+                round((time.perf_counter() - started) * 1000),
+            )
             return JSONResponse({
                 "cluster": selected.id,
                 "answer": result.answer,
@@ -140,13 +152,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "evidence": result.evidence,
             })
         except MCPUnavailable:
+            logger.warning(
+                "ai_chat_complete cluster=%s outcome=mcp_unavailable duration_ms=%s",
+                selected.id, round((time.perf_counter() - started) * 1000),
+            )
             return JSONResponse({"error": "mcp_unavailable"}, status_code=503)
         except LLMUnavailable:
+            logger.warning(
+                "ai_chat_complete cluster=%s outcome=llm_unavailable duration_ms=%s",
+                selected.id, round((time.perf_counter() - started) * 1000),
+            )
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
         except AgentLimitReached as exc:
             error = "agent_iteration_limit"
             if str(exc) == "tool_call_limit":
                 error = "agent_tool_call_limit"
+            logger.warning(
+                "ai_chat_complete cluster=%s outcome=%s duration_ms=%s",
+                selected.id, error, round((time.perf_counter() - started) * 1000),
+            )
             return JSONResponse({"error": error}, status_code=503)
 
     return application

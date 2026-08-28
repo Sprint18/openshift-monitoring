@@ -298,7 +298,12 @@ def test_ai_template_is_a_scrollable_chat_workspace() -> None:
     source = shiftlight_source()
     assert 'class="shiftlight-drawer"' in partial
     assert ".shiftlight-drawer" in css
-    assert "grid-template-rows: auto auto auto minmax(0,1fr) auto" in css
+    assert "display: flex" in css
+    assert "flex-direction: column" in css
+    assert "height: 100dvh" in css
+    assert ".shiftlight-conversation { display:flex; flex:1 1 auto" in css
+    assert "min-height:0" in css or "min-height: 0" in css
+    assert ".shiftlight-composer { position:relative; bottom:auto; flex:0 0 auto" in css
     assert "overflow-y:auto" in css
     assert "conversation.scrollHeight" in source
     assert "conversation.scrollTop" in source
@@ -390,12 +395,15 @@ def test_shiftlight_nav_is_deemphasized_and_legacy_route_opens_drawer() -> None:
 def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
-    assert "Merhaba 👋 Ben KKB ShiftLight AI." in partial
+    assert "Merhaba 👋" in partial
+    assert "Ben KKB ShiftLight AI." in partial
     assert 'aria-controls="shiftlight-drawer"' in partial
     assert "sessionStorage.getItem(NUDGE_KEY)" in source
     assert "window.setTimeout(dismissNudge, 6500)" in source
     assert "prefers-reduced-motion: reduce" in css
     assert "https://" not in partial and "cdn" not in partial.lower()
+    assert 'role="dialog"' in partial
+    assert 'aria-modal="false"' in partial
 
 
 def test_shiftlight_session_history_is_minimal_and_cluster_isolated() -> None:
@@ -412,6 +420,9 @@ def test_shiftlight_session_history_is_minimal_and_cluster_isolated() -> None:
     assert "kubeconfig" not in source
     assert "api-token" not in source
     assert "tool_calls" not in source
+    assert 'form.hidden = viewMode === "previous"' in source
+    assert 'viewMode === "previous" ? "Güncel Sohbet" : "Önceki Sohbet"' in source
+    assert "Salt okunur önceki sohbet" in source
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:
@@ -429,3 +440,30 @@ def test_favicon_uses_existing_kbb_asset() -> None:
     response = client.get("/favicon.ico")
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
+
+
+def test_shiftlight_mascot_is_local_and_integrated_globally() -> None:
+    static = Path(__file__).parents[1] / "app/static"
+    mascot = static / "shiftlight-mascot.png"
+    partial, source = shiftlight_partial(), shiftlight_source()
+    css = (static / "shiftlight_assistant.css").read_text()
+    assert mascot.is_file() and mascot.stat().st_size > 1000
+    assert partial.count('/static/shiftlight-mascot.png') == 2
+    assert 'avatar.src = "/static/shiftlight-mascot.png"' in source
+    assert 'mascot.src = "/static/shiftlight-mascot.png"' in source
+    assert "@keyframes shiftlight-bob" in css
+    assert ".shiftlight-launcher-mascot" in css
+    assert "animation:none" in css
+
+
+def test_shiftlight_layout_stays_bounded_with_many_messages() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert "MAX_MESSAGES = 100" in source
+    assert "overflow-y:auto" in css
+    assert "overflow-x:hidden" in css
+    assert "nearConversationBottom" in source
+    assert "previousScrollTop" in source
+    assert "followBottom ? conversation.scrollHeight : previousScrollTop" in source
+    assert ".shiftlight-empty { display:flex; flex:1 1 auto" in css
+    assert "min-height:260px" not in css

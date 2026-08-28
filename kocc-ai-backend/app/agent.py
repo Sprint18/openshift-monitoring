@@ -109,6 +109,7 @@ class AgentResult:
     answer: str
     tool_calls: list[dict[str, str]]
     evidence_items: list[dict[str, Any]] = field(default_factory=list)
+    iterations: int = 0
 
     @property
     def evidence(self) -> list[dict[str, Any]]:
@@ -255,7 +256,7 @@ class AgentLoop:
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
-                return AgentResult(content, audit, evidence_audit)
+                return AgentResult(content, audit, evidence_audit, iteration)
 
             messages.append({
                 "role": "assistant",
@@ -288,7 +289,8 @@ class AgentLoop:
                         and all(key in facts for key in PUBLIC_FACT_KEYS)
                     ):
                         return AgentResult(
-                            _direct_cluster_operator_answer(facts), audit, evidence_audit
+                            _direct_cluster_operator_answer(facts), audit,
+                            evidence_audit, iteration,
                         )
                 elif (
                     direct_identity is not None
@@ -299,6 +301,7 @@ class AgentLoop:
                         "Öneri: `oc get clusteroperators` komutuyla manuel kontrol edin.",
                         audit,
                         evidence_audit,
+                        iteration,
                     )
 
         raise AgentLimitReached("iteration_limit")

@@ -3,14 +3,13 @@
 <div id="shiftlight-root" data-initial-cluster="{{ selected_cluster }}" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
     <div id="shiftlight-nudge" class="shiftlight-nudge" hidden role="status">
         <button id="shiftlight-nudge-close" type="button" aria-label="ShiftLight karşılama mesajını kapat">×</button>
-        <strong>Merhaba 👋 Ben KKB ShiftLight AI.</strong>
-        <span>OpenShift desteği için buradayım.</span>
+        <img src="/static/shiftlight-mascot.png" alt="" aria-hidden="true"><div><strong>Merhaba 👋</strong><span>Ben KKB ShiftLight AI.<br>OpenShift desteği için buradayım.</span></div>
     </div>
     <button id="shiftlight-launcher" class="shiftlight-launcher" type="button" aria-label="KKB ShiftLight AI asistanını aç" aria-controls="shiftlight-drawer" aria-expanded="false">
-        <span class="shiftlight-launcher-mark" aria-hidden="true">AI</span><span>KKB ShiftLight AI</span>
+        <img class="shiftlight-launcher-mascot" src="/static/shiftlight-mascot.png" alt="" aria-hidden="true"><span>KKB ShiftLight AI</span>
     </button>
     <div id="shiftlight-overlay" class="shiftlight-overlay" hidden></div>
-    <aside id="shiftlight-drawer" class="shiftlight-drawer" aria-label="KKB ShiftLight AI" aria-hidden="true">
+    <aside id="shiftlight-drawer" class="shiftlight-drawer" role="dialog" aria-modal="false" aria-label="KKB ShiftLight AI" aria-hidden="true">
         <header class="shiftlight-header">
             <div class="shiftlight-brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><strong>KKB ShiftLight AI</strong><small>OpenShift Operasyon Asistanı</small></div></div>
             <div class="shiftlight-header-actions"><span class="shiftlight-readonly">Read-only</span><button id="shiftlight-close" type="button" aria-label="Asistanı kapat">×</button></div>

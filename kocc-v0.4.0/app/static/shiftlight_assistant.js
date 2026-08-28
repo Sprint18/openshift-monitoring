@@ -214,19 +214,23 @@
     const assistantShell = () => {
         const article = document.createElement("article"); article.className = "shiftlight-message assistant";
         const identity = document.createElement("div"); identity.className = "shiftlight-identity";
-        addText(identity, "span", "shiftlight-avatar", "AI"); addText(identity, "span", "", "ShiftLight"); article.appendChild(identity);
+        const avatar = document.createElement("img"); avatar.className = "shiftlight-avatar"; avatar.src = "/static/shiftlight-mascot.png"; avatar.alt = ""; avatar.setAttribute("aria-hidden", "true"); identity.appendChild(avatar);
+        addText(identity, "span", "", "ShiftLight AI"); article.appendChild(identity);
         const answer = document.createElement("div"); answer.className = "shiftlight-answer"; article.appendChild(answer);
         return {article, answer};
     };
     const renderEmpty = () => {
         const empty = document.createElement("div"); empty.className = "shiftlight-empty";
-        const content = document.createElement("div"); addText(content, "h2", "", "KKB ShiftLight AI"); addText(content, "p", "", "OpenShift cluster'ınız hakkında nasıl yardımcı olabilirim?");
+        const content = document.createElement("div"); const mascot = document.createElement("img"); mascot.className = "shiftlight-empty-mascot"; mascot.src = "/static/shiftlight-mascot.png"; mascot.alt = "KKB ShiftLight AI maskotu"; content.appendChild(mascot); addText(content, "h2", "", "KKB ShiftLight AI"); addText(content, "p", "", "OpenShift cluster'ınız hakkında nasıl yardımcı olabilirim?");
         const choices = document.createElement("div"); choices.className = "shiftlight-suggestions";
         suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.disabled = viewMode === "previous"; button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
         content.appendChild(choices); empty.appendChild(content); conversation.appendChild(empty);
     };
     const displayedConversation = () => viewMode === "previous" ? store.previous : store.current;
-    const renderConversation = () => {
+    const nearConversationBottom = () => conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 80;
+    const renderConversation = (forceBottom = false) => {
+        const followBottom = forceBottom || nearConversationBottom();
+        const previousScrollTop = conversation.scrollTop;
         conversation.replaceChildren();
         const selected = displayedConversation();
         if (!selected || !selected.messages.length) renderEmpty();
@@ -239,7 +243,9 @@
         historyNote.hidden = viewMode !== "previous";
         historyNote.textContent = viewMode === "previous" && store.previous ? `Salt okunur önceki sohbet · ${store.previous.cluster.toUpperCase()}` : "";
         form.hidden = viewMode === "previous";
-        conversation.scrollTop = conversation.scrollHeight;
+        requestAnimationFrame(() => {
+            conversation.scrollTop = followBottom ? conversation.scrollHeight : previousScrollTop;
+        });
     };
 
     const openDrawer = () => {
@@ -275,8 +281,8 @@
     const setPending = (pending) => {
         requestPending = pending; clusterSelect.disabled = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending || !clusterSelect.value;
     };
-    const addCurrentMessage = (message) => { store.current.messages.push(safeMessage(message)); store.current.messages = store.current.messages.filter(Boolean).slice(-MAX_MESSAGES); persistStore(); renderConversation(); };
-    const startNew = (cluster = clusterSelect.value) => { archiveCurrent(); store.current = emptyConversation(cluster); viewMode = "current"; persistStore(); renderConversation(); };
+    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); store.current.messages.push(safeMessage(message)); store.current.messages = store.current.messages.filter(Boolean).slice(-MAX_MESSAGES); persistStore(); renderConversation(followBottom); };
+    const startNew = (cluster = clusterSelect.value) => { archiveCurrent(); store.current = emptyConversation(cluster); viewMode = "current"; persistStore(); renderConversation(true); };
     const changeCluster = () => { const selected = clusterSelect.value; if (selected !== store.current.cluster) startNew(selected); statusText.textContent = `Cluster context: ${selected.toUpperCase()}`; };
     const loadClusters = async () => {
         try {
@@ -289,14 +295,14 @@
             const selected = supportedIds.has(portalCluster) ? portalCluster : supportedIds.has(store.current.cluster) ? store.current.cluster : supportedClusters[0].id;
             if (!supportedIds.has(store.current.cluster) || (supportedIds.has(portalCluster) && store.current.cluster && store.current.cluster !== portalCluster)) startNew(selected);
             else if (!store.current.cluster) { store.current.cluster = selected; persistStore(); }
-            clusterSelect.value = store.current.cluster; clusterSelect.disabled = false; sendButton.disabled = false; renderConversation();
+            clusterSelect.value = store.current.cluster; clusterSelect.disabled = false; sendButton.disabled = false; renderConversation(true);
         } catch (_error) { clusterSelect.replaceChildren(new Option("ShiftLight kullanılamıyor", "")); statusText.textContent = MESSAGES.unavailable; statusText.classList.add("error"); }
     };
 
     form.addEventListener("submit", async (event) => {
         event.preventDefault(); if (requestPending || viewMode !== "current") return;
         const text = messageInput.value; if (!text.trim() || !clusterSelect.value) return;
-        addCurrentMessage({role: "user", text, evidence: []}); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
+        addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         try {
             const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({cluster: clusterSelect.value, message: text})});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
