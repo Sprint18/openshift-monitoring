@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -159,6 +160,71 @@ def _direct_cluster_operator_answer(facts: dict[str, Any]) -> str:
     )
 
 
+def _deterministic_cluster_operator_summary(facts: dict[str, int]) -> str:
+    return (
+        "## ClusterOperator Durumu\n\n"
+        f"- Toplam ClusterOperator: **{facts['resource_count']}**\n"
+        f"- Degraded=True: **{facts['degraded_true_count']}**\n"
+        f"- Available=False: **{facts['available_false_count']}**\n"
+        f"- Progressing=True: **{facts['progressing_true_count']}**"
+    )
+
+
+def _guard_cluster_operator_answer(
+    answer: str, evidence: list[dict[str, Any]]
+) -> str:
+    """Replace only obvious numeric contradictions for authoritative CO facts."""
+    facts = next((
+        item.get("facts") for item in evidence
+        if item.get("tool") == "resources_list"
+        and isinstance(item.get("facts"), dict)
+        and all(key in item["facts"] for key in PUBLIC_FACT_KEYS)
+    ), None)
+    if not isinstance(facts, dict):
+        return answer
+    authoritative = {
+        key: value for key, value in facts.items()
+        if key in PUBLIC_FACT_KEYS
+        and isinstance(value, int) and not isinstance(value, bool)
+    }
+    if len(authoritative) != len(PUBLIC_FACT_KEYS):
+        return answer
+
+    def claims(patterns: tuple[str, ...]) -> set[int]:
+        values: set[int] = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, answer, flags=re.IGNORECASE):
+                values.add(int(next(group for group in match.groups() if group)))
+        return values
+
+    observed = {
+        "resource_count": claims((
+            r"\b(\d+)\s+ClusterOperator(?:ler|s)?\b",
+            r"\bClusterOperator(?:ler|s)?\s*(?:sayısı|count|toplam)?\s*[:=]\s*(\d+)\b",
+        )),
+        "degraded_true_count": claims((
+            r"\bDegraded(?:\s*=\s*True)?\D{0,12}(\d+)\b",
+            r"\b(\d+)\s+Degraded\b",
+        )),
+        "available_false_count": claims((
+            r"\b(?:Unavailable|Available\s*=\s*False)\D{0,12}(\d+)\b",
+            r"\b(\d+)\s+(?:Unavailable|Available\s*=\s*False)\b",
+        )),
+        "progressing_true_count": claims((
+            r"\bProgressing(?:\s*=\s*True)?\D{0,12}(\d+)\b",
+            r"\b(\d+)\s+Progressing\b",
+        )),
+    }
+    contradictory = any(
+        values and any(value != authoritative[key] for value in values)
+        for key, values in observed.items()
+    )
+    return (
+        _deterministic_cluster_operator_summary(authoritative)
+        if contradictory else answer
+    )
+
+
 def _contains_forbidden_key(value: Any) -> bool:
     if isinstance(value, dict):
         for key, nested in value.items():
@@ -256,7 +322,10 @@ class AgentLoop:
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
-                return AgentResult(content, audit, evidence_audit, iteration)
+                return AgentResult(
+                    _guard_cluster_operator_answer(content, evidence_audit),
+                    audit, evidence_audit, iteration,
+                )
 
             messages.append({
                 "role": "assistant",

@@ -406,23 +406,25 @@ def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
     assert 'aria-modal="false"' in partial
 
 
-def test_shiftlight_session_history_is_minimal_and_cluster_isolated() -> None:
-    source = shiftlight_source()
+def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
     assert 'const SESSION_KEY = "kocc.shiftlight.conversations.v1"' in source
+    assert "const STORE_VERSION = 1" in source
+    assert "const MAX_CONVERSATIONS = 10" in source
     assert "sessionStorage.setItem(SESSION_KEY" in source
     assert "localStorage" not in source
-    assert "current: emptyConversation()" in source
-    assert "previous: null" in source
-    assert "store.previous = safeConversation(store.current)" in source
-    assert "store.current = emptyConversation(cluster)" in source
-    assert "selected !== store.current.cluster" in source
+    assert "activeConversationId" in source
+    assert "conversations: []" in source
+    assert "store.conversations.push(item)" in source
+    assert "store.conversations = store.conversations.slice(-MAX_CONVERSATIONS)" in source
+    assert "item.cluster" in source
+    assert "createdAt, updatedAt, messages" in source
+    assert 'id="shiftlight-history-list"' in partial
+    assert "Sohbetler" in partial
     assert "raw MCP" not in source
     assert "kubeconfig" not in source
     assert "api-token" not in source
     assert "tool_calls" not in source
-    assert 'form.hidden = viewMode === "previous"' in source
-    assert 'viewMode === "previous" ? "Güncel Sohbet" : "Önceki Sohbet"' in source
-    assert "Salt okunur önceki sohbet" in source
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:
@@ -453,6 +455,10 @@ def test_shiftlight_mascot_is_local_and_integrated_globally() -> None:
     assert 'mascot.src = "/static/shiftlight-mascot.png"' in source
     assert "@keyframes shiftlight-bob" in css
     assert ".shiftlight-launcher-mascot" in css
+    assert "width:68px; height:68px" in css
+    assert "width:110px; height:110px" in css
+    assert "width:132px; height:132px" in css
+    assert "width:30px; height:30px" in css
     assert "animation:none" in css
 
 

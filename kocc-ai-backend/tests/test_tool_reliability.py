@@ -108,6 +108,50 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
     assert result.answer == "Genel sağlık kanıtları incelendi."
 
 
+def test_cluster_operator_numeric_contradiction_uses_deterministic_fallback() -> None:
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [tool_call(
+            "resources_list",
+            '{"apiVersion":"config.openshift.io/v1","kind":"ClusterOperator"}',
+        )]},
+        {"content": "35 ClusterOperators bulundu. Degraded: 1.", "tool_calls": None},
+    ])
+    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+
+    result = AgentLoop(configured(), llm, mcp).run("ClusterOperator envanterini say")
+
+    assert "Toplam ClusterOperator: **34**" in result.answer
+    assert "Degraded=True: **0**" in result.answer
+    assert "Available=False: **0**" in result.answer
+    assert "Progressing=True: **0**" in result.answer
+    assert "35" not in result.answer
+
+
+def test_cluster_operator_consistent_answer_is_not_rewritten() -> None:
+    expected = "34 ClusterOperator bulundu. Degraded: 0."
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [tool_call(
+            "resources_list",
+            '{"apiVersion":"config.openshift.io/v1","kind":"ClusterOperator"}',
+        )]},
+        {"content": expected, "tool_calls": None},
+    ])
+    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+
+    result = AgentLoop(configured(), llm, mcp).run("ClusterOperator envanterini say")
+
+    assert result.answer == expected
+
+
+def test_cluster_operator_answer_without_authoritative_facts_is_not_rewritten() -> None:
+    expected = "35 ClusterOperator bulundu."
+    result = AgentLoop(
+        configured(), FakeLLM([{"content": expected, "tool_calls": None}]), mcp_with([])
+    ).run("ClusterOperator envanterini say")
+
+    assert result.answer == expected
+
+
 def test_prompt_forbids_unsupported_rbac_inference() -> None:
     prompt = SYSTEM_PROMPT.lower()
     assert "rbac" in prompt or "permission" in prompt

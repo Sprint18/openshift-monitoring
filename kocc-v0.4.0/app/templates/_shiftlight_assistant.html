@@ -16,9 +16,9 @@
         </header>
         <div class="shiftlight-toolbar">
             <label for="shiftlight-cluster">Cluster<select id="shiftlight-cluster" disabled><option>Yükleniyor…</option></select></label>
-            <div><button id="shiftlight-previous" type="button" hidden>Önceki Sohbet</button><button id="shiftlight-new" type="button">Yeni Sohbet</button></div>
+            <div><button id="shiftlight-history-toggle" type="button" aria-controls="shiftlight-history" aria-expanded="false">Sohbetler</button><button id="shiftlight-new" type="button">Yeni Sohbet</button></div>
         </div>
-        <div id="shiftlight-history-note" class="shiftlight-history-note" hidden></div>
+        <div id="shiftlight-history" class="shiftlight-history" hidden><div class="shiftlight-history-title"><strong>Sohbetler</strong><button id="shiftlight-history-close" type="button" aria-label="Sohbet listesini kapat">×</button></div><div id="shiftlight-history-list" class="shiftlight-history-list"></div></div>
         <section id="shiftlight-conversation" class="shiftlight-conversation" aria-live="polite"></section>
         <form id="shiftlight-form" class="shiftlight-composer">
             <label for="shiftlight-message" class="shiftlight-sr-only">OpenShift sorunuzu yazın</label>

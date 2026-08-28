@@ -6,6 +6,8 @@
 
     const SESSION_KEY = "kocc.shiftlight.conversations.v1";
     const NUDGE_KEY = "kocc.shiftlight.nudge-dismissed.v1";
+    const STORE_VERSION = 1;
+    const MAX_CONVERSATIONS = 10;
     const MAX_MESSAGES = 100;
     const MAX_TEXT_LENGTH = 50000;
     const FACT_KEYS = Object.freeze({
@@ -34,24 +36,27 @@
     const nudge = document.getElementById("shiftlight-nudge");
     const nudgeClose = document.getElementById("shiftlight-nudge-close");
     const clusterSelect = document.getElementById("shiftlight-cluster");
-    const previousButton = document.getElementById("shiftlight-previous");
+    const historyToggle = document.getElementById("shiftlight-history-toggle");
+    const historyPanel = document.getElementById("shiftlight-history");
+    const historyClose = document.getElementById("shiftlight-history-close");
+    const historyList = document.getElementById("shiftlight-history-list");
     const newButton = document.getElementById("shiftlight-new");
-    const historyNote = document.getElementById("shiftlight-history-note");
     const conversation = document.getElementById("shiftlight-conversation");
     const form = document.getElementById("shiftlight-form");
     const messageInput = document.getElementById("shiftlight-message");
     const sendButton = document.getElementById("shiftlight-send");
     const statusText = document.getElementById("shiftlight-status");
     let requestPending = false;
-    let viewMode = "current";
     let supportedClusters = [];
 
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
     }
 
-    const emptyConversation = (cluster = "") => ({cluster, messages: []});
-    const emptyStore = () => ({current: emptyConversation(), previous: null});
+    const conversationId = () => globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const nowIso = () => new Date().toISOString();
+    const emptyConversation = (cluster = "") => { const timestamp = nowIso(); return {id: conversationId(), cluster, createdAt: timestamp, updatedAt: timestamp, messages: []}; };
+    const emptyStore = () => ({version: STORE_VERSION, activeConversationId: null, conversations: []});
     const isSafeInteger = (value) => Number.isInteger(value) && value >= 0;
     const safeFacts = (facts) => {
         if (!facts || typeof facts !== "object" || Array.isArray(facts)) return {};
@@ -77,12 +82,23 @@
     const safeConversation = (value) => {
         if (!value || typeof value !== "object" || typeof value.cluster !== "string") return emptyConversation();
         const messages = Array.isArray(value.messages) ? value.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES) : [];
-        return {cluster: value.cluster.slice(0, 80), messages};
+        const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
+        const updatedAt = typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
+        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), cluster: value.cluster.slice(0, 80), createdAt, updatedAt, messages};
     };
-    const safeStore = (value) => ({
-        current: safeConversation(value && value.current),
-        previous: value && value.previous ? safeConversation(value.previous) : null
-    });
+    const safeStore = (value) => {
+        let conversations = [];
+        let activeConversationId = null;
+        if (value && value.version === STORE_VERSION && Array.isArray(value.conversations)) {
+            conversations = value.conversations.map(safeConversation).slice(-MAX_CONVERSATIONS);
+            activeConversationId = typeof value.activeConversationId === "string" ? value.activeConversationId : null;
+        } else if (value && (value.current || value.previous)) {
+            conversations = [value.previous, value.current].filter(Boolean).map(safeConversation).slice(-MAX_CONVERSATIONS);
+            activeConversationId = conversations.length ? conversations[conversations.length - 1].id : null;
+        }
+        if (!conversations.some((item) => item.id === activeConversationId)) activeConversationId = conversations.length ? conversations[conversations.length - 1].id : null;
+        return {version: STORE_VERSION, activeConversationId, conversations};
+    };
     const loadStore = () => {
         try { return safeStore(JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null")); }
         catch (_error) { return emptyStore(); }
@@ -92,9 +108,14 @@
         store = safeStore(store);
         sessionStorage.setItem(SESSION_KEY, JSON.stringify(store));
     };
-    const meaningful = (item) => Boolean(item && item.messages.length);
-    const archiveCurrent = () => {
-        if (meaningful(store.current)) store.previous = safeConversation(store.current);
+    const activeConversation = () => store.conversations.find((item) => item.id === store.activeConversationId) || null;
+    const createConversation = (cluster = "") => {
+        const item = emptyConversation(cluster);
+        store.conversations.push(item);
+        store.conversations = store.conversations.slice(-MAX_CONVERSATIONS);
+        store.activeConversationId = item.id;
+        persistStore();
+        return item;
     };
 
     const addText = (parent, tag, className, text) => {
@@ -223,26 +244,40 @@
         const empty = document.createElement("div"); empty.className = "shiftlight-empty";
         const content = document.createElement("div"); const mascot = document.createElement("img"); mascot.className = "shiftlight-empty-mascot"; mascot.src = "/static/shiftlight-mascot.png"; mascot.alt = "KKB ShiftLight AI maskotu"; content.appendChild(mascot); addText(content, "h2", "", "KKB ShiftLight AI"); addText(content, "p", "", "OpenShift cluster'ınız hakkında nasıl yardımcı olabilirim?");
         const choices = document.createElement("div"); choices.className = "shiftlight-suggestions";
-        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.disabled = viewMode === "previous"; button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
+        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
         content.appendChild(choices); empty.appendChild(content); conversation.appendChild(empty);
     };
-    const displayedConversation = () => viewMode === "previous" ? store.previous : store.current;
+    const conversationTitle = (item) => {
+        const question = item.messages.find((message) => message.role === "user");
+        if (!question) return "Yeni sohbet";
+        return question.text.length > 36 ? `${question.text.slice(0, 36).trim()}…` : question.text;
+    };
+    const renderHistory = () => {
+        historyList.replaceChildren();
+        if (!store.conversations.length) { addText(historyList, "div", "shiftlight-history-empty", "Henüz sohbet yok."); return; }
+        [...store.conversations].reverse().forEach((item) => {
+            const button = document.createElement("button"); button.type = "button"; button.className = `shiftlight-history-item${item.id === store.activeConversationId ? " active" : ""}`;
+            const time = addText(button, "time", "", new Date(item.updatedAt).toLocaleTimeString("tr-TR", {hour: "2-digit", minute: "2-digit"})); time.dateTime = item.updatedAt;
+            addText(button, "strong", "", conversationTitle(item)); addText(button, "small", "", item.cluster.toUpperCase());
+            button.addEventListener("click", () => { store.activeConversationId = item.id; persistStore(); clusterSelect.value = item.cluster; closeHistory(); renderConversation(true); });
+            historyList.appendChild(button);
+        });
+    };
+    const closeHistory = () => { historyPanel.hidden = true; historyToggle.setAttribute("aria-expanded", "false"); };
+    const toggleHistory = () => { const opening = historyPanel.hidden; historyPanel.hidden = !opening; historyToggle.setAttribute("aria-expanded", String(opening)); if (opening) renderHistory(); };
     const nearConversationBottom = () => conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 80;
     const renderConversation = (forceBottom = false) => {
         const followBottom = forceBottom || nearConversationBottom();
         const previousScrollTop = conversation.scrollTop;
         conversation.replaceChildren();
-        const selected = displayedConversation();
+        const selected = activeConversation();
         if (!selected || !selected.messages.length) renderEmpty();
         else selected.messages.forEach((item) => {
             if (item.role === "user") addText(conversation, "article", "shiftlight-message user", item.text);
             else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); appendEvidence(shell.article, item.evidence); conversation.appendChild(shell.article); }
         });
-        previousButton.hidden = !meaningful(store.previous);
-        previousButton.textContent = viewMode === "previous" ? "Güncel Sohbet" : "Önceki Sohbet";
-        historyNote.hidden = viewMode !== "previous";
-        historyNote.textContent = viewMode === "previous" && store.previous ? `Salt okunur önceki sohbet · ${store.previous.cluster.toUpperCase()}` : "";
-        form.hidden = viewMode === "previous";
+        form.hidden = false;
+        renderHistory();
         requestAnimationFrame(() => {
             conversation.scrollTop = followBottom ? conversation.scrollHeight : previousScrollTop;
         });
@@ -281,9 +316,9 @@
     const setPending = (pending) => {
         requestPending = pending; clusterSelect.disabled = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending || !clusterSelect.value;
     };
-    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); store.current.messages.push(safeMessage(message)); store.current.messages = store.current.messages.filter(Boolean).slice(-MAX_MESSAGES); persistStore(); renderConversation(followBottom); };
-    const startNew = (cluster = clusterSelect.value) => { archiveCurrent(); store.current = emptyConversation(cluster); viewMode = "current"; persistStore(); renderConversation(true); };
-    const changeCluster = () => { const selected = clusterSelect.value; if (selected !== store.current.cluster) startNew(selected); statusText.textContent = `Cluster context: ${selected.toUpperCase()}`; };
+    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(clusterSelect.value); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
+    const startNew = (cluster = clusterSelect.value) => { createConversation(cluster); closeHistory(); renderConversation(true); };
+    const changeCluster = () => { const selected = clusterSelect.value; const current = activeConversation(); if (!current || selected !== current.cluster) startNew(selected); statusText.textContent = `Cluster context: ${selected.toUpperCase()}`; };
     const loadClusters = async () => {
         try {
             const data = await fetchJson("/api/ai/clusters");
@@ -292,15 +327,15 @@
             clusterSelect.replaceChildren(); supportedClusters.forEach((item) => clusterSelect.add(new Option(item.name, item.id)));
             const supportedIds = new Set(supportedClusters.map((item) => item.id));
             const portalCluster = root.dataset.initialCluster;
-            const selected = supportedIds.has(portalCluster) ? portalCluster : supportedIds.has(store.current.cluster) ? store.current.cluster : supportedClusters[0].id;
-            if (!supportedIds.has(store.current.cluster) || (supportedIds.has(portalCluster) && store.current.cluster && store.current.cluster !== portalCluster)) startNew(selected);
-            else if (!store.current.cluster) { store.current.cluster = selected; persistStore(); }
-            clusterSelect.value = store.current.cluster; clusterSelect.disabled = false; sendButton.disabled = false; renderConversation(true);
+            const current = activeConversation();
+            const selected = supportedIds.has(portalCluster) ? portalCluster : current && supportedIds.has(current.cluster) ? current.cluster : supportedClusters[0].id;
+            if (!current || !supportedIds.has(current.cluster) || (supportedIds.has(portalCluster) && current.cluster !== portalCluster)) startNew(selected);
+            clusterSelect.value = activeConversation().cluster; clusterSelect.disabled = false; sendButton.disabled = false; renderConversation(true);
         } catch (_error) { clusterSelect.replaceChildren(new Option("ShiftLight kullanılamıyor", "")); statusText.textContent = MESSAGES.unavailable; statusText.classList.add("error"); }
     };
 
     form.addEventListener("submit", async (event) => {
-        event.preventDefault(); if (requestPending || viewMode !== "current") return;
+        event.preventDefault(); if (requestPending) return;
         const text = messageInput.value; if (!text.trim() || !clusterSelect.value) return;
         addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         try {
@@ -314,7 +349,7 @@
     });
     launcher.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); overlay.addEventListener("click", closeDrawer);
     nudgeClose.addEventListener("click", dismissNudge); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
-    previousButton.addEventListener("click", () => { if (!requestPending) { viewMode = viewMode === "previous" ? "current" : "previous"; renderConversation(); } });
+    historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
     clusterSelect.addEventListener("change", () => { if (!requestPending) changeCluster(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
     document.addEventListener("keydown", (event) => { if (event.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
