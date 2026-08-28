@@ -126,6 +126,7 @@ def test_test_deployment_recreates_pod_for_read_write_once_pvc() -> None:
     deployment = manifest_resources()["Deployment"]
     assert deployment["spec"]["replicas"] == 1
     assert deployment["spec"]["strategy"] == {"type": "Recreate"}
+    assert "rollingUpdate" not in deployment["spec"]["strategy"]
 
 
 def test_test_deployment_configures_internal_ai_backend() -> None:
@@ -138,6 +139,14 @@ def test_test_deployment_configures_internal_ai_backend() -> None:
             "svc.cluster.local:8080"
         ),
         "KOCC_AI_BACKEND_TIMEOUT_SECONDS": "90",
+    }
+
+
+def test_test_route_allows_long_ai_requests() -> None:
+    route = manifest_resources()["Route"]
+    assert route["metadata"]["name"] == "kocc"
+    assert route["metadata"]["annotations"] == {
+        "haproxy.router.openshift.io/timeout": "120s",
     }
 
 

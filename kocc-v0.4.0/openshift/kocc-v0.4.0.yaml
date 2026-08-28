@@ -230,6 +230,8 @@ kind: Route
 metadata:
   name: kocc
   namespace: ocp-monitoring-portal-test
+  annotations:
+    haproxy.router.openshift.io/timeout: 120s
   labels:
     app.kubernetes.io/name: kocc
 spec:

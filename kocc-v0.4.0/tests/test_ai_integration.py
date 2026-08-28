@@ -154,8 +154,49 @@ def test_ai_template_uses_safe_text_rendering_and_only_kocc_endpoints() -> None:
     ).read_text()
     assert "innerHTML" not in source
     assert "textContent" in source
-    assert 'fetch("/api/ai/clusters")' in source
-    assert 'fetch("/api/ai/chat"' in source
+    assert 'fetchKoccJson("/api/ai/clusters")' in source
+    assert 'fetchKoccJson("/api/ai/chat"' in source
     assert "svc.cluster.local" not in source
     assert "data.evidence" in source
     assert "item.tool" in source
+
+
+def test_ai_template_checks_status_and_content_type_before_json() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert 'response.headers.get("Content-Type")' in source
+    assert 'contentType.startsWith("application/json")' in source
+    assert "if (!response.ok)" in source
+    assert "try {\n        return await response.json();" in source
+    assert "return null;" in source
+    assert "response.text()" not in source
+    assert "error.message" not in source
+
+
+def test_ai_template_maps_http_and_network_errors_to_safe_messages() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert 'status === 400) return "request"' in source
+    assert 'status === 502 || status === 503) return "unavailable"' in source
+    assert 'status === 504) return "timeout"' in source
+    assert "İstek AI Assistant tarafından işlenemedi." in source
+    assert "AI Assistant şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin." in source
+    assert "AI Assistant yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin." in source
+    assert "AI Assistant isteği tamamlanamadı." in source
+    assert 'error.name === "AbortError" ? "timeout" : "unavailable"' in source
+    assert "Unexpected token" not in source
+    assert "Gateway Timeout" not in source
+    assert "<html>" not in source
+
+
+def test_ai_template_preserves_loading_deduplication_and_evidence() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert "if (requestPending) return;" in source
+    assert "setPending(true);" in source
+    assert "sendButton.disabled = pending" in source
+    assert "data.evidence.forEach" in source
+    assert 'item.status !== "success"' in source

@@ -6,7 +6,7 @@ metadata:
 data:
   AI_LLM_BASE_URL: https://llm.kkb.com.tr
   AI_LLM_MODEL: ""
-  AI_LLM_TIMEOUT_SECONDS: "20"
+  AI_LLM_TIMEOUT_SECONDS: "45"
   AI_MCP_KKBTEST_URL: http://openshift-mcp:8080/mcp
   AI_MCP_TIMEOUT_SECONDS: "10"
   AI_AGENT_MAX_ITERATIONS: "6"

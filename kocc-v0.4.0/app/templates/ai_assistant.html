@@ -85,6 +85,53 @@ const statusText = document.getElementById("ai-status");
 const conversation = document.getElementById("conversation");
 let requestPending = false;
 
+const AI_MESSAGES = Object.freeze({
+    request: "İstek AI Assistant tarafından işlenemedi.",
+    unavailable: "AI Assistant şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.",
+    timeout: "AI Assistant yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin.",
+    generic: "AI Assistant isteği tamamlanamadı."
+});
+
+class AIUIError {
+    constructor(kind) { this.kind = kind; }
+}
+
+const errorKindForStatus = (status) => {
+    if (status === 400) return "request";
+    if (status === 502 || status === 503) return "unavailable";
+    if (status === 504) return "timeout";
+    return "generic";
+};
+
+const parseJsonResponse = async (response) => {
+    const contentType = (response.headers.get("Content-Type") || "").toLowerCase();
+    if (!contentType.startsWith("application/json")) return null;
+    try {
+        return await response.json();
+    } catch (_error) {
+        return null;
+    }
+};
+
+const fetchKoccJson = async (url, options = undefined) => {
+    let response;
+    try {
+        response = await fetch(url, options);
+    } catch (error) {
+        throw new AIUIError(error && error.name === "AbortError" ? "timeout" : "unavailable");
+    }
+    const data = await parseJsonResponse(response);
+    if (!response.ok) throw new AIUIError(errorKindForStatus(response.status));
+    if (data === null) throw new AIUIError("generic");
+    return data;
+};
+
+const safeErrorMessage = (error) => (
+    error instanceof AIUIError && AI_MESSAGES[error.kind]
+        ? AI_MESSAGES[error.kind]
+        : AI_MESSAGES.unavailable
+);
+
 const addText = (parent, tag, className, text) => {
     const element = document.createElement(tag);
     element.className = className;
@@ -124,9 +171,8 @@ const setPending = (pending) => {
 
 const loadClusters = async () => {
     try {
-        const response = await fetch("/api/ai/clusters");
-        const data = await response.json();
-        if (!response.ok || !Array.isArray(data.clusters) || !data.clusters.length) throw new Error();
+        const data = await fetchKoccJson("/api/ai/clusters");
+        if (!Array.isArray(data.clusters) || !data.clusters.length) throw new AIUIError("unavailable");
         clusterSelect.replaceChildren();
         data.clusters.forEach((cluster) => clusterSelect.add(new Option(cluster.name, cluster.id)));
         if (data.clusters.some((cluster) => cluster.id === initialCluster)) clusterSelect.value = initialCluster;
@@ -134,7 +180,7 @@ const loadClusters = async () => {
         sendButton.disabled = false;
     } catch (_error) {
         clusterSelect.replaceChildren(new Option("AI Assistant kullanılamıyor", ""));
-        statusText.textContent = "AI Assistant şu anda kullanılamıyor.";
+        statusText.textContent = AI_MESSAGES.unavailable;
         statusText.classList.add("error");
     }
 };
@@ -147,14 +193,13 @@ form.addEventListener("submit", async (event) => {
     appendMessage("user", message);
     setPending(true);
     try {
-        const response = await fetch("/api/ai/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cluster:clusterSelect.value,message})});
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message || "AI Assistant isteği başarısız oldu.");
+        const data = await fetchKoccJson("/api/ai/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cluster:clusterSelect.value,message})});
+        if (typeof data.answer !== "string" || !Array.isArray(data.tool_calls) || !Array.isArray(data.evidence)) throw new AIUIError("generic");
         appendMessage("assistant", data.answer, data);
         messageInput.value = "";
         statusText.textContent = "";
     } catch (error) {
-        statusText.textContent = error.message || "AI Assistant şu anda kullanılamıyor.";
+        statusText.textContent = safeErrorMessage(error);
         statusText.classList.add("error");
     } finally {
         setPending(false);
