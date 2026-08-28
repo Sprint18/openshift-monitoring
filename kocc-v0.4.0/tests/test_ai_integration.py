@@ -200,3 +200,42 @@ def test_ai_template_preserves_loading_deduplication_and_evidence() -> None:
     assert "sendButton.disabled = pending" in source
     assert "data.evidence.forEach" in source
     assert 'item.status !== "success"' in source
+
+
+def test_ai_template_is_a_scrollable_chat_workspace() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert 'class="chat-workspace"' in source
+    assert ".chat-workspace {" in source
+    assert "grid-template-rows:auto minmax(0,1fr) auto" in source
+    assert "overflow-y:auto" in source
+    assert "conversation.scrollHeight" in source
+    assert "conversation.scrollTop" in source
+    assert "conversation.clientHeight < 80" in source
+    assert "if (nearBottom)" in source
+
+
+def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert '<form id="ai-form" class="composer">' in source
+    assert '<textarea id="ai-message"' in source
+    assert 'event.key === "Enter" && !event.shiftKey' in source
+    assert "event.preventDefault();" in source
+    assert "form.requestSubmit();" in source
+    assert "!message.trim()" in source
+
+
+def test_ai_template_new_chat_and_cluster_change_isolate_history() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
+    ).read_text()
+    assert 'id="new-chat"' in source
+    assert "conversation.replaceChildren();" in source
+    assert 'newChatButton.addEventListener("click"' in source
+    assert 'clusterSelect.addEventListener("change"' in source
+    assert "Cluster değiştirildi. Yeni sohbet başlatıldı." in source
+    assert "newChatButton.disabled = pending" in source
+    assert "exampleButtons.forEach" in source

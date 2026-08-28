@@ -17,22 +17,26 @@
         .primary-nav a { padding:11px 14px; color:#dbe5ef; text-decoration:none; white-space:nowrap; border-bottom:3px solid transparent; }
         .primary-nav a.active,.primary-nav a:hover { color:white; border-color:var(--orange); background:rgba(255,255,255,.06); }
         main { max-width:1100px; margin:auto; padding:28px 32px 56px; }
-        .intro,.composer,.message { background:white; border:1px solid var(--border); border-radius:8px; }
+        .intro,.message { background:white; border:1px solid var(--border); border-radius:8px; }
         .intro { padding:20px; border-top:3px solid var(--orange); }
+        .intro-title { display:flex; align-items:center; justify-content:space-between; gap:16px; }
         .readonly { margin:14px 0 0; padding:10px 12px; color:#004b95; background:#e7f1fa; border-radius:5px; }
         .examples { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
         .example { padding:8px 11px; color:var(--navy); background:white; border:1px solid #9fb4ca; border-radius:16px; cursor:pointer; }
-        .composer { display:grid; gap:12px; padding:18px; }
+        .chat-workspace { display:grid; grid-template-rows:auto minmax(0,1fr) auto; height:clamp(520px,calc(100vh - 330px),760px); min-height:0; overflow:hidden; background:white; border:1px solid var(--border); border-top:3px solid var(--orange); border-radius:8px; }
+        .workspace-toolbar { padding:14px 18px; border-bottom:1px solid var(--border); background:#f8f9fa; }
+        .composer { display:grid; gap:10px; padding:14px 18px; border-top:1px solid var(--border); background:white; }
         .field { display:grid; gap:6px; }
         select,textarea,button { font:inherit; }
         select,textarea { width:100%; padding:10px 12px; border:1px solid #8a8d90; border-radius:5px; background:white; }
-        textarea { min-height:110px; resize:vertical; }
+        textarea { min-height:64px; max-height:160px; resize:vertical; }
         .actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
         .send { padding:10px 18px; color:white; background:var(--navy); border:0; border-radius:5px; cursor:pointer; font-weight:bold; }
+        .new-chat { padding:9px 13px; color:var(--navy); background:white; border:1px solid #9fb4ca; border-radius:5px; cursor:pointer; font-weight:bold; }
         button:disabled { cursor:not-allowed; opacity:.55; }
         .status { color:var(--muted); }
         .status.error { color:#a30000; }
-        .conversation { display:grid; gap:14px; margin-top:20px; }
+        .conversation { display:flex; flex-direction:column; gap:14px; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:18px; background:#f7f8fa; scroll-behavior:smooth; }
         .message { padding:16px 18px; overflow:hidden; }
         .message.user { margin-left:12%; border-left:4px solid var(--orange); }
         .message.assistant { margin-right:5%; border-left:4px solid #2b7bbb; }
@@ -44,7 +48,7 @@
         .tool-list li { padding:4px 8px; background:#eef3f7; border-radius:11px; font-size:12px; }
         .tool-list .failed { color:#8a150d; background:#faeae8; }
         footer { padding:24px 8px 12px; color:#999; opacity:.75; text-align:center; font-size:11px; }
-        @media(max-width:700px){ header,main{padding-left:16px;padding-right:16px}.primary-nav{padding:0 16px}.message.user,.message.assistant{margin-left:0;margin-right:0} }
+        @media(max-width:700px){ header,main{padding-left:16px;padding-right:16px}.primary-nav{padding:0 16px}.message.user,.message.assistant{margin-left:0;margin-right:0}.chat-workspace{height:calc(100dvh - 220px);min-height:480px}.intro-title{align-items:flex-start}.composer{padding:12px} }
     </style>
 </head>
 <body>
@@ -55,7 +59,7 @@
 {% include "_navigation.html" %}
 <main>
     <section class="intro">
-        <h2>OpenShift AI Assistant</h2>
+        <div class="intro-title"><h2>OpenShift AI Assistant</h2><button id="new-chat" class="new-chat" type="button">Yeni Sohbet</button></div>
         <p>Cluster durumunu doğal dilde, gerçek ve başarılı MCP kanıtlarına dayanarak inceleyin.</p>
         <p class="readonly">AI Assistant şu anda yalnızca read-only cluster işlemlerini destekler.</p>
     </section>
@@ -67,12 +71,14 @@
             "Belirli bir namespace'teki pod durumlarını kontrol et."
         ] %}<button class="example" type="button" data-question="{{ question }}">{{ question }}</button>{% endfor %}
     </div>
-    <form id="ai-form" class="composer">
-        <div class="field"><label for="ai-cluster">Cluster</label><select id="ai-cluster" disabled><option>Cluster listesi yükleniyor…</option></select></div>
-        <div class="field"><label for="ai-message">Sorunuz</label><textarea id="ai-message" required placeholder="Örneğin: Cluster'ın genel sağlık durumunu kontrol et."></textarea></div>
-        <div class="actions"><span id="ai-status" class="status" role="status" aria-live="polite"></span><button id="ai-send" class="send" type="submit" disabled>Gönder</button></div>
-    </form>
-    <section id="conversation" class="conversation" aria-live="polite"></section>
+    <section class="chat-workspace" aria-label="AI chat workspace">
+        <div class="workspace-toolbar"><div class="field"><label for="ai-cluster">Cluster</label><select id="ai-cluster" disabled><option>Cluster listesi yükleniyor…</option></select></div></div>
+        <section id="conversation" class="conversation" aria-live="polite"></section>
+        <form id="ai-form" class="composer">
+            <div class="field"><label for="ai-message">Sorunuz</label><textarea id="ai-message" required placeholder="Mesajınızı yazın…"></textarea></div>
+            <div class="actions"><span id="ai-status" class="status" role="status" aria-live="polite"></span><button id="ai-send" class="send" type="submit" disabled>Gönder</button></div>
+        </form>
+    </section>
 </main>
 <footer>Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.</footer>
 <script>
@@ -83,6 +89,8 @@ const messageInput = document.getElementById("ai-message");
 const sendButton = document.getElementById("ai-send");
 const statusText = document.getElementById("ai-status");
 const conversation = document.getElementById("conversation");
+const newChatButton = document.getElementById("new-chat");
+const exampleButtons = [...document.querySelectorAll(".example")];
 let requestPending = false;
 
 const AI_MESSAGES = Object.freeze({
@@ -141,6 +149,7 @@ const addText = (parent, tag, className, text) => {
 };
 
 const appendMessage = (role, text, data = null) => {
+    const nearBottom = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 80;
     const article = document.createElement("article");
     article.className = `message ${role}`;
     addText(article, "div", "message-label", role === "user" ? "Siz" : "AI Assistant");
@@ -156,6 +165,7 @@ const appendMessage = (role, text, data = null) => {
         article.appendChild(details);
     }
     conversation.appendChild(article);
+    if (nearBottom) requestAnimationFrame(() => conversation.scrollTo({top:conversation.scrollHeight,behavior:"smooth"}));
 };
 
 const setPending = (pending) => {
@@ -163,10 +173,20 @@ const setPending = (pending) => {
     sendButton.disabled = pending || !clusterSelect.value;
     clusterSelect.disabled = pending;
     messageInput.disabled = pending;
+    newChatButton.disabled = pending;
+    exampleButtons.forEach((button) => { button.disabled = pending; });
     if (pending) {
         statusText.classList.remove("error");
         statusText.textContent = "AI Assistant cluster verilerini inceliyor…";
     }
+};
+
+const clearConversation = (notice = "") => {
+    conversation.replaceChildren();
+    statusText.classList.remove("error");
+    statusText.textContent = notice;
+    messageInput.value = "";
+    messageInput.focus();
 };
 
 const loadClusters = async () => {
@@ -207,7 +227,15 @@ form.addEventListener("submit", async (event) => {
     }
 });
 
-document.querySelectorAll(".example").forEach((button) => button.addEventListener("click", () => { messageInput.value = button.dataset.question; messageInput.focus(); }));
+messageInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        if (!requestPending) form.requestSubmit();
+    }
+});
+newChatButton.addEventListener("click", () => { if (!requestPending) clearConversation(); });
+clusterSelect.addEventListener("change", () => { if (!requestPending) clearConversation("Cluster değiştirildi. Yeni sohbet başlatıldı."); });
+exampleButtons.forEach((button) => button.addEventListener("click", () => { if (!requestPending) { messageInput.value = button.dataset.question; messageInput.focus(); } }));
 loadClusters();
 </script>
 </body>
