@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.clusters import cluster_registry, selected_cluster, UnknownClusterError
+from app.agent import AgentResult
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
 from app.main import create_app
@@ -149,6 +150,36 @@ def test_message_size_limit_is_controlled(mcp_class: Mock) -> None:
     assert response.status_code == 400
     assert response.json() == {"error": "message_too_large"}
     mcp_class.assert_not_called()
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_chat_response_keeps_contract_and_adds_success_evidence(
+    mcp_class: Mock, agent_class: Mock
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult(
+        answer="Grounded answer",
+        tool_calls=[
+            {"name": "resources_list", "status": "success"},
+            {"name": "nodes_top", "status": "error"},
+        ],
+    )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat",
+        json={"cluster": "kkbtest", "message": "health"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "cluster": "kkbtest",
+        "answer": "Grounded answer",
+        "tool_calls": [
+            {"name": "resources_list", "status": "success"},
+            {"name": "nodes_top", "status": "error"},
+        ],
+        "evidence": [
+            {"tool": "resources_list", "status": "success"}
+        ],
+    }
 
 
 def test_sse_response_parser() -> None:

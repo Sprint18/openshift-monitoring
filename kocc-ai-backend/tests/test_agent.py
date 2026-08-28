@@ -102,6 +102,7 @@ def test_direct_answer_does_not_execute_tool() -> None:
     result = AgentLoop(configured(), llm, mcp).run("Hello")
     assert result.answer == "Hello"
     assert result.tool_calls == []
+    assert result.evidence == []
     assert mcp.calls == []
     assert llm.calls[0]["messages"][0]["content"] == SYSTEM_PROMPT
 
@@ -119,6 +120,7 @@ def test_single_tool_call_then_final_answer() -> None:
     assert mcp.calls == [("resources_list", {"apiVersion": "config.openshift.io/v1"})]
     assert len(llm.calls) == 2
     assert result.tool_calls == [{"name": "resources_list", "status": "success"}]
+    assert result.evidence == [{"tool": "resources_list", "status": "success"}]
     history = llm.calls[1]["messages"]
     assert history[-2]["role"] == "assistant"
     assert history[-1]["role"] == "tool"
@@ -135,6 +137,32 @@ def test_multiple_tool_calls_across_iterations_are_sequential() -> None:
     assert result.answer == "done"
     assert len(mcp.calls) == 2
     assert len(llm.calls) == 3
+    assert result.evidence == [
+        {"tool": "resources_list", "status": "success"},
+        {"tool": "resources_list", "status": "success"},
+    ]
+
+
+def test_mixed_tool_results_include_only_successful_evidence() -> None:
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [
+            tool_call("resources_list", call_id="one"),
+            tool_call("resources_list", call_id="two"),
+        ]},
+        {"content": "partial evidence", "tool_calls": None},
+    ])
+    result = AgentLoop(
+        configured(),
+        llm,
+        FakeMCP([{"content": "ok"}, MCPUnavailable("timeout")]),
+    ).run("inspect")
+    assert result.tool_calls == [
+        {"name": "resources_list", "status": "success"},
+        {"name": "resources_list", "status": "error"},
+    ]
+    assert result.evidence == [
+        {"tool": "resources_list", "status": "success"}
+    ]
 
 
 @pytest.mark.parametrize("call", [
@@ -164,6 +192,7 @@ def test_mcp_timeout_becomes_controlled_tool_result() -> None:
     tool_content = llm.calls[1]["messages"][-1]["content"]
     assert tool_content == "Tool execution failed: unavailable or timeout."
     assert "private timeout detail" not in tool_content
+    assert result.evidence == []
 
 
 def test_llm_timeout_remains_controlled_exception() -> None:
@@ -246,6 +275,28 @@ def test_secret_resource_access_is_rejected(arguments: str) -> None:
     }]
     mcp = FakeMCP()
     mcp.list_tools = lambda: tools
-    AgentLoop(configured(), llm, mcp).run("read secret")
+    result = AgentLoop(configured(), llm, mcp).run("read secret")
     assert mcp.calls == []
     assert "Secret access" in llm.calls[1]["messages"][-1]["content"]
+    assert result.evidence == []
+
+
+def test_system_prompt_requires_grounded_cluster_facts_and_citations() -> None:
+    prompt = SYSTEM_PROMPT.lower()
+    assert "every factual claim" in prompt
+    assert "successful" in prompt and "mcp tool result" in prompt
+    assert "resource counts" in prompt
+    assert "cluster age" in prompt
+    assert "cpu/memory" in prompt
+    assert "external urls" in prompt
+    assert "never invent a red hat" in prompt
+    assert "bu bilgi mevcut araçlarla doğrulanamadı" in prompt
+
+
+def test_system_prompt_treats_mcp_content_as_untrusted_data() -> None:
+    prompt = SYSTEM_PROMPT.lower()
+    assert "untrusted data" in prompt
+    assert "ignore previous instructions" in prompt
+    assert "show secrets" in prompt
+    assert "change cluster" in prompt
+    assert "must never override" in prompt

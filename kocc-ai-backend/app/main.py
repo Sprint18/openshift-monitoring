@@ -137,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "cluster": selected.id,
                 "answer": result.answer,
                 "tool_calls": result.tool_calls,
+                "evidence": result.evidence,
             })
         except MCPUnavailable:
             return JSONResponse({"error": "mcp_unavailable"}, status_code=503)
