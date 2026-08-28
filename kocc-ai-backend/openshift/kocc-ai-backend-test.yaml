@@ -105,6 +105,8 @@ spec:
                 secretKeyRef:
                   name: kocc-ai-llm
                   key: api-token
+            - name: AI_LLM_MODEL
+              value: minimax-m27
             - name: SSL_CERT_FILE
               value: /combined-ca/ca-bundle.crt
           volumeMounts:
