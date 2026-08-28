@@ -145,7 +145,7 @@ spec:
           configMap:
             name: kkb-ca-bundle
             items:
-              - key: ca-bundle.crt
+              - key: ca.crt
                 path: ca-bundle.crt
         - name: combined-ca
           emptyDir: {}
