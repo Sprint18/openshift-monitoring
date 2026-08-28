@@ -116,7 +116,7 @@ class AIBackendClient:
             "cluster": cluster,
             "answer": answer,
             "tool_calls": self._tool_metadata(tool_calls, "name"),
-            "evidence": self._tool_metadata(evidence, "tool"),
+            "evidence": self._evidence_metadata(evidence),
         }
 
     @staticmethod
@@ -130,4 +130,31 @@ class AIBackendClient:
             if not isinstance(name, str) or not isinstance(status, str):
                 raise AIBackendError("invalid_response")
             result.append({name_key: name, "status": status})
+        return result
+
+    @staticmethod
+    def _evidence_metadata(items: list[Any]) -> list[dict[str, Any]]:
+        safe_fact_keys = {
+            "resource_count", "degraded_true_count", "available_false_count",
+            "progressing_true_count",
+        }
+        result: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise AIBackendError("invalid_response")
+            tool = item.get("tool")
+            status = item.get("status")
+            if not isinstance(tool, str) or not isinstance(status, str):
+                raise AIBackendError("invalid_response")
+            safe: dict[str, Any] = {"tool": tool, "status": status}
+            facts = item.get("facts")
+            if isinstance(facts, dict):
+                safe_facts = {
+                    key: value for key, value in facts.items()
+                    if key in safe_fact_keys
+                    and isinstance(value, int) and not isinstance(value, bool)
+                }
+                if safe_facts:
+                    safe["facts"] = safe_facts
+            result.append(safe)
         return result

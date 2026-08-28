@@ -33,8 +33,10 @@ class FakeResponse:
 def test_ai_assistant_page_renders_with_shared_navigation() -> None:
     response = client.get("/ai-assistant?cluster=kkbtest")
     assert response.status_code == 200
-    assert "AI Assistant" in response.text
-    assert "yalnızca read-only cluster işlemlerini destekler" in response.text
+    assert "KKB ShiftAI" in response.text
+    assert "OpenShift Operasyon Asistanı" in response.text
+    assert "/static/kkb-turuncu-lacivert-logo.png" in response.text
+    assert "Read-only" in response.text
     assert 'aria-label="Dashboard navigation"' in response.text
     assert 'aria-current="page"' in response.text
 
@@ -148,6 +150,28 @@ def test_ai_client_sanitizes_chat_response_metadata(urlopen: Mock) -> None:
     }
 
 
+@patch("app.ai_client.urllib.request.urlopen")
+def test_ai_client_preserves_only_safe_numeric_evidence_facts(urlopen: Mock) -> None:
+    urlopen.return_value = FakeResponse({
+        "answer": "34 operators",
+        "tool_calls": [{"name": "resources_list", "status": "success"}],
+        "evidence": [{
+            "tool": "resources_list", "status": "success",
+            "facts": {
+                "resource_count": 34,
+                "degraded_true_count": 0,
+                "raw_resources": ["must-not-pass"],
+                "apiVersion": "must-not-pass",
+            },
+        }],
+    })
+    result = AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
+    assert result["evidence"] == [{
+        "tool": "resources_list", "status": "success",
+        "facts": {"resource_count": 34, "degraded_true_count": 0},
+    }]
+
+
 def test_ai_template_uses_safe_text_rendering_and_only_kocc_endpoints() -> None:
     source = (
         Path(__file__).parents[1] / "app/templates/ai_assistant.html"
@@ -166,10 +190,10 @@ def test_ai_template_checks_status_and_content_type_before_json() -> None:
         Path(__file__).parents[1] / "app/templates/ai_assistant.html"
     ).read_text()
     assert 'response.headers.get("Content-Type")' in source
-    assert 'contentType.startsWith("application/json")' in source
-    assert "if (!response.ok)" in source
-    assert "try {\n        return await response.json();" in source
-    assert "return null;" in source
+    assert 'type.startsWith("application/json")' in source
+    assert "if(!response.ok)" in source
+    assert "return await response.json()" in source
+    assert "return null" in source
     assert "response.text()" not in source
     assert "error.message" not in source
 
@@ -178,14 +202,14 @@ def test_ai_template_maps_http_and_network_errors_to_safe_messages() -> None:
     source = (
         Path(__file__).parents[1] / "app/templates/ai_assistant.html"
     ).read_text()
-    assert 'status === 400) return "request"' in source
-    assert 'status === 502 || status === 503) return "unavailable"' in source
-    assert 'status === 504) return "timeout"' in source
-    assert "İstek AI Assistant tarafından işlenemedi." in source
-    assert "AI Assistant şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin." in source
-    assert "AI Assistant yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin." in source
-    assert "AI Assistant isteği tamamlanamadı." in source
-    assert 'error.name === "AbortError" ? "timeout" : "unavailable"' in source
+    assert 'status===400?"request"' in source
+    assert 'status===502||status===503?"unavailable"' in source
+    assert 'status===504?"timeout"' in source
+    assert "İstek ShiftAI tarafından işlenemedi." in source
+    assert "ShiftAI şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin." in source
+    assert "ShiftAI yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin." in source
+    assert "ShiftAI isteği tamamlanamadı." in source
+    assert 'error.name==="AbortError"?"timeout":"unavailable"' in source
     assert "Unexpected token" not in source
     assert "Gateway Timeout" not in source
     assert "<html>" not in source
@@ -195,11 +219,11 @@ def test_ai_template_preserves_loading_deduplication_and_evidence() -> None:
     source = (
         Path(__file__).parents[1] / "app/templates/ai_assistant.html"
     ).read_text()
-    assert "if (requestPending) return;" in source
-    assert "setPending(true);" in source
-    assert "sendButton.disabled = pending" in source
+    assert "if(requestPending)return" in source
+    assert "setPending(true)" in source
+    assert "sendButton.disabled=pending" in source
     assert "data.evidence.forEach" in source
-    assert 'item.status !== "success"' in source
+    assert 'item.status!=="success"' in source
 
 
 def test_ai_template_is_a_scrollable_chat_workspace() -> None:
@@ -208,12 +232,12 @@ def test_ai_template_is_a_scrollable_chat_workspace() -> None:
     ).read_text()
     assert 'class="chat-workspace"' in source
     assert ".chat-workspace {" in source
-    assert "grid-template-rows:auto minmax(0,1fr) auto" in source
+    assert "grid-template-rows:minmax(0,1fr) auto" in source
     assert "overflow-y:auto" in source
     assert "conversation.scrollHeight" in source
     assert "conversation.scrollTop" in source
-    assert "conversation.clientHeight < 80" in source
-    assert "if (nearBottom)" in source
+    assert "conversation.clientHeight<80" in source
+    assert "if(nearBottom)" in source
 
 
 def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
@@ -222,7 +246,7 @@ def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
     ).read_text()
     assert '<form id="ai-form" class="composer">' in source
     assert '<textarea id="ai-message"' in source
-    assert 'event.key === "Enter" && !event.shiftKey' in source
+    assert 'event.key==="Enter"&&!event.shiftKey' in source
     assert "event.preventDefault();" in source
     assert "form.requestSubmit();" in source
     assert "!message.trim()" in source
@@ -233,9 +257,47 @@ def test_ai_template_new_chat_and_cluster_change_isolate_history() -> None:
         Path(__file__).parents[1] / "app/templates/ai_assistant.html"
     ).read_text()
     assert 'id="new-chat"' in source
-    assert "conversation.replaceChildren();" in source
+    assert "conversation.replaceChildren()" in source
     assert 'newChatButton.addEventListener("click"' in source
     assert 'clusterSelect.addEventListener("change"' in source
     assert "Cluster değiştirildi. Yeni sohbet başlatıldı." in source
-    assert "newChatButton.disabled = pending" in source
-    assert "exampleButtons.forEach" in source
+    assert "newChatButton.disabled=pending" in source
+    assert "suggestionButtons.forEach" in source
+
+
+def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
+    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
+    assert "renderMarkdown" in source
+    assert "appendInline" in source
+    assert 'document.createElement("table")' in source
+    assert 'document.createElement("pre")' in source
+    assert 'document.createElement(`h${heading[1].length}`)' in source
+    assert 'document.createElement("strong")' not in source  # created through audited helper
+    assert "javascript:" not in source
+    assert "^https?:\\/\\/" in source
+    assert "root.textContent=" in source
+    assert "element.innerHTML" not in source
+    assert "insertAdjacentHTML" not in source
+    assert "document.write" not in source
+    assert "eval(" not in source
+
+
+def test_ai_template_loading_and_http_200_blank_regression() -> None:
+    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
+    assert "ShiftAI düşünüyor" in source
+    assert "appendLoading()" in source
+    assert "resolveAssistant(placeholder,data.answer,data)" in source
+    assert "resolveError(placeholder,safe)" in source
+    assert '!data.answer.trim()' in source
+    assert "renderer produced no content" in source
+
+
+def test_ai_template_brand_context_evidence_and_responsive_hooks() -> None:
+    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
+    assert 'id="ai-cluster"' in source
+    assert 'id="new-chat"' in source
+    assert "Kullanılan cluster verileri" in source
+    assert "details.evidence" in source
+    assert "@media(max-width:760px)" in source
+    assert "composer-shell" in source
+    assert "empty-state" in source

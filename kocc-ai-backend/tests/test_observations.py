@@ -69,7 +69,7 @@ def test_authoritative_facts_are_computed_before_raw_result_truncation() -> None
         configured(agent_max_tool_result_chars=400),
         llm,
         FakeMCP([{"items": items, "padding": "x" * 50000}]),
-    ).run("Degraded ClusterOperator var mı?")
+    ).run("Kubernetes kaynak listesini özetle")
     tool_context = llm.calls[1]["messages"][-1]["content"]
     assert '"resource_count":34' in tool_context
     assert '"degraded_true_count":0' in tool_context
@@ -108,22 +108,28 @@ def test_cluster_operator_question_stops_after_sufficient_resource_evidence() ->
     result = AgentLoop(configured(), llm, mcp).run(
         "Degraded ClusterOperator var mı?"
     )
-    assert result.answer == "Degraded operator yok."
-    assert mcp.calls == [("resources_list", {"kind": "ClusterOperator"})]
-    assert len(llm.calls) == 2
+    assert "1 ClusterOperator" in result.answer
+    assert "Degraded=True: **0**" in result.answer
+    assert mcp.calls == [("resources_list", {
+        "apiVersion": "config.openshift.io/v1", "kind": "ClusterOperator"
+    })]
+    assert len(llm.calls) == 1
 
 
 def test_exact_failed_tool_call_is_not_executed_twice() -> None:
     from app.mcp_client import MCPUnavailable
 
-    repeated = tool_call("resources_list", '{"kind":"ClusterOperator"}')
+    repeated = tool_call(
+        "resources_list",
+        '{"apiVersion":"config.openshift.io/v1","kind":"ClusterOperator"}',
+    )
     llm = FakeLLM([
         {"content": None, "tool_calls": [repeated]},
         {"content": None, "tool_calls": [{**repeated, "id": "call-2"}]},
         {"content": "Bu bilgi mevcut araçlarla doğrulanamadı.", "tool_calls": None},
     ])
     mcp = FakeMCP([MCPUnavailable("timeout")])
-    result = AgentLoop(configured(), llm, mcp).run("operator durumu")
+    result = AgentLoop(configured(), llm, mcp).run("kaynakları incele")
     assert len(mcp.calls) == 1
     assert result.evidence == []
     assert result.tool_calls == [

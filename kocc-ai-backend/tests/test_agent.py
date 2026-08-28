@@ -23,7 +23,13 @@ MCP_TOOLS = [
         "description": "List resources",
         "inputSchema": {
             "type": "object",
-            "properties": {"apiVersion": {"type": "string"}},
+            "properties": {
+                "apiVersion": {"type": "string", "description": "API version"},
+                "kind": {"type": "string", "description": "Resource kind"},
+                "namespace": {"type": "string"},
+                "labelSelector": {"type": "string"},
+                "fieldSelector": {"type": "string"},
+            },
         },
     },
     {
@@ -117,7 +123,9 @@ def test_single_tool_call_then_final_answer() -> None:
     mcp = FakeMCP([{"content": [{"name": "authentication"}]}])
     result = AgentLoop(configured(), llm, mcp).run("Operator durumunu incele")
     assert result.answer == "Operators healthy"
-    assert mcp.calls == [("resources_list", {"apiVersion": "config.openshift.io/v1"})]
+    assert mcp.calls == [(
+        "resources_list", {"apiVersion": "config.openshift.io/v1"}
+    )]
     assert len(llm.calls) == 2
     assert result.tool_calls == [{"name": "resources_list", "status": "success"}]
     assert result.evidence == [{"tool": "resources_list", "status": "success"}]
