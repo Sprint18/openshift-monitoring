@@ -473,3 +473,64 @@ def test_shiftlight_layout_stays_bounded_with_many_messages() -> None:
     assert "followBottom ? conversation.scrollHeight : previousScrollTop" in source
     assert ".shiftlight-empty { display:flex; flex:1 1 auto" in css
     assert "min-height:260px" not in css
+
+
+def test_shiftlight_fullscreen_reuses_drawer_and_preserves_ui_state() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert 'id="shiftlight-expand"' in partial
+    assert "ShiftLight'ı tam ekran aç" in partial
+    assert 'drawer.classList.toggle("fullscreen", expanded)' in source
+    assert 'drawer.setAttribute("aria-modal", String(expanded))' in source
+    assert "const scrollTop = conversation.scrollTop" in source
+    assert "conversation.scrollTop = scrollTop" in source
+    assert "messageInput.value" not in source[source.index("const setFullscreen"):source.index("const openFullscreen")]
+    assert "persistStore()" not in source[source.index("const setFullscreen"):source.index("const openFullscreen")]
+    assert 'if (fullscreen) closeFullscreen(); else closeDrawer();' in source
+    assert "width:min(1400px,96vw)" in css
+    assert "height:94dvh" in css
+    assert "height:100dvh" in css
+    assert "body.shiftlight-fullscreen-open" in css
+
+
+def test_shiftlight_historical_conversation_remains_read_only_in_fullscreen() -> None:
+    source = shiftlight_source()
+    assert "const isHistoricalConversation" in source
+    assert "form.hidden = isHistoricalConversation()" in source
+    assert "requestPending || isHistoricalConversation()" in source
+    fullscreen_block = source[source.index("const setFullscreen"):source.index("const closeDrawer")]
+    assert "activeConversationId" not in fullscreen_block
+    assert "form.hidden" not in fullscreen_block
+
+
+def test_shiftlight_tables_have_independent_safe_csv_exports() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert 'addText(actions, "button", "", "CSV İndir")' in source
+    assert "addTableActions(wrapper, table)" in source
+    assert 'download.addEventListener("click", () => downloadTableCsv(table))' in source
+    assert "[...table.rows]" in source and "[...row.cells]" in source
+    assert 'cell.textContent || ""' in source
+    assert 'safe.replace(/"/g, \'""\')' in source
+    assert '/[",\\n]/.test(safe)' in source
+    assert '/^[\\t ]*[=+\\-@]/.test(safe)' in source
+    assert "['\\uFEFF', csv]" not in source
+    assert '["\\uFEFF", csv]' in source
+    assert 'type: "text/csv;charset=utf-8"' in source
+    assert "shiftlight-table-" in source
+    assert "URL.revokeObjectURL(url)" in source
+    assert "position:sticky" in css
+    assert ".shiftlight-table-viewport{overflow:auto}" in css
+    assert "innerHTML" not in source
+    assert "insertAdjacentHTML" not in source
+    assert "document.write" not in source
+    assert "eval(" not in source
+
+
+def test_shiftlight_table_or_code_answer_can_open_detailed_view() -> None:
+    source = shiftlight_source()
+    assert 'shell.answer.querySelector("table, pre")' in source
+    assert '"shiftlight-detail-action", "Detaylı Gör"' in source
+    assert "openFullscreen(shell.article)" in source
+    assert "focusTarget.scrollIntoView" in source
+    assert "appendEvidence(shell.article, item.evidence)" in source

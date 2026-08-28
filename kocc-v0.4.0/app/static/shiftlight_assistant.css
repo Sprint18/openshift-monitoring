@@ -54,6 +54,8 @@
 .shiftlight-nudge strong,.shiftlight-nudge span { display:block; }
 .shiftlight-nudge button { position:absolute; top:5px; right:7px; border:0; background:transparent; color:#59636e; font-size:20px; cursor:pointer; }
 .shiftlight-overlay { position:fixed; inset:0; z-index:1202; background:rgba(9,23,41,.08); }
+.shiftlight-overlay.fullscreen { background:rgba(9,23,41,.48); }
+body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-drawer {
     position: fixed;
     top: 0;
@@ -75,6 +77,7 @@
     font-family: Arial,sans-serif;
 }
 .shiftlight-drawer.open { transform: translateX(0); }
+.shiftlight-drawer.open.fullscreen { top:3dvh; right:50%; bottom:auto; width:min(1400px,96vw); height:94dvh; border:1px solid var(--shiftlight-border); border-radius:12px; box-shadow:0 20px 60px rgba(6,20,38,.38); transform:translateX(50%); }
 .shiftlight-header { display:flex; flex:0 0 auto; align-items:center; justify-content:space-between; gap:12px; padding:13px 15px; color:#fff; background:linear-gradient(135deg,var(--shiftlight-navy),#0b3b6b); border-bottom:3px solid var(--shiftlight-orange); }
 .shiftlight-brand { display:flex; align-items:center; gap:10px; min-width:0; }
 .shiftlight-brand img { width:40px; height:38px; padding:3px; object-fit:contain; background:#fff; border-radius:6px; }
@@ -106,13 +109,15 @@
 .shiftlight-message.user { align-self:flex-end; padding:9px 12px; color:#fff; background:var(--shiftlight-navy); border-radius:14px 14px 4px 14px; white-space:pre-wrap; }
 .shiftlight-message.assistant { align-self:flex-start; width:100%; }
 .shiftlight-identity { display:flex; align-items:center; gap:7px; margin-bottom:6px; color:var(--shiftlight-navy); font-size:11px; font-weight:bold; }
+.shiftlight-detail-action { margin-left:auto; padding:4px 7px; color:#005a9c; background:#fff; border:1px solid #aebdcb; border-radius:5px; font-size:10px; font-weight:bold; cursor:pointer; }
 .shiftlight-avatar { width:30px; height:30px; object-fit:contain; object-position:center; }
 .shiftlight-answer { padding-left:32px; line-height:1.5; }.shiftlight-answer > :first-child { margin-top:0; }.shiftlight-answer > :last-child { margin-bottom:0; }
 .shiftlight-answer h1,.shiftlight-answer h2,.shiftlight-answer h3 { margin:13px 0 6px; color:var(--shiftlight-navy); line-height:1.25; }.shiftlight-answer h1{font-size:18px}.shiftlight-answer h2{font-size:16px}.shiftlight-answer h3{font-size:14px}
 .shiftlight-answer p,.shiftlight-answer ul,.shiftlight-answer ol { margin:6px 0; }
 .shiftlight-answer code { padding:2px 4px; background:#e9eef3; border-radius:3px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.92em; }
 .shiftlight-code { overflow:auto; margin:8px 0; padding:10px; color:#edf4fb; background:#142238; border-radius:7px; white-space:pre; }.shiftlight-code code{padding:0;color:inherit;background:transparent}
-.shiftlight-table { overflow-x:auto; margin:9px 0; border:1px solid var(--shiftlight-border); border-radius:6px; }.shiftlight-table table{width:100%;border-collapse:collapse}.shiftlight-table th,.shiftlight-table td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--shiftlight-border);white-space:nowrap}.shiftlight-table th{color:var(--shiftlight-navy);background:#eaf0f5}
+.shiftlight-table { margin:9px 0; border:1px solid var(--shiftlight-border); border-radius:6px; background:#fff; }.shiftlight-table-actions{display:flex;justify-content:flex-end;padding:5px 7px;border-bottom:1px solid var(--shiftlight-border);background:#f7f9fb}.shiftlight-table-actions button{padding:4px 7px;color:#005a9c;background:#fff;border:1px solid #aebdcb;border-radius:5px;font-size:10px;font-weight:bold;cursor:pointer}.shiftlight-table-viewport{overflow:auto}.shiftlight-table table{width:100%;border-collapse:collapse}.shiftlight-table th,.shiftlight-table td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--shiftlight-border);white-space:nowrap}.shiftlight-table th{position:sticky;top:0;z-index:1;color:var(--shiftlight-navy);background:#eaf0f5}
+.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:24px 30px}.shiftlight-drawer.fullscreen .shiftlight-message{max-width:100%}.shiftlight-drawer.fullscreen .shiftlight-answer{padding-left:38px}.shiftlight-drawer.fullscreen .shiftlight-table-viewport{max-height:62dvh}.shiftlight-drawer.fullscreen .shiftlight-table th,.shiftlight-drawer.fullscreen .shiftlight-table td{padding:9px 12px;white-space:normal;overflow-wrap:anywhere}
 .shiftlight-answer a { color:#005ea8; }
 .shiftlight-message.error .shiftlight-answer { color:#8a150d; }
 .shiftlight-evidence { margin:9px 0 0 32px; padding-top:7px; border-top:1px solid var(--shiftlight-border); }.shiftlight-evidence summary{cursor:pointer;color:#005a9c;font-size:11px;font-weight:bold}.shiftlight-evidence dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0 0;font-size:11px}.shiftlight-evidence dt{color:var(--shiftlight-muted)}.shiftlight-evidence dd{margin:0;font-weight:bold}
@@ -123,4 +128,4 @@
 @keyframes shiftlight-float { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shiftlight-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
 @media (prefers-reduced-motion: reduce) { .shiftlight-nudge,.shiftlight-launcher-mascot { animation:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
-@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-drawer{width:100vw}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }
+@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }

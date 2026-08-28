@@ -33,6 +33,7 @@
     const drawer = document.getElementById("shiftlight-drawer");
     const overlay = document.getElementById("shiftlight-overlay");
     const closeButton = document.getElementById("shiftlight-close");
+    const expandButton = document.getElementById("shiftlight-expand");
     const nudge = document.getElementById("shiftlight-nudge");
     const nudgeClose = document.getElementById("shiftlight-nudge-close");
     const clusterSelect = document.getElementById("shiftlight-cluster");
@@ -48,6 +49,7 @@
     const statusText = document.getElementById("shiftlight-status");
     let requestPending = false;
     let supportedClusters = [];
+    let fullscreen = false;
 
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
@@ -109,6 +111,7 @@
         sessionStorage.setItem(SESSION_KEY, JSON.stringify(store));
     };
     const activeConversation = () => store.conversations.find((item) => item.id === store.activeConversationId) || null;
+    const isHistoricalConversation = () => Boolean(store.conversations.length && store.activeConversationId !== store.conversations[store.conversations.length - 1].id);
     const createConversation = (cluster = "") => {
         const item = emptyConversation(cluster);
         store.conversations.push(item);
@@ -149,6 +152,27 @@
         parent.appendChild(document.createTextNode(text.slice(cursor)));
     };
     const markdownCells = (value) => value.trim().replace(/^\||\|$/g, "").split("|").map((item) => item.trim());
+    const csvCell = (value) => {
+        let safe = String(value).replace(/\r\n?/g, "\n");
+        if (/^[\t ]*[=+\-@]/.test(safe)) safe = `'${safe}`;
+        return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+    };
+    const tableTextRows = (table) => [...table.rows].map((row) => [...row.cells].map((cell) => cell.textContent || ""));
+    const csvFilename = () => {
+        const date = new Date(), pad = (value) => String(value).padStart(2, "0");
+        return `shiftlight-table-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}.csv`;
+    };
+    const downloadTableCsv = (table) => {
+        const csv = tableTextRows(table).map((row) => row.map(csvCell).join(",")).join("\r\n");
+        const url = URL.createObjectURL(new Blob(["\uFEFF", csv], {type: "text/csv;charset=utf-8"}));
+        const link = document.createElement("a");
+        link.href = url; link.download = csvFilename(); link.hidden = true; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+    };
+    const addTableActions = (wrapper, table) => {
+        const actions = document.createElement("div"); actions.className = "shiftlight-table-actions";
+        const download = addText(actions, "button", "", "CSV İndir"); download.type = "button"; download.title = "Tabloyu CSV olarak indir"; download.setAttribute("aria-label", "Tabloyu CSV olarak indir");
+        download.addEventListener("click", () => downloadTableCsv(table)); wrapper.appendChild(actions);
+    };
     const renderMarkdown = (target, markdown) => {
         if (typeof markdown !== "string" || !markdown.trim()) throw new Error("empty answer");
         const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
@@ -187,13 +211,14 @@
                 const headers = markdownCells(line), rows = [];
                 index += 2;
                 while (index < lines.length && lines[index].includes("|") && lines[index].trim()) { rows.push(markdownCells(lines[index])); index += 1; }
-                const wrapper = document.createElement("div"), table = document.createElement("table"), head = document.createElement("thead"), headRow = document.createElement("tr");
+                const wrapper = document.createElement("div"), viewport = document.createElement("div"), table = document.createElement("table"), head = document.createElement("thead"), headRow = document.createElement("tr");
                 wrapper.className = "shiftlight-table";
+                viewport.className = "shiftlight-table-viewport";
                 headers.forEach((value) => appendInline(addText(headRow, "th", "", ""), value));
                 head.appendChild(headRow); table.appendChild(head);
                 const body = document.createElement("tbody");
                 rows.forEach((row) => { const tr = document.createElement("tr"); headers.forEach((_value, column) => appendInline(addText(tr, "td", "", ""), row[column] || "")); body.appendChild(tr); });
-                table.appendChild(body); wrapper.appendChild(table); target.appendChild(wrapper);
+                table.appendChild(body); addTableActions(wrapper, table); viewport.appendChild(table); wrapper.appendChild(viewport); target.appendChild(wrapper);
                 continue;
             }
             const listMatch = line.match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);
@@ -240,11 +265,18 @@
         const answer = document.createElement("div"); answer.className = "shiftlight-answer"; article.appendChild(answer);
         return {article, answer};
     };
+    const addDetailedViewAction = (shell) => {
+        if (!shell.answer.querySelector("table, pre")) return;
+        shell.article.tabIndex = -1;
+        const button = addText(shell.article.querySelector(".shiftlight-identity"), "button", "shiftlight-detail-action", "Detaylı Gör");
+        button.type = "button"; button.title = "Yanıtı tam ekranda incele"; button.setAttribute("aria-label", "Yanıtı tam ekranda incele");
+        button.addEventListener("click", () => openFullscreen(shell.article));
+    };
     const renderEmpty = () => {
         const empty = document.createElement("div"); empty.className = "shiftlight-empty";
         const content = document.createElement("div"); const mascot = document.createElement("img"); mascot.className = "shiftlight-empty-mascot"; mascot.src = "/static/shiftlight-mascot.png"; mascot.alt = "KKB ShiftLight AI maskotu"; content.appendChild(mascot); addText(content, "h2", "", "KKB ShiftLight AI"); addText(content, "p", "", "OpenShift cluster'ınız hakkında nasıl yardımcı olabilirim?");
         const choices = document.createElement("div"); choices.className = "shiftlight-suggestions";
-        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
+        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.disabled = isHistoricalConversation(); button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
         content.appendChild(choices); empty.appendChild(content); conversation.appendChild(empty);
     };
     const conversationTitle = (item) => {
@@ -274,9 +306,9 @@
         if (!selected || !selected.messages.length) renderEmpty();
         else selected.messages.forEach((item) => {
             if (item.role === "user") addText(conversation, "article", "shiftlight-message user", item.text);
-            else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); appendEvidence(shell.article, item.evidence); conversation.appendChild(shell.article); }
+            else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); addDetailedViewAction(shell); appendEvidence(shell.article, item.evidence); conversation.appendChild(shell.article); }
         });
-        form.hidden = false;
+        form.hidden = isHistoricalConversation();
         renderHistory();
         requestAnimationFrame(() => {
             conversation.scrollTop = followBottom ? conversation.scrollHeight : previousScrollTop;
@@ -288,7 +320,18 @@
         drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); overlay.hidden = false;
         launcher.setAttribute("aria-expanded", "true"); messageInput.focus();
     };
+    const setFullscreen = (expanded, focusTarget = null, restoreFocus = true) => {
+        const scrollTop = conversation.scrollTop;
+        fullscreen = expanded;
+        drawer.classList.toggle("fullscreen", expanded); overlay.classList.toggle("fullscreen", expanded); document.body.classList.toggle("shiftlight-fullscreen-open", expanded);
+        drawer.setAttribute("aria-modal", String(expanded)); expandButton.setAttribute("aria-pressed", String(expanded)); expandButton.textContent = expanded ? "↙" : "⛶";
+        expandButton.title = expanded ? "Küçült" : "Tam Ekran"; expandButton.setAttribute("aria-label", expanded ? "ShiftLight'ı normal görünüme küçült" : "ShiftLight'ı tam ekran aç");
+        requestAnimationFrame(() => { conversation.scrollTop = scrollTop; if (focusTarget) { focusTarget.scrollIntoView({block: "center"}); focusTarget.focus({preventScroll: true}); } else if (!expanded && restoreFocus) expandButton.focus(); });
+    };
+    const openFullscreen = (focusTarget = null) => { if (!drawer.classList.contains("open")) openDrawer(); setFullscreen(true, focusTarget); };
+    const closeFullscreen = () => setFullscreen(false);
     const closeDrawer = () => {
+        if (fullscreen) setFullscreen(false, null, false);
         drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); overlay.hidden = true;
         launcher.setAttribute("aria-expanded", "false"); launcher.focus();
     };
@@ -335,7 +378,7 @@
     };
 
     form.addEventListener("submit", async (event) => {
-        event.preventDefault(); if (requestPending) return;
+        event.preventDefault(); if (requestPending || isHistoricalConversation()) return;
         const text = messageInput.value; if (!text.trim() || !clusterSelect.value) return;
         addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         try {
@@ -347,11 +390,11 @@
             const shell = assistantShell(); shell.article.classList.add("error"); addText(shell.answer, "p", "", message); conversation.appendChild(shell.article); conversation.scrollTop = conversation.scrollHeight;
         } finally { setPending(false); messageInput.focus(); }
     });
-    launcher.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); overlay.addEventListener("click", closeDrawer);
+    launcher.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
     nudgeClose.addEventListener("click", dismissNudge); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
     historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
     clusterSelect.addEventListener("change", () => { if (!requestPending) changeCluster(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
-    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && drawer.classList.contains("open")) closeDrawer(); });
+    document.addEventListener("keydown", (event) => { if (event.key !== "Escape" || !drawer.classList.contains("open")) return; if (fullscreen) closeFullscreen(); else closeDrawer(); });
     renderConversation(); loadClusters(); showNudge(); if (root.dataset.openOnLoad === "true") openDrawer();
 })();
