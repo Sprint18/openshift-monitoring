@@ -406,6 +406,38 @@ def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
     assert 'aria-modal="false"' in partial
 
 
+def test_shiftlight_mascot_flight_reuses_first_session_welcome_state() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert "Merhaba 👋" in partial
+    assert "Ben KKB ShiftLight AI." in partial
+    assert "OpenShift desteği için buradayım." in partial
+    assert 'sessionStorage.getItem(NUDGE_KEY) === "true"' in source
+    assert 'sessionStorage.setItem(NUDGE_KEY, "true")' in source
+    assert "localStorage" not in source
+    assert 'launcher.classList.add("flight-pending")' in source
+    assert 'launcher.classList.add("flight-flying")' in source
+    assert "}, 850)" in source
+    assert "window.setTimeout(dismissNudge, 6500)" in source
+    assert 'launcher.addEventListener("click", openDrawer)' in source
+    assert "@keyframes shiftlight-flight" in css
+    assert "pointer-events:none" in css
+    assert 'class="shiftlight-launcher-mascot"' in partial
+
+
+def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in source
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    assert ".shiftlight-launcher.flight-flying .shiftlight-launcher-mascot" in reduced
+    assert "animation:none" in reduced
+    assert "transform:none" in reduced
+    assert 'drawer.classList.toggle("fullscreen", expanded)' in source
+    assert 'id="shiftlight-drawer"' in shiftlight_partial()
+    assert "https://" not in shiftlight_partial()
+
+
 def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     assert 'const SESSION_KEY = "kocc.shiftlight.conversations.v1"' in source

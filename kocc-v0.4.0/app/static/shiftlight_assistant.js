@@ -30,6 +30,7 @@
     ];
 
     const launcher = document.getElementById("shiftlight-launcher");
+    const launcherMascot = launcher.querySelector(".shiftlight-launcher-mascot");
     const drawer = document.getElementById("shiftlight-drawer");
     const overlay = document.getElementById("shiftlight-overlay");
     const closeButton = document.getElementById("shiftlight-close");
@@ -50,6 +51,8 @@
     let requestPending = false;
     let supportedClusters = [];
     let fullscreen = false;
+    let flightCancelled = false;
+    let flightFinished = false;
 
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
@@ -335,12 +338,32 @@
         drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); overlay.hidden = true;
         launcher.setAttribute("aria-expanded", "false"); launcher.focus();
     };
-    const dismissNudge = () => { nudge.hidden = true; sessionStorage.setItem(NUDGE_KEY, "true"); };
+    const dismissNudge = () => {
+        flightCancelled = true; nudge.hidden = true; sessionStorage.setItem(NUDGE_KEY, "true");
+        launcher.classList.remove("flight-pending", "flight-flying"); launcher.classList.add("flight-landed");
+    };
+    const revealNudge = () => {
+        if (flightCancelled) return;
+        nudge.hidden = false;
+        window.setTimeout(dismissNudge, 6500);
+    };
+    const finishFlight = () => {
+        if (flightCancelled || flightFinished) return;
+        flightFinished = true; launcher.classList.remove("flight-pending", "flight-flying"); launcher.classList.add("flight-landed"); revealNudge();
+    };
     const showNudge = () => {
         if (sessionStorage.getItem(NUDGE_KEY) === "true" || root.dataset.openOnLoad === "true") return;
         sessionStorage.setItem(NUDGE_KEY, "true");
-        nudge.hidden = false;
-        window.setTimeout(dismissNudge, 6500);
+        flightCancelled = false; flightFinished = false;
+        const reducedMotion = Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+        if (!reducedMotion) launcher.classList.add("flight-pending");
+        window.setTimeout(() => {
+            if (flightCancelled) return;
+            if (reducedMotion) { revealNudge(); return; }
+            launcher.classList.remove("flight-pending"); launcher.classList.add("flight-flying");
+            launcherMascot.addEventListener("animationend", (event) => { if (event.animationName === "shiftlight-flight") finishFlight(); }, {once: true});
+            window.setTimeout(finishFlight, 1800);
+        }, 850);
     };
     const errorKind = (status) => status === 400 ? "request" : status === 502 || status === 503 ? "unavailable" : status === 504 ? "timeout" : "generic";
     const fetchJson = async (url, options) => {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.agent import AgentLoop, SYSTEM_PROMPT, openai_tools
 from app.mcp_client import MCPUnavailable
 from app.tool_contracts import validate_tool_arguments
@@ -108,39 +110,56 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
     assert result.answer == "Genel sağlık kanıtları incelendi."
 
 
-def test_cluster_operator_numeric_contradiction_uses_deterministic_fallback() -> None:
+def cluster_operator_answer(answer: str) -> str:
     llm = FakeLLM([
         {"content": None, "tool_calls": [tool_call(
             "resources_list",
             '{"apiVersion":"config.openshift.io/v1","kind":"ClusterOperator"}',
         )]},
-        {"content": "35 ClusterOperators bulundu. Degraded: 1.", "tool_calls": None},
+        {"content": answer, "tool_calls": None},
     ])
     mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
 
-    result = AgentLoop(configured(), llm, mcp).run("ClusterOperator envanterini say")
+    return AgentLoop(configured(), llm, mcp).run(
+        "ClusterOperator envanterini say"
+    ).answer
 
-    assert "Toplam ClusterOperator: **34**" in result.answer
-    assert "Degraded=True: **0**" in result.answer
-    assert "Available=False: **0**" in result.answer
-    assert "Progressing=True: **0**" in result.answer
-    assert "35" not in result.answer
+
+@pytest.mark.parametrize("answer", [
+    "Toplam 35 ClusterOperator",
+    "Toplam 35",
+    "35 adet ClusterOperator incelendi.",
+    "Available 35/35",
+    "| Alan | Değer |\n| --- | --- |\n| Total | 35 |",
+    "34 ClusterOperator bulundu. Degraded 1.",
+    "34 ClusterOperator bulundu. Progressing 2.",
+    "34 ClusterOperator bulundu. Unavailable 1.",
+])
+def test_cluster_operator_numeric_contradiction_uses_deterministic_fallback(
+    answer: str,
+) -> None:
+    result = cluster_operator_answer(answer)
+
+    assert "Toplam ClusterOperator: **34**" in result
+    assert "Degraded=True: **0**" in result
+    assert "Available=False: **0**" in result
+    assert "Progressing=True: **0**" in result
+    assert "Degraded ClusterOperator tespit edilmedi." in result
 
 
 def test_cluster_operator_consistent_answer_is_not_rewritten() -> None:
     expected = "34 ClusterOperator bulundu. Degraded: 0."
-    llm = FakeLLM([
-        {"content": None, "tool_calls": [tool_call(
-            "resources_list",
-            '{"apiVersion":"config.openshift.io/v1","kind":"ClusterOperator"}',
-        )]},
-        {"content": expected, "tool_calls": None},
-    ])
-    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+    assert cluster_operator_answer(expected) == expected
 
-    result = AgentLoop(configured(), llm, mcp).run("ClusterOperator envanterini say")
 
-    assert result.answer == expected
+@pytest.mark.parametrize("answer", [
+    "Available 34/34",
+    "34 ClusterOperator bulundu. OpenShift sürümü 4.18.40.",
+])
+def test_cluster_operator_consistent_aggregate_or_unrelated_version_is_preserved(
+    answer: str,
+) -> None:
+    assert cluster_operator_answer(answer) == answer
 
 
 def test_cluster_operator_answer_without_authoritative_facts_is_not_rewritten() -> None:

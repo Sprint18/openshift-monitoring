@@ -24,6 +24,8 @@
     cursor: pointer;
 }
 .shiftlight-launcher-mascot { width:68px; height:68px; margin:-18px 0 -10px -12px; object-fit:contain; object-position:center; animation:shiftlight-bob 3.4s ease-in-out infinite; }
+.shiftlight-launcher.flight-pending .shiftlight-launcher-mascot { opacity:0; pointer-events:none; animation:none; }
+.shiftlight-launcher.flight-flying .shiftlight-launcher-mascot { pointer-events:auto; animation:shiftlight-flight 1.55s cubic-bezier(.22,.72,.22,1) both; }
 .shiftlight-launcher:focus-visible,
 .shiftlight-drawer button:focus-visible,
 .shiftlight-drawer select:focus-visible,
@@ -127,5 +129,6 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 @keyframes shiftlight-float { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shiftlight-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
-@media (prefers-reduced-motion: reduce) { .shiftlight-nudge,.shiftlight-launcher-mascot { animation:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
+@keyframes shiftlight-flight { 0%{opacity:0;transform:translate(110px,72px) rotate(10deg) scale(.78)} 35%{opacity:1;transform:translate(-26px,-52px) rotate(-7deg) scale(1.05)} 72%{transform:translate(8px,-14px) rotate(3deg) scale(.98)} 100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)} }
+@media (prefers-reduced-motion: reduce) { .shiftlight-nudge,.shiftlight-launcher-mascot,.shiftlight-launcher.flight-flying .shiftlight-launcher-mascot { animation:none; opacity:1; transform:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
 @media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }

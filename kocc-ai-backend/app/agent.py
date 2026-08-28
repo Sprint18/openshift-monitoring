@@ -161,12 +161,19 @@ def _direct_cluster_operator_answer(facts: dict[str, Any]) -> str:
 
 
 def _deterministic_cluster_operator_summary(facts: dict[str, int]) -> str:
+    degraded = facts["degraded_true_count"]
+    degraded_summary = (
+        "Degraded ClusterOperator tespit edilmedi."
+        if degraded == 0
+        else f"{degraded} Degraded ClusterOperator tespit edildi."
+    )
     return (
         "## ClusterOperator Durumu\n\n"
         f"- Toplam ClusterOperator: **{facts['resource_count']}**\n"
         f"- Degraded=True: **{facts['degraded_true_count']}**\n"
         f"- Available=False: **{facts['available_false_count']}**\n"
-        f"- Progressing=True: **{facts['progressing_true_count']}**"
+        f"- Progressing=True: **{facts['progressing_true_count']}**\n\n"
+        f"{degraded_summary}"
     )
 
 
@@ -190,17 +197,24 @@ def _guard_cluster_operator_answer(
     if len(authoritative) != len(PUBLIC_FACT_KEYS):
         return answer
 
+    # Remove only Markdown emphasis markers so aggregate labels and their
+    # numeric cells remain adjacent without interpreting arbitrary prose.
+    normalized_answer = re.sub(r"[*_`#]", "", answer)
+
     def claims(patterns: tuple[str, ...]) -> set[int]:
         values: set[int] = set()
         for pattern in patterns:
-            for match in re.finditer(pattern, answer, flags=re.IGNORECASE):
+            for match in re.finditer(
+                pattern, normalized_answer, flags=re.IGNORECASE
+            ):
                 values.add(int(next(group for group in match.groups() if group)))
         return values
 
     observed = {
         "resource_count": claims((
-            r"\b(\d+)\s+ClusterOperator(?:ler|s)?\b",
+            r"\b(\d+)\s+(?:adet\s+)?ClusterOperator(?:ler|s)?\b",
             r"\bClusterOperator(?:ler|s)?\s*(?:sayısı|count|toplam)?\s*[:=]\s*(\d+)\b",
+            r"\b(?:Toplam|Total)\b(?:\s+ClusterOperator(?:ler|s)?)?\s*(?:[:=|]\s*)?(\d+)\b",
         )),
         "degraded_true_count": claims((
             r"\bDegraded(?:\s*=\s*True)?\D{0,12}(\d+)\b",
@@ -214,9 +228,18 @@ def _guard_cluster_operator_answer(
             r"\bProgressing(?:\s*=\s*True)?\D{0,12}(\d+)\b",
             r"\b(\d+)\s+Progressing\b",
         )),
+        "available_count": claims((
+            r"\bAvailable\b\s*[:=|]?\s*(\d+)\b",
+            r"\bAvailable\b[^0-9\n|]{0,8}\d+\s*/\s*(\d+)\b",
+        )),
     }
+    expected = dict(authoritative)
+    expected["available_count"] = (
+        authoritative["resource_count"]
+        - authoritative["available_false_count"]
+    )
     contradictory = any(
-        values and any(value != authoritative[key] for value in values)
+        values and any(value != expected[key] for value in values)
         for key, values in observed.items()
     )
     return (
