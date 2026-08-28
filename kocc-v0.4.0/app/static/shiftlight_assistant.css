@@ -14,18 +14,25 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    padding: 9px 14px 9px 9px;
-    color: #fff;
-    background: var(--shiftlight-navy);
-    border: 1px solid rgba(255,255,255,.28);
-    border-radius: 24px;
-    box-shadow: 0 8px 25px rgba(19,43,79,.28);
+    padding: 5px 13px 5px 5px;
+    color: var(--shiftlight-navy);
+    background: rgba(255,255,255,.97);
+    border: 1px solid rgba(19,43,79,.2);
+    border-bottom: 3px solid var(--shiftlight-orange);
+    border-radius: 999px;
+    box-shadow: 0 8px 22px rgba(19,43,79,.2);
     font: 700 13px Arial,sans-serif;
     cursor: pointer;
 }
-.shiftlight-launcher-mascot { width:68px; height:68px; margin:-18px 0 -10px -12px; object-fit:contain; object-position:center; animation:shiftlight-bob 3.4s ease-in-out infinite; }
-.shiftlight-launcher.flight-pending .shiftlight-launcher-mascot { opacity:0; pointer-events:none; animation:none; }
-.shiftlight-launcher.flight-flying .shiftlight-launcher-mascot { pointer-events:auto; animation:shiftlight-flight 1.55s cubic-bezier(.22,.72,.22,1) both; }
+.shiftlight-launcher:hover { transform:translateY(-2px); box-shadow:0 11px 26px rgba(19,43,79,.24); }
+.shiftlight-launcher.welcome-hidden { opacity:0; pointer-events:none; }
+.shiftlight-launcher-mascot { width:62px; height:62px; margin:-12px 0 -8px -8px; object-fit:contain; object-position:center; }
+.shiftlight-flight { position:fixed; right:40px; bottom:48px; z-index:1201; width:128px; height:128px; padding:0; background:transparent; border:0; filter:drop-shadow(0 12px 12px rgba(19,43,79,.2)); cursor:pointer; }
+.shiftlight-flight[hidden] { pointer-events:none; }
+.shiftlight-flight img { display:block; width:100%; height:100%; object-fit:contain; }
+.shiftlight-flight.flying { animation:shiftlight-flight 1.9s cubic-bezier(.2,.72,.24,1) both; }
+.shiftlight-flight.landed { animation:shiftlight-land .34s ease-out both; }
+.shiftlight-flight.compacting { pointer-events:none; animation:shiftlight-compact .42s ease-in both; }
 .shiftlight-launcher:focus-visible,
 .shiftlight-drawer button:focus-visible,
 .shiftlight-drawer select:focus-visible,
@@ -35,24 +42,25 @@
 }
 .shiftlight-nudge {
     position: fixed;
-    right: 24px;
-    bottom: 84px;
+    right: 172px;
+    bottom: 76px;
     z-index: 1201;
-    display:flex;
-    align-items:center;
-    gap:10px;
-    width: min(330px,calc(100vw - 32px));
-    padding: 10px 34px 10px 10px;
-    color: #25364a;
+    width: min(285px,calc(100vw - 190px));
+    padding: 15px 34px 15px 17px;
+    color: var(--shiftlight-navy);
     background: #fff;
-    border: 1px solid #b8c9d9;
-    border-left: 4px solid var(--shiftlight-orange);
-    border-radius: 10px;
+    border: 2px solid var(--shiftlight-navy);
+    border-left: 5px solid var(--shiftlight-orange);
+    border-radius: 15px;
     box-shadow: 0 8px 24px rgba(19,43,79,.18);
-    animation: shiftlight-float .55s ease-out;
-    font: 13px/1.4 Arial,sans-serif;
+    opacity:0;
+    transform:translateY(8px) scale(.97);
+    transition:opacity .3s ease,transform .3s ease;
+    font: 14px/1.45 Arial,sans-serif;
 }
-.shiftlight-nudge img { width:110px; height:110px; flex:0 0 auto; object-fit:contain; object-position:center; }
+.shiftlight-nudge::after { content:""; position:absolute; right:-13px; bottom:22px; width:22px; height:22px; background:#fff; border-top:2px solid var(--shiftlight-navy); border-right:2px solid var(--shiftlight-navy); transform:rotate(45deg); }
+.shiftlight-nudge.visible { opacity:1; transform:translateY(0) scale(1); }
+.shiftlight-nudge.exiting { opacity:0; transform:translateY(6px) scale(.97); pointer-events:none; }
 .shiftlight-nudge strong,.shiftlight-nudge span { display:block; }
 .shiftlight-nudge button { position:absolute; top:5px; right:7px; border:0; background:transparent; color:#59636e; font-size:20px; cursor:pointer; }
 .shiftlight-overlay { position:fixed; inset:0; z-index:1202; background:rgba(9,23,41,.08); }
@@ -128,7 +136,9 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-composer > div { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px; }.shiftlight-composer > div span{color:var(--shiftlight-muted);font-size:11px}.shiftlight-composer > div span.error{color:#a30000}.shiftlight-composer button{padding:8px 13px;color:#fff;background:var(--shiftlight-navy);border:0;border-radius:7px;font-weight:bold;cursor:pointer}.shiftlight-composer button:disabled{cursor:not-allowed;opacity:.55}.shiftlight-composer small{display:block;margin-top:4px;color:var(--shiftlight-muted);font-size:10px}
 .shiftlight-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 @keyframes shiftlight-float { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-@keyframes shiftlight-bob { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
-@keyframes shiftlight-flight { 0%{opacity:0;transform:translate(110px,72px) rotate(10deg) scale(.78)} 35%{opacity:1;transform:translate(-26px,-52px) rotate(-7deg) scale(1.05)} 72%{transform:translate(8px,-14px) rotate(3deg) scale(.98)} 100%{opacity:1;transform:translate(0,0) rotate(0) scale(1)} }
-@media (prefers-reduced-motion: reduce) { .shiftlight-nudge,.shiftlight-launcher-mascot,.shiftlight-launcher.flight-flying .shiftlight-launcher-mascot { animation:none; opacity:1; transform:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
-@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }
+@keyframes shiftlight-flight { 0%{opacity:0;transform:translate3d(180px,115px,0) rotate(14deg) scale(.76)} 28%{opacity:1;transform:translate3d(-24vw,-18vh,0) rotate(-10deg) scale(1.08)} 56%{transform:translate3d(-11vw,-27vh,0) rotate(7deg) scale(1.02)} 80%{transform:translate3d(-3vw,-7vh,0) rotate(-4deg) scale(1)} 100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1)} }
+@keyframes shiftlight-land { 0%{transform:translate3d(0,-10px,0) scale(1.04)} 65%{transform:translate3d(0,3px,0) scale(.98)} 100%{transform:translate3d(0,0,0) scale(1)} }
+@keyframes shiftlight-compact { from{opacity:1;transform:translate3d(0,0,0) scale(1)} to{opacity:0;transform:translate3d(38px,22px,0) scale(.52)} }
+@media (prefers-reduced-motion: reduce) { .shiftlight-nudge{transition:opacity .15s ease}.shiftlight-flight,.shiftlight-flight.flying,.shiftlight-flight.landed,.shiftlight-flight.compacting { animation:none; opacity:1; transform:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
+@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-flight{right:12px;bottom:70px;width:108px;height:108px}.shiftlight-flight.flying{animation-name:shiftlight-flight-mobile;animation-duration:1.25s}.shiftlight-nudge{right:102px;bottom:82px;width:min(235px,calc(100vw - 118px));padding:12px 28px 12px 13px;font-size:12px}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }
+@keyframes shiftlight-flight-mobile { 0%{opacity:0;transform:translate3d(95px,80px,0) rotate(10deg) scale(.8)} 45%{opacity:1;transform:translate3d(-28vw,-15vh,0) rotate(-7deg) scale(1.04)} 78%{transform:translate3d(-5vw,-5vh,0) rotate(3deg)} 100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1)} }

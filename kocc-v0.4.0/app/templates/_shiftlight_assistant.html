@@ -3,8 +3,9 @@
 <div id="shiftlight-root" data-initial-cluster="{{ selected_cluster }}" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
     <div id="shiftlight-nudge" class="shiftlight-nudge" hidden role="status">
         <button id="shiftlight-nudge-close" type="button" aria-label="ShiftLight karşılama mesajını kapat">×</button>
-        <img src="/static/shiftlight-mascot.png" alt="" aria-hidden="true"><div><strong>Merhaba 👋</strong><span>Ben KKB ShiftLight AI.<br>OpenShift desteği için buradayım.</span></div>
+        <strong>Merhaba 👋</strong><span>Ben KKB ShiftLight AI.<br>Size nasıl yardımcı olabilirim?</span>
     </div>
+    <button id="shiftlight-flight" class="shiftlight-flight" type="button" hidden aria-label="KKB ShiftLight AI asistanını aç" aria-controls="shiftlight-drawer"><img src="/static/shiftlight-mascot.png" alt="" aria-hidden="true"></button>
     <button id="shiftlight-launcher" class="shiftlight-launcher" type="button" aria-label="KKB ShiftLight AI asistanını aç" aria-controls="shiftlight-drawer" aria-expanded="false">
         <img class="shiftlight-launcher-mascot" src="/static/shiftlight-mascot.png" alt="" aria-hidden="true"><span>KKB ShiftLight AI</span>
     </button>

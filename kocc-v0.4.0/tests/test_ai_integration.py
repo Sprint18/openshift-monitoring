@@ -399,7 +399,7 @@ def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
     assert "Ben KKB ShiftLight AI." in partial
     assert 'aria-controls="shiftlight-drawer"' in partial
     assert "sessionStorage.getItem(NUDGE_KEY)" in source
-    assert "window.setTimeout(dismissNudge, 6500)" in source
+    assert "window.setTimeout(() => collapseWelcome(run), 6800)" in source
     assert "prefers-reduced-motion: reduce" in css
     assert "https://" not in partial and "cdn" not in partial.lower()
     assert 'role="dialog"' in partial
@@ -411,18 +411,21 @@ def test_shiftlight_mascot_flight_reuses_first_session_welcome_state() -> None:
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
     assert "Merhaba 👋" in partial
     assert "Ben KKB ShiftLight AI." in partial
-    assert "OpenShift desteği için buradayım." in partial
+    assert "Size nasıl yardımcı olabilirim?" in partial
     assert 'sessionStorage.getItem(NUDGE_KEY) === "true"' in source
     assert 'sessionStorage.setItem(NUDGE_KEY, "true")' in source
     assert "localStorage" not in source
-    assert 'launcher.classList.add("flight-pending")' in source
-    assert 'launcher.classList.add("flight-flying")' in source
-    assert "}, 850)" in source
-    assert "window.setTimeout(dismissNudge, 6500)" in source
+    assert 'flightMascot.classList.add("flying")' in source
+    assert "mobile ? 1250 : 1900" in source
+    assert "mobile ? 650 : 750" in source
+    assert "collapseWelcome(run), 6800" in source
     assert 'launcher.addEventListener("click", openDrawer)' in source
+    assert 'flightMascot.addEventListener("click", openDrawer)' in source
     assert "@keyframes shiftlight-flight" in css
     assert "pointer-events:none" in css
     assert 'class="shiftlight-launcher-mascot"' in partial
+    assert 'id="shiftlight-flight"' in partial
+    assert 'id="shiftlight-flight" class="shiftlight-flight" type="button" hidden' in partial
 
 
 def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> None:
@@ -430,12 +433,45 @@ def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> Non
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
     assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in source
     reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
-    assert ".shiftlight-launcher.flight-flying .shiftlight-launcher-mascot" in reduced
+    assert ".shiftlight-flight.flying" in reduced
     assert "animation:none" in reduced
     assert "transform:none" in reduced
     assert 'drawer.classList.toggle("fullscreen", expanded)' in source
     assert 'id="shiftlight-drawer"' in shiftlight_partial()
     assert "https://" not in shiftlight_partial()
+
+
+def test_shiftlight_welcome_lands_greets_and_compacts_to_launcher() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert 'flightMascot.classList.add("landed")' in source
+    assert "const landMascot = (run, settle = 320)" in source
+    assert 'nudge.classList.add("visible")' in source
+    assert 'flightMascot.classList.add("compacting")' in source
+    assert 'launcher.classList.remove("welcome-hidden")' in source
+    assert "}, 420)" in source
+    assert "@keyframes shiftlight-land" in css
+    assert "@keyframes shiftlight-compact" in css
+    flight = css[css.index("@keyframes shiftlight-flight"):css.index("@keyframes shiftlight-land")]
+    assert all(step in flight for step in ("0%", "28%", "56%", "80%", "100%"))
+    assert "translate3d" in flight
+    assert "width:128px; height:128px" in css
+    assert "width:62px; height:62px" in css
+
+
+def test_shiftlight_welcome_replay_isolated_and_open_drawer_cancels_sequence() -> None:
+    source = shiftlight_source()
+    assert "window.shiftLightReplayWelcome" in source
+    replay = source[source.index("window.shiftLightReplayWelcome"):source.index("const errorKind")]
+    assert "sessionStorage.removeItem(NUDGE_KEY)" in replay
+    assert "showNudge(true)" in replay
+    assert "SESSION_KEY" not in replay
+    assert "localStorage" not in replay
+    open_drawer = source[source.index("const openDrawer"):source.index("const setFullscreen")]
+    assert "cancelWelcome()" in open_drawer
+    assert 'flightMascot.hidden = true' in source
+    assert 'drawer.classList.contains("open") || fullscreen' in source
+    assert 'pointer-events:none' in (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
 
 
 def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() -> None:
@@ -485,10 +521,10 @@ def test_shiftlight_mascot_is_local_and_integrated_globally() -> None:
     assert partial.count('/static/shiftlight-mascot.png') == 2
     assert 'avatar.src = "/static/shiftlight-mascot.png"' in source
     assert 'mascot.src = "/static/shiftlight-mascot.png"' in source
-    assert "@keyframes shiftlight-bob" in css
+    assert "@keyframes shiftlight-flight" in css
     assert ".shiftlight-launcher-mascot" in css
-    assert "width:68px; height:68px" in css
-    assert "width:110px; height:110px" in css
+    assert "width:62px; height:62px" in css
+    assert "width:128px; height:128px" in css
     assert "width:132px; height:132px" in css
     assert "width:30px; height:30px" in css
     assert "animation:none" in css

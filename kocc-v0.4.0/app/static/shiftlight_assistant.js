@@ -30,7 +30,7 @@
     ];
 
     const launcher = document.getElementById("shiftlight-launcher");
-    const launcherMascot = launcher.querySelector(".shiftlight-launcher-mascot");
+    const flightMascot = document.getElementById("shiftlight-flight");
     const drawer = document.getElementById("shiftlight-drawer");
     const overlay = document.getElementById("shiftlight-overlay");
     const closeButton = document.getElementById("shiftlight-close");
@@ -51,8 +51,7 @@
     let requestPending = false;
     let supportedClusters = [];
     let fullscreen = false;
-    let flightCancelled = false;
-    let flightFinished = false;
+    let welcomeRun = 0;
 
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
@@ -319,7 +318,7 @@
     };
 
     const openDrawer = () => {
-        dismissNudge();
+        cancelWelcome();
         drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); overlay.hidden = false;
         launcher.setAttribute("aria-expanded", "true"); messageInput.focus();
     };
@@ -338,33 +337,47 @@
         drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); overlay.hidden = true;
         launcher.setAttribute("aria-expanded", "false"); launcher.focus();
     };
-    const dismissNudge = () => {
-        flightCancelled = true; nudge.hidden = true; sessionStorage.setItem(NUDGE_KEY, "true");
-        launcher.classList.remove("flight-pending", "flight-flying"); launcher.classList.add("flight-landed");
+    const resetWelcomeVisuals = () => {
+        nudge.hidden = true; nudge.classList.remove("visible", "exiting");
+        flightMascot.hidden = true; flightMascot.classList.remove("flying", "landed", "compacting");
+        launcher.classList.remove("welcome-hidden");
     };
-    const revealNudge = () => {
-        if (flightCancelled) return;
+    const cancelWelcome = () => {
+        welcomeRun += 1; sessionStorage.setItem(NUDGE_KEY, "true"); resetWelcomeVisuals();
+    };
+    const collapseWelcome = (run) => {
+        if (run !== welcomeRun || flightMascot.hidden) return;
+        nudge.classList.remove("visible"); nudge.classList.add("exiting"); launcher.classList.remove("welcome-hidden"); flightMascot.classList.remove("landed"); flightMascot.classList.add("compacting");
+        window.setTimeout(() => { if (run === welcomeRun) resetWelcomeVisuals(); }, 420);
+    };
+    const revealNudge = (run) => {
+        if (run !== welcomeRun) return;
         nudge.hidden = false;
-        window.setTimeout(dismissNudge, 6500);
+        requestAnimationFrame(() => nudge.classList.add("visible"));
+        window.setTimeout(() => collapseWelcome(run), 6800);
     };
-    const finishFlight = () => {
-        if (flightCancelled || flightFinished) return;
-        flightFinished = true; launcher.classList.remove("flight-pending", "flight-flying"); launcher.classList.add("flight-landed"); revealNudge();
+    const landMascot = (run, settle = 320) => {
+        if (run !== welcomeRun) return;
+        flightMascot.classList.remove("flying"); flightMascot.classList.add("landed");
+        window.setTimeout(() => revealNudge(run), settle);
     };
-    const showNudge = () => {
-        if (sessionStorage.getItem(NUDGE_KEY) === "true" || root.dataset.openOnLoad === "true") return;
+    const showNudge = (force = false) => {
+        if (!force && (sessionStorage.getItem(NUDGE_KEY) === "true" || root.dataset.openOnLoad === "true")) { resetWelcomeVisuals(); return; }
+        if (drawer.classList.contains("open") || fullscreen) { sessionStorage.setItem(NUDGE_KEY, "true"); resetWelcomeVisuals(); return; }
+        const run = welcomeRun + 1; welcomeRun = run;
         sessionStorage.setItem(NUDGE_KEY, "true");
-        flightCancelled = false; flightFinished = false;
         const reducedMotion = Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-        if (!reducedMotion) launcher.classList.add("flight-pending");
+        const mobile = Boolean(window.matchMedia && window.matchMedia("(max-width: 620px)").matches);
+        resetWelcomeVisuals(); launcher.classList.add("welcome-hidden");
         window.setTimeout(() => {
-            if (flightCancelled) return;
-            if (reducedMotion) { revealNudge(); return; }
-            launcher.classList.remove("flight-pending"); launcher.classList.add("flight-flying");
-            launcherMascot.addEventListener("animationend", (event) => { if (event.animationName === "shiftlight-flight") finishFlight(); }, {once: true});
-            window.setTimeout(finishFlight, 1800);
-        }, 850);
+            if (run !== welcomeRun) return;
+            flightMascot.hidden = false;
+            if (reducedMotion) { landMascot(run, 0); return; }
+            flightMascot.classList.add("flying");
+            window.setTimeout(() => landMascot(run), mobile ? 1250 : 1900);
+        }, reducedMotion ? 120 : mobile ? 650 : 750);
     };
+    window.shiftLightReplayWelcome = () => { sessionStorage.removeItem(NUDGE_KEY); showNudge(true); };
     const errorKind = (status) => status === 400 ? "request" : status === 502 || status === 503 ? "unavailable" : status === 504 ? "timeout" : "generic";
     const fetchJson = async (url, options) => {
         let response;
@@ -413,8 +426,8 @@
             const shell = assistantShell(); shell.article.classList.add("error"); addText(shell.answer, "p", "", message); conversation.appendChild(shell.article); conversation.scrollTop = conversation.scrollHeight;
         } finally { setPending(false); messageInput.focus(); }
     });
-    launcher.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
-    nudgeClose.addEventListener("click", dismissNudge); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
+    launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
+    nudgeClose.addEventListener("click", () => collapseWelcome(welcomeRun)); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
     historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
     clusterSelect.addEventListener("change", () => { if (!requestPending) changeCluster(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
