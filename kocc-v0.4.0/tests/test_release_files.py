@@ -122,6 +122,12 @@ def test_test_deployment_mounts_existing_sqlite_pvc_with_fs_group() -> None:
     } in pod_spec["volumes"]
 
 
+def test_test_deployment_recreates_pod_for_read_write_once_pvc() -> None:
+    deployment = manifest_resources()["Deployment"]
+    assert deployment["spec"]["replicas"] == 1
+    assert deployment["spec"]["strategy"] == {"type": "Recreate"}
+
+
 def test_test_deployment_configures_internal_ai_backend() -> None:
     deployment = manifest_resources()["Deployment"]
     container = deployment["spec"]["template"]["spec"]["containers"][0]
