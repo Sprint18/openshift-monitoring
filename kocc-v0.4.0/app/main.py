@@ -15,7 +15,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
@@ -211,6 +211,14 @@ async def health() -> dict[str, str]:
 @app.get("/ready")
 async def ready() -> dict[str, str]:
     return {"status": "ready", "version": app.version}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse(
+        Path(__file__).parent / "static/kkb-turuncu-lacivert-logo.png",
+        media_type="image/png",
+    )
 
 
 def percentage(value: int, total: int) -> float:
@@ -1232,21 +1240,21 @@ def api_clusters() -> dict[str, Any]:
 def ai_error_response(exc: AIBackendError) -> JSONResponse:
     if exc.code == "timeout":
         return JSONResponse(
-            {"error": "ai_timeout", "message": "AI Assistant yanıtı zaman aşımına uğradı."},
+            {"error": "ai_timeout", "message": "ShiftLight AI yanıtı zaman aşımına uğradı."},
             status_code=504,
         )
     if exc.code.startswith("http_4"):
         return JSONResponse(
-            {"error": "ai_request_rejected", "message": "İstek AI Assistant tarafından işlenemedi."},
+            {"error": "ai_request_rejected", "message": "İstek ShiftLight AI tarafından işlenemedi."},
             status_code=400,
         )
     if exc.code in {"unavailable", "http_503"}:
         return JSONResponse(
-            {"error": "ai_unavailable", "message": "AI Assistant şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin."},
+            {"error": "ai_unavailable", "message": "ShiftLight AI şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin."},
             status_code=503,
         )
     return JSONResponse(
-        {"error": "ai_invalid_response", "message": "AI Assistant geçerli bir yanıt döndürmedi."},
+        {"error": "ai_invalid_response", "message": "ShiftLight AI geçerli bir yanıt döndürmedi."},
         status_code=502,
     )
 
@@ -1268,7 +1276,7 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
     cluster_key = payload.cluster.strip().lower()
     if cluster_key not in AI_SUPPORTED_CLUSTER_IDS:
         return JSONResponse(
-            {"error": "unsupported_cluster", "message": "Bu cluster AI Assistant tarafından desteklenmiyor."},
+            {"error": "unsupported_cluster", "message": "Bu cluster ShiftLight AI tarafından desteklenmiyor."},
             status_code=400,
         )
     if not payload.message.strip():

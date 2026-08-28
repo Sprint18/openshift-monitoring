@@ -5,9 +5,9 @@
         ("/workloads", "Workloads", "workloads"),
         ("/platform", "Platform", "platform"),
         ("/health-overview", "Health", "health"),
-        ("/diagnostics", "Diagnostics", "diagnostics"),
-        ("/ai-assistant", "AI Assistant", "ai-assistant")
+        ("/diagnostics", "Diagnostics", "diagnostics")
     ] %}
     <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
     {% endfor %}
 </nav>
+{% include "_shiftlight_assistant.html" %}

@@ -3,166 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>KKB ShiftAI · OpenShift Operasyon Asistanı</title>
+    <title>KKB ShiftLight AI · OpenShift Operasyon Asistanı</title>
     <style>
-        :root { --navy:#132b4f; --navy-dark:#0d213d; --orange:#f58220; --border:#d8dee6; --muted:#6a6e73; --canvas:#f5f7fa; --focus:#2b7bbb; }
+        :root { --navy:#132b4f; --orange:#f58220; }
         * { box-sizing:border-box; }
-        body { margin:0; overflow-x:hidden; background:var(--canvas); color:#151515; font-family:Arial,sans-serif; }
-        header { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:12px 32px; color:white; background:var(--navy); border-bottom:4px solid var(--orange); }
-        .brand,.header-actions,.context-bar,.composer-actions,.assistant-identity { display:flex; align-items:center; }
-        .brand { gap:12px; min-width:0; }
-        .brand img { width:48px; height:46px; padding:4px; object-fit:contain; background:white; border-radius:7px; }
-        .brand h1 { margin:0; font-size:22px; }
-        .brand small { display:block; margin-top:2px; color:#dbe5ef; }
-        .header-actions { gap:10px; }
-        .readonly-badge { padding:6px 10px; border:1px solid #91b7d8; border-radius:14px; color:#edf6ff; font-size:12px; }
-        button,select,textarea { font:inherit; }
-        button { cursor:pointer; }
-        button:disabled { cursor:not-allowed; opacity:.55; }
-        button:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible { outline:3px solid #8bc8ff; outline-offset:2px; }
-        .new-chat { padding:8px 12px; color:var(--navy); background:white; border:1px solid white; border-radius:7px; font-weight:bold; }
-        .primary-nav { display:flex; gap:4px; padding:0 32px; overflow:auto; background:var(--navy-dark); }
+        body { margin:0; background:#f4f5f5; color:#151515; font-family:Arial,sans-serif; }
+        .portal-header { display:flex; align-items:center; gap:12px; padding:12px 32px; color:#fff; background:var(--navy); border-bottom:4px solid var(--orange); }
+        .portal-header img { width:48px; height:46px; padding:4px; object-fit:contain; background:#fff; border-radius:7px; }
+        .portal-header h1 { margin:0; font-size:22px; }.portal-header small { color:#dbe5ef; }
+        .primary-nav { display:flex; gap:4px; padding:0 32px; overflow:auto; background:#0d213d; }
         .primary-nav a { padding:10px 14px; color:#dbe5ef; text-decoration:none; white-space:nowrap; border-bottom:3px solid transparent; }
-        .primary-nav a.active,.primary-nav a:hover { color:white; border-color:var(--orange); background:rgba(255,255,255,.06); }
-        main { width:min(1180px,100%); margin:auto; padding:18px 28px 36px; }
-        .context-bar { justify-content:space-between; gap:14px; margin-bottom:12px; padding:9px 14px; background:white; border:1px solid var(--border); border-radius:10px; }
-        .cluster-control { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:13px; font-weight:bold; }
-        select { min-width:170px; padding:8px 34px 8px 10px; border:1px solid #8a8d90; border-radius:7px; background:white; }
-        .context-note { color:var(--muted); font-size:12px; }
-        .chat-workspace { display:grid; grid-template-rows:minmax(0,1fr) auto; height:clamp(560px,calc(100dvh - 220px),820px); min-height:0; overflow:hidden; background:white; border:1px solid var(--border); border-radius:13px; box-shadow:0 8px 28px rgba(19,43,79,.08); }
-        .conversation { display:flex; flex-direction:column; gap:18px; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:28px max(24px,calc((100% - 860px)/2)); scroll-behavior:smooth; }
-        .empty-state { display:grid; place-items:center; flex:1; min-height:360px; text-align:center; }
-        .empty-content { max-width:650px; }
-        .empty-mark { display:grid; place-items:center; width:58px; height:58px; margin:0 auto 16px; color:white; background:var(--navy); border-radius:16px; font-size:22px; font-weight:bold; box-shadow:inset 0 -4px 0 var(--orange); }
-        .empty-state h2 { margin:0; color:var(--navy); font-size:28px; }
-        .empty-state p { margin:9px 0 20px; color:var(--muted); }
-        .suggestions { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; }
-        .suggestion { padding:9px 12px; color:var(--navy); background:white; border:1px solid #aec0d2; border-radius:18px; }
-        .message { width:min(100%,860px); overflow-wrap:anywhere; }
-        .message.user { align-self:flex-end; width:auto; max-width:min(72%,650px); padding:11px 15px; color:white; background:var(--navy); border-radius:16px 16px 4px 16px; }
-        .message.user p { margin:0; white-space:pre-wrap; }
-        .message.assistant { align-self:flex-start; }
-        .assistant-identity { gap:8px; margin-bottom:8px; color:var(--navy); font-size:13px; font-weight:bold; }
-        .assistant-avatar { display:grid; place-items:center; width:28px; height:28px; color:white; background:var(--navy); border-radius:8px; box-shadow:inset 0 -3px 0 var(--orange); font-size:11px; }
-        .assistant-body { padding:4px 4px 4px 36px; line-height:1.58; }
-        .assistant-body > :first-child { margin-top:0; }
-        .assistant-body > :last-child { margin-bottom:0; }
-        .assistant-body h1,.assistant-body h2,.assistant-body h3 { margin:18px 0 8px; color:var(--navy); line-height:1.25; }
-        .assistant-body h1 { font-size:21px; }.assistant-body h2 { font-size:18px; }.assistant-body h3 { font-size:16px; }
-        .assistant-body p,.assistant-body ul,.assistant-body ol { margin:8px 0; }
-        .assistant-body code { padding:2px 5px; background:#eef2f6; border-radius:4px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.92em; }
-        .code-block { overflow:auto; margin:10px 0; padding:13px; color:#edf4fb; background:#142238; border-radius:8px; white-space:pre; }
-        .code-block code { padding:0; color:inherit; background:transparent; }
-        .table-scroll { max-width:100%; overflow-x:auto; margin:12px 0; border:1px solid var(--border); border-radius:8px; }
-        .assistant-body table { width:100%; border-collapse:collapse; font-size:14px; }
-        .assistant-body th,.assistant-body td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); }
-        .assistant-body th { color:var(--navy); background:#eef3f7; }
-        .assistant-body a { color:#005ea8; }
-        .loading-message .assistant-body { color:var(--muted); }
-        .typing-dots::after { content:""; animation:thinking 1.2s steps(4,end) infinite; }
-        @keyframes thinking { 0%{content:""}25%{content:"."}50%{content:".."}75%,100%{content:"..."} }
-        .message.error .assistant-body { color:#8a150d; }
-        details.evidence { margin:12px 4px 0 36px; padding-top:9px; border-top:1px solid var(--border); }
-        details.evidence summary { cursor:pointer; color:#004b95; font-size:13px; font-weight:bold; }
-        .tool-list { display:grid; gap:6px; padding:9px 0 0; margin:0; list-style:none; font-size:12px; }
-        .tool-list li { width:max-content; max-width:100%; padding:5px 9px; background:#eef3f7; border-radius:10px; }
-        .tool-list .failed { color:#8a150d; background:#faeae8; }
-        .fact-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); gap:6px; margin-top:7px; }
-        .fact { padding:6px 8px; color:#3d4650; background:white; border:1px solid var(--border); border-radius:6px; }
-        .composer-shell { padding:12px max(18px,calc((100% - 860px)/2)); background:linear-gradient(transparent,#fff 22%); }
-        .composer { padding:10px 12px 8px; background:white; border:1px solid #9eabb8; border-radius:15px; box-shadow:0 6px 22px rgba(19,43,79,.11); }
-        textarea { width:100%; min-height:48px; max-height:150px; padding:8px; resize:none; border:0; outline:0; background:transparent; line-height:1.4; }
-        .composer-actions { justify-content:space-between; gap:12px; }
-        .composer-help,.status { color:var(--muted); font-size:12px; }
-        .status.error { color:#a30000; }
-        .send { min-width:86px; padding:9px 16px; color:white; background:var(--navy); border:0; border-radius:9px; font-weight:bold; }
-        footer { padding:20px 8px 12px; color:#999; opacity:.75; text-align:center; font-size:11px; }
-        @media(max-width:760px){ header{align-items:flex-start;padding:11px 16px}.header-actions{flex-wrap:wrap;justify-content:flex-end}.brand h1{font-size:19px}.primary-nav{padding:0 12px}main{padding:12px}.context-bar{align-items:flex-start;flex-direction:column}.cluster-control{width:100%;justify-content:space-between}.cluster-control select{min-width:0;max-width:65%}.chat-workspace{height:calc(100dvh - 205px);min-height:500px}.conversation{padding:20px 14px}.message.user{max-width:88%}.assistant-body{padding-left:0}.assistant-identity{margin-bottom:10px}details.evidence{margin-left:0}.composer-shell{padding:9px}.context-note{display:none} }
+        .primary-nav a:hover { color:#fff; border-color:var(--orange); }
+        main { max-width:760px; margin:48px auto; padding:24px; text-align:center; color:#59636e; }
+        @media(max-width:620px){.portal-header,.primary-nav{padding-left:14px;padding-right:14px}}
     </style>
 </head>
 <body>
-<header>
-    <div class="brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>KKB ShiftAI</h1><small>OpenShift Operasyon Asistanı</small></div></div>
-    <div class="header-actions"><span class="readonly-badge" aria-label="Salt okunur çalışma modu">● Read-only</span><button id="new-chat" class="new-chat" type="button">Yeni Sohbet</button></div>
-</header>
+<header class="portal-header"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>OpenShift Clusters Monitoring Platform</h1><small>Multi Cluster OpenShift Operations &amp; Monitoring Platform</small></div></header>
 {% include "_navigation.html" %}
-<main>
-    <div class="context-bar">
-        <label class="cluster-control" for="ai-cluster"><span>Cluster</span><select id="ai-cluster" disabled><option>Yükleniyor…</option></select></label>
-        <span class="context-note">Yanıtlar yalnız seçili cluster için başarılı read-only MCP kanıtlarına dayanır.</span>
-    </div>
-    <section class="chat-workspace" aria-label="KKB ShiftAI sohbet alanı">
-        <section id="conversation" class="conversation" aria-live="polite">
-            <div id="empty-state" class="empty-state">
-                <div class="empty-content"><div class="empty-mark" aria-hidden="true">AI</div><h2>KKB ShiftAI</h2><p>OpenShift cluster'ınız hakkında ne öğrenmek istiyorsunuz?</p>
-                    <div class="suggestions" aria-label="Örnek sorular">
-                    {% for question in ["Cluster sağlık durumunu kontrol et", "Degraded ClusterOperator var mı?", "Node CPU ve memory kullanımını incele", "Namespace pod durumlarını kontrol et"] %}<button class="suggestion" type="button" data-question="{{ question }}">{{ question }}</button>{% endfor %}
-                    </div>
-                </div>
-            </div>
-        </section>
-        <div class="composer-shell"><form id="ai-form" class="composer">
-            <label for="ai-message" class="sr-only" hidden>OpenShift sorunuzu yazın</label>
-            <textarea id="ai-message" required rows="1" placeholder="ShiftAI'ya OpenShift hakkında sorunuzu yazın..."></textarea>
-            <div class="composer-actions"><span><span id="ai-status" class="status" role="status" aria-live="polite"></span><span class="composer-help"> Enter gönderir · Shift+Enter yeni satır</span></span><button id="ai-send" class="send" type="submit" disabled aria-label="Mesajı gönder">Gönder</button></div>
-        </form></div>
-    </section>
-</main>
-<footer>Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.</footer>
-<script>
-const initialCluster = {{ selected_cluster|tojson }};
-const form = document.getElementById("ai-form"), clusterSelect = document.getElementById("ai-cluster"), messageInput = document.getElementById("ai-message"), sendButton = document.getElementById("ai-send"), statusText = document.getElementById("ai-status"), conversation = document.getElementById("conversation"), newChatButton = document.getElementById("new-chat"), suggestionButtons = [...document.querySelectorAll(".suggestion")];
-let requestPending = false;
-const AI_MESSAGES = Object.freeze({request:"İstek ShiftAI tarafından işlenemedi.",unavailable:"ShiftAI şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.",timeout:"ShiftAI yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin.",generic:"ShiftAI isteği tamamlanamadı."});
-class AIUIError { constructor(kind) { this.kind=kind; } }
-const errorKindForStatus=(status)=>status===400?"request":status===502||status===503?"unavailable":status===504?"timeout":"generic";
-const parseJsonResponse=async(response)=>{const type=(response.headers.get("Content-Type")||"").toLowerCase();if(!type.startsWith("application/json"))return null;try{return await response.json();}catch(_error){return null;}};
-const fetchKoccJson=async(url,options=undefined)=>{let response;try{response=await fetch(url,options);}catch(error){throw new AIUIError(error&&error.name==="AbortError"?"timeout":"unavailable");}const data=await parseJsonResponse(response);if(!response.ok)throw new AIUIError(errorKindForStatus(response.status));if(data===null)throw new AIUIError("generic");return data;};
-const safeErrorMessage=(error)=>error instanceof AIUIError&&AI_MESSAGES[error.kind]?AI_MESSAGES[error.kind]:AI_MESSAGES.unavailable;
-const addText=(parent,tag,className,text)=>{const element=document.createElement(tag);element.className=className;element.textContent=text;parent.appendChild(element);return element;};
-
-const appendInline=(parent,text)=>{
-    const token=/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g;let cursor=0;
-    for(const match of text.matchAll(token)){parent.appendChild(document.createTextNode(text.slice(cursor,match.index)));const value=match[0];
-        if(value.startsWith("`"))addText(parent,"code","",value.slice(1,-1));
-        else if(value.startsWith("**"))addText(parent,"strong","",value.slice(2,-2));
-        else if(value.startsWith("*"))addText(parent,"em","",value.slice(1,-1));
-        else {const parts=value.match(/^\[([^\]]+)\]\(([^)]+)\)$/),url=parts&&parts[2];if(parts&&/^https?:\/\//i.test(url)){const link=addText(parent,"a","",parts[1]);link.href=url;link.target="_blank";link.rel="noopener noreferrer";}else parent.appendChild(document.createTextNode(value));}
-        cursor=match.index+value.length;
-    }parent.appendChild(document.createTextNode(text.slice(cursor)));
-};
-const markdownCell=(value)=>value.trim().replace(/^\||\|$/g,"").split("|").map((item)=>item.trim());
-const renderMarkdown=(root,markdown)=>{
-    if(typeof markdown!=="string"||!markdown.trim())throw new Error("empty answer");const lines=markdown.replace(/\r\n?/g,"\n").split("\n");let index=0;
-    const paragraph=(parts)=>{const p=document.createElement("p");parts.forEach((part,i)=>{if(i)p.appendChild(document.createElement("br"));appendInline(p,part);});root.appendChild(p);};
-    while(index<lines.length){const line=lines[index];if(!line.trim()){index+=1;continue;}
-        if(line.startsWith("```")){const language=line.slice(3).trim(),content=[];index+=1;while(index<lines.length&&!lines[index].startsWith("```")){content.push(lines[index]);index+=1;}index+=index<lines.length?1:0;const pre=document.createElement("pre");pre.className="code-block";const code=addText(pre,"code","",content.join("\n"));if(language)code.dataset.language=language;root.appendChild(pre);continue;}
-        const heading=line.match(/^(#{1,3})\s+(.+)$/);if(heading){const h=document.createElement(`h${heading[1].length}`);appendInline(h,heading[2]);root.appendChild(h);index+=1;continue;}
-        if(line.includes("|")&&index+1<lines.length&&/^\s*\|?\s*:?-{3,}/.test(lines[index+1])){const headers=markdownCell(line),rows=[];index+=2;while(index<lines.length&&lines[index].includes("|")&&lines[index].trim()){rows.push(markdownCell(lines[index]));index+=1;}const wrapper=document.createElement("div"),table=document.createElement("table"),thead=document.createElement("thead"),tr=document.createElement("tr");wrapper.className="table-scroll";headers.forEach((value)=>appendInline(addText(tr,"th","",""),value));thead.appendChild(tr);table.appendChild(thead);const tbody=document.createElement("tbody");rows.forEach((row)=>{const rowElement=document.createElement("tr");headers.forEach((_header,column)=>appendInline(addText(rowElement,"td","",""),row[column]||""));tbody.appendChild(rowElement);});table.appendChild(tbody);wrapper.appendChild(table);root.appendChild(wrapper);continue;}
-        const listMatch=line.match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);if(listMatch){const tag=listMatch[2]?"ol":"ul",list=document.createElement(tag);while(index<lines.length){const item=lines[index].match(/^\s*(?:([-*+])|(\d+)\.)\s+(.+)$/);if(!item||(item[2]?"ol":"ul")!==tag)break;appendInline(addText(list,"li","",""),item[3]);index+=1;}root.appendChild(list);continue;}
-        const parts=[line];index+=1;while(index<lines.length&&lines[index].trim()&&!/^(#{1,3})\s|^```|^\s*(?:[-*+] |\d+\. )/.test(lines[index])&&!(lines[index].includes("|")&&index+1<lines.length&&/^\s*\|?\s*:?-{3,}/.test(lines[index+1]))){parts.push(lines[index]);index+=1;}paragraph(parts);
-    }
-    if(!root.childNodes.length)throw new Error("renderer produced no content");
-};
-const renderAnswer=(root,text)=>{try{renderMarkdown(root,text);}catch(_error){root.replaceChildren();root.textContent=typeof text==="string"&&text?text:AI_MESSAGES.generic;}};
-const assistantShell=(loading=false)=>{const article=document.createElement("article");article.className=`message assistant${loading?" loading-message":""}`;const identity=document.createElement("div");identity.className="assistant-identity";addText(identity,"span","assistant-avatar","AI");addText(identity,"span","","ShiftAI");article.appendChild(identity);const body=document.createElement("div");body.className="assistant-body";article.appendChild(body);return {article,body};};
-const evidenceLabels=Object.freeze({resource_count:"Resource count",degraded_true_count:"Degraded=True",available_false_count:"Available=False",progressing_true_count:"Progressing=True"});
-const appendEvidence=(article,data)=>{if(!data||(data.evidence.length===0&&!data.tool_calls.some((item)=>item.status!=="success")))return;const details=document.createElement("details");details.className="evidence";addText(details,"summary","","Kullanılan cluster verileri");const list=document.createElement("ul");list.className="tool-list";data.evidence.forEach((item)=>{const li=addText(list,"li","",`✓ ${item.tool} · Başarılı`);if(item.facts&&typeof item.facts==="object"){const facts=document.createElement("div");facts.className="fact-list";Object.entries(item.facts).forEach(([key,value])=>{if(Object.hasOwn(evidenceLabels,key)&&Number.isInteger(value))addText(facts,"span","fact",`${evidenceLabels[key]}: ${value}`);});li.appendChild(facts);}});data.tool_calls.filter((item)=>item.status!=="success").forEach((item)=>addText(list,"li","failed",`⚠ ${item.name} · Başarısız`));details.appendChild(list);article.appendChild(details);};
-const shouldFollowBottom=()=>conversation.scrollHeight-conversation.scrollTop-conversation.clientHeight<80;
-const scrollIfNeeded=(nearBottom)=>{if(nearBottom)requestAnimationFrame(()=>conversation.scrollTo({top:conversation.scrollHeight,behavior:"smooth"}));};
-const removeEmptyState=()=>document.getElementById("empty-state")?.remove();
-const appendUser=(text)=>{const near=shouldFollowBottom();removeEmptyState();const article=document.createElement("article");article.className="message user";addText(article,"p","",text);conversation.appendChild(article);scrollIfNeeded(near);};
-const appendLoading=()=>{const near=shouldFollowBottom(),shell=assistantShell(true);const label=addText(shell.body,"span","typing-dots","ShiftAI düşünüyor");label.setAttribute("aria-label","ShiftAI düşünüyor");conversation.appendChild(shell.article);scrollIfNeeded(near);return shell.article;};
-const resolveAssistant=(article,text,data)=>{const near=shouldFollowBottom();article.className="message assistant";const body=article.querySelector(".assistant-body");body.replaceChildren();renderAnswer(body,text);appendEvidence(article,data);scrollIfNeeded(near);};
-const resolveError=(article,message)=>{article.className="message assistant error";const body=article.querySelector(".assistant-body");body.replaceChildren();addText(body,"p","",message);};
-const setPending=(pending)=>{requestPending=pending;sendButton.disabled=pending||!clusterSelect.value;clusterSelect.disabled=pending;messageInput.disabled=pending;newChatButton.disabled=pending;suggestionButtons.forEach((button)=>{button.disabled=pending;});};
-const showEmptyState=()=>{conversation.replaceChildren();const empty=document.createElement("div");empty.id="empty-state";empty.className="empty-state";const content=document.createElement("div");content.className="empty-content";addText(content,"div","empty-mark","AI").setAttribute("aria-hidden","true");addText(content,"h2","","KKB ShiftAI");addText(content,"p","","OpenShift cluster'ınız hakkında ne öğrenmek istiyorsunuz?");const suggestions=document.createElement("div");suggestions.className="suggestions";suggestions.setAttribute("aria-label","Örnek sorular");["Cluster sağlık durumunu kontrol et","Degraded ClusterOperator var mı?","Node CPU ve memory kullanımını incele","Namespace pod durumlarını kontrol et"].forEach((question)=>{const button=addText(suggestions,"button","suggestion",question);button.type="button";button.dataset.question=question;button.addEventListener("click",()=>fillSuggestion(question));});content.appendChild(suggestions);empty.appendChild(content);conversation.appendChild(empty);};
-const clearConversation=(notice="")=>{showEmptyState();statusText.classList.remove("error");statusText.textContent=notice;messageInput.value="";messageInput.focus();};
-const fillSuggestion=(question)=>{if(!requestPending){messageInput.value=question;messageInput.focus();resizeComposer();}};
-const resizeComposer=()=>{messageInput.style.height="auto";messageInput.style.height=`${Math.min(messageInput.scrollHeight,150)}px`;};
-const loadClusters=async()=>{try{const data=await fetchKoccJson("/api/ai/clusters");if(!Array.isArray(data.clusters)||!data.clusters.length)throw new AIUIError("unavailable");clusterSelect.replaceChildren();data.clusters.forEach((cluster)=>clusterSelect.add(new Option(cluster.name,cluster.id)));if(data.clusters.some((cluster)=>cluster.id===initialCluster))clusterSelect.value=initialCluster;clusterSelect.disabled=false;sendButton.disabled=false;}catch(_error){clusterSelect.replaceChildren(new Option("ShiftAI kullanılamıyor",""));statusText.textContent=AI_MESSAGES.unavailable;statusText.classList.add("error");}};
-form.addEventListener("submit",async(event)=>{event.preventDefault();if(requestPending)return;const message=messageInput.value;if(!message.trim()||!clusterSelect.value)return;appendUser(message);const placeholder=appendLoading();setPending(true);statusText.textContent="";statusText.classList.remove("error");try{const data=await fetchKoccJson("/api/ai/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cluster:clusterSelect.value,message})});if(typeof data.answer!=="string"||!data.answer.trim()||!Array.isArray(data.tool_calls)||!Array.isArray(data.evidence))throw new AIUIError("generic");resolveAssistant(placeholder,data.answer,data);messageInput.value="";resizeComposer();}catch(error){const safe=safeErrorMessage(error);resolveError(placeholder,safe);statusText.textContent=safe;statusText.classList.add("error");}finally{setPending(false);messageInput.focus();}});
-messageInput.addEventListener("input",resizeComposer);messageInput.addEventListener("keydown",(event)=>{if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();if(!requestPending)form.requestSubmit();}});newChatButton.addEventListener("click",()=>{if(!requestPending)clearConversation();});clusterSelect.addEventListener("change",()=>{if(!requestPending)clearConversation("Cluster değiştirildi. Yeni sohbet başlatıldı.");});suggestionButtons.forEach((button)=>button.addEventListener("click",()=>fillSuggestion(button.dataset.question)));loadClusters();
-</script>
+<main><p>KKB ShiftLight AI sağdaki global asistan panelinde açıldı. Portal sayfaları arasında gezinirken konuşmanız bu browser session boyunca korunur.</p></main>
 </body>
 </html>

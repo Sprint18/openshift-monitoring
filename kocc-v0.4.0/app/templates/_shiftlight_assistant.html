@@ -1,0 +1,32 @@
+<link rel="icon" href="/static/kkb-turuncu-lacivert-logo.png">
+<link rel="stylesheet" href="/static/shiftlight_assistant.css">
+<div id="shiftlight-root" data-initial-cluster="{{ selected_cluster }}" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
+    <div id="shiftlight-nudge" class="shiftlight-nudge" hidden role="status">
+        <button id="shiftlight-nudge-close" type="button" aria-label="ShiftLight karşılama mesajını kapat">×</button>
+        <strong>Merhaba 👋 Ben KKB ShiftLight AI.</strong>
+        <span>OpenShift desteği için buradayım.</span>
+    </div>
+    <button id="shiftlight-launcher" class="shiftlight-launcher" type="button" aria-label="KKB ShiftLight AI asistanını aç" aria-controls="shiftlight-drawer" aria-expanded="false">
+        <span class="shiftlight-launcher-mark" aria-hidden="true">AI</span><span>KKB ShiftLight AI</span>
+    </button>
+    <div id="shiftlight-overlay" class="shiftlight-overlay" hidden></div>
+    <aside id="shiftlight-drawer" class="shiftlight-drawer" aria-label="KKB ShiftLight AI" aria-hidden="true">
+        <header class="shiftlight-header">
+            <div class="shiftlight-brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><strong>KKB ShiftLight AI</strong><small>OpenShift Operasyon Asistanı</small></div></div>
+            <div class="shiftlight-header-actions"><span class="shiftlight-readonly">Read-only</span><button id="shiftlight-close" type="button" aria-label="Asistanı kapat">×</button></div>
+        </header>
+        <div class="shiftlight-toolbar">
+            <label for="shiftlight-cluster">Cluster<select id="shiftlight-cluster" disabled><option>Yükleniyor…</option></select></label>
+            <div><button id="shiftlight-previous" type="button" hidden>Önceki Sohbet</button><button id="shiftlight-new" type="button">Yeni Sohbet</button></div>
+        </div>
+        <div id="shiftlight-history-note" class="shiftlight-history-note" hidden></div>
+        <section id="shiftlight-conversation" class="shiftlight-conversation" aria-live="polite"></section>
+        <form id="shiftlight-form" class="shiftlight-composer">
+            <label for="shiftlight-message" class="shiftlight-sr-only">OpenShift sorunuzu yazın</label>
+            <textarea id="shiftlight-message" rows="1" required placeholder="ShiftLight AI'ya OpenShift hakkında sorunuzu yazın..."></textarea>
+            <div><span id="shiftlight-status" role="status" aria-live="polite"></span><button id="shiftlight-send" type="submit" disabled aria-label="Mesajı gönder">Gönder</button></div>
+            <small>Enter gönderir · Shift+Enter yeni satır</small>
+        </form>
+    </aside>
+</div>
+<script src="/static/shiftlight_assistant.js" defer></script>

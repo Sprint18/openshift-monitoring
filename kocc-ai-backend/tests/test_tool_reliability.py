@@ -111,3 +111,12 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
 def test_prompt_forbids_unsupported_rbac_inference() -> None:
     prompt = SYSTEM_PROMPT.lower()
     assert "rbac" in prompt or "permission" in prompt
+
+
+def test_prompt_requires_exact_facts_and_forbids_unsupported_severity() -> None:
+    prompt = SYSTEM_PROMPT.lower()
+    assert "progressing_true_count" in prompt
+    assert "repeat each available deterministic count exactly" in prompt
+    assert "temporary" in prompt
+    assert "non-critical" in prompt
+    assert "unless direct evidence explicitly supports" in prompt

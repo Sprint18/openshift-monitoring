@@ -10,6 +10,7 @@ from typing import Any
 
 
 logger = logging.getLogger("kocc.ai")
+CHAT_TRANSPORT_RETRY_DELAY_SECONDS = 0.2
 
 
 class AIBackendError(RuntimeError):
@@ -30,57 +31,86 @@ class AIBackendClient:
             raise AIBackendError("unavailable")
         started = time.perf_counter()
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        request = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=data,
-            method=method,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.timeout_seconds
-            ) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            if not isinstance(result, dict):
-                raise AIBackendError("invalid_response")
-            logger.info(
-                "ai_backend_request path=%s status=success duration_ms=%s",
-                path, round((time.perf_counter() - started) * 1000),
+        retry_allowed = method == "POST" and path == "/api/v1/chat"
+        for attempt in range(1, 3 if retry_allowed else 2):
+            request = urllib.request.Request(
+                f"{self.base_url}{path}", data=data, method=method,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
             )
-            return result
-        except urllib.error.HTTPError as exc:
-            logger.warning(
-                "ai_backend_request path=%s status=http_error http_status=%s duration_ms=%s",
-                path, exc.code, round((time.perf_counter() - started) * 1000),
-            )
-            raise AIBackendError(f"http_{exc.code}") from None
-        except AIBackendError:
-            raise
-        except (TimeoutError, socket.timeout) as exc:
-            logger.warning(
-                "ai_backend_request path=%s status=timeout exception_type=%s duration_ms=%s",
-                path, type(exc).__name__,
-                round((time.perf_counter() - started) * 1000),
-            )
-            raise AIBackendError("timeout") from None
-        except urllib.error.URLError as exc:
-            reason = getattr(exc, "reason", None)
-            code = "timeout" if isinstance(
-                reason, (TimeoutError, socket.timeout)
-            ) else "unavailable"
-            logger.warning(
-                "ai_backend_request path=%s status=%s exception_type=%s duration_ms=%s",
-                path, code, type(exc).__name__,
-                round((time.perf_counter() - started) * 1000),
-            )
-            raise AIBackendError(code) from None
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
-            logger.warning(
-                "ai_backend_request path=%s status=invalid_response exception_type=%s duration_ms=%s",
-                path, type(exc).__name__,
-                round((time.perf_counter() - started) * 1000),
-            )
-            raise AIBackendError("invalid_response") from None
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.timeout_seconds
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                if not isinstance(result, dict):
+                    raise AIBackendError("invalid_response")
+                logger.info(
+                    "ai_backend_request path=%s status=success duration_ms=%s",
+                    path, round((time.perf_counter() - started) * 1000),
+                )
+                return result
+            except urllib.error.HTTPError as exc:
+                logger.warning(
+                    "ai_backend_request path=%s status=http_error http_status=%s duration_ms=%s",
+                    path, exc.code, round((time.perf_counter() - started) * 1000),
+                )
+                raise AIBackendError(f"http_{exc.code}") from None
+            except AIBackendError:
+                raise
+            except (TimeoutError, socket.timeout) as exc:
+                logger.warning(
+                    "ai_backend_request path=%s status=timeout exception_type=%s duration_ms=%s",
+                    path, type(exc).__name__,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                raise AIBackendError("timeout") from None
+            except urllib.error.URLError as exc:
+                reason = getattr(exc, "reason", None)
+                if isinstance(reason, (TimeoutError, socket.timeout)):
+                    logger.warning(
+                        "ai_backend_request path=%s status=timeout exception_type=%s duration_ms=%s",
+                        path, type(exc).__name__,
+                        round((time.perf_counter() - started) * 1000),
+                    )
+                    raise AIBackendError("timeout") from None
+                if retry_allowed and attempt == 1:
+                    logger.warning(
+                        "ai_backend_retry path=%s attempt=2 reason=%s",
+                        path, type(exc).__name__,
+                    )
+                    time.sleep(CHAT_TRANSPORT_RETRY_DELAY_SECONDS)
+                    continue
+                logger.warning(
+                    "ai_backend_request path=%s status=unavailable exception_type=%s duration_ms=%s",
+                    path, type(exc).__name__,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                raise AIBackendError("unavailable") from None
+            except (ConnectionRefusedError, ConnectionResetError, socket.gaierror) as exc:
+                if retry_allowed and attempt == 1:
+                    logger.warning(
+                        "ai_backend_retry path=%s attempt=2 reason=%s",
+                        path, type(exc).__name__,
+                    )
+                    time.sleep(CHAT_TRANSPORT_RETRY_DELAY_SECONDS)
+                    continue
+                logger.warning(
+                    "ai_backend_request path=%s status=unavailable exception_type=%s duration_ms=%s",
+                    path, type(exc).__name__,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                raise AIBackendError("unavailable") from None
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+                logger.warning(
+                    "ai_backend_request path=%s status=invalid_response exception_type=%s duration_ms=%s",
+                    path, type(exc).__name__,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                raise AIBackendError("invalid_response") from None
+        raise AIBackendError("unavailable")
 
     def clusters(self) -> list[dict[str, Any]]:
         response = self._request("GET", "/api/v1/clusters")

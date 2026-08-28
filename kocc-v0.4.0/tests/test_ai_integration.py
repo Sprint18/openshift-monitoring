@@ -33,12 +33,12 @@ class FakeResponse:
 def test_ai_assistant_page_renders_with_shared_navigation() -> None:
     response = client.get("/ai-assistant?cluster=kkbtest")
     assert response.status_code == 200
-    assert "KKB ShiftAI" in response.text
+    assert "KKB ShiftLight AI" in response.text
     assert "OpenShift Operasyon Asistanı" in response.text
     assert "/static/kkb-turuncu-lacivert-logo.png" in response.text
     assert "Read-only" in response.text
     assert 'aria-label="Dashboard navigation"' in response.text
-    assert 'aria-current="page"' in response.text
+    assert 'data-open-on-load="true"' in response.text
 
 
 @patch("app.main.ai_backend_client")
@@ -160,6 +160,8 @@ def test_ai_client_preserves_only_safe_numeric_evidence_facts(urlopen: Mock) -> 
             "facts": {
                 "resource_count": 34,
                 "degraded_true_count": 0,
+                "available_false_count": 0,
+                "progressing_true_count": 1,
                 "raw_resources": ["must-not-pass"],
                 "apiVersion": "must-not-pass",
             },
@@ -168,105 +170,164 @@ def test_ai_client_preserves_only_safe_numeric_evidence_facts(urlopen: Mock) -> 
     result = AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
     assert result["evidence"] == [{
         "tool": "resources_list", "status": "success",
-        "facts": {"resource_count": 34, "degraded_true_count": 0},
+        "facts": {
+            "resource_count": 34,
+            "degraded_true_count": 0,
+            "available_false_count": 0,
+            "progressing_true_count": 1,
+        },
     }]
 
 
+def safe_chat_response() -> dict:
+    return {
+        "answer": "Safe answer",
+        "tool_calls": [],
+        "evidence": [],
+    }
+
+
+@patch("app.ai_client.time.sleep")
+@patch("app.ai_client.urllib.request.urlopen")
+def test_chat_retries_one_pre_response_url_error_then_succeeds(
+    urlopen: Mock, sleep: Mock
+) -> None:
+    urlopen.side_effect = [
+        urllib.error.URLError(ConnectionRefusedError("refused")),
+        FakeResponse(safe_chat_response()),
+    ]
+    result = AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
+    assert result["answer"] == "Safe answer"
+    assert urlopen.call_count == 2
+    sleep.assert_called_once_with(0.2)
+
+
+@patch("app.ai_client.time.sleep")
+@patch("app.ai_client.urllib.request.urlopen")
+def test_chat_transport_retry_is_bounded_to_one(
+    urlopen: Mock, sleep: Mock
+) -> None:
+    urlopen.side_effect = urllib.error.URLError(ConnectionResetError("reset"))
+    with pytest.raises(AIBackendError, match="unavailable"):
+        AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
+    assert urlopen.call_count == 2
+    assert sleep.call_count == 1
+
+
+@pytest.mark.parametrize("status", [400, 503])
+@patch("app.ai_client.time.sleep")
+@patch("app.ai_client.urllib.request.urlopen")
+def test_chat_http_errors_are_not_retried(
+    urlopen: Mock, sleep: Mock, status: int
+) -> None:
+    urlopen.side_effect = urllib.error.HTTPError(
+        "http://ai.internal/api/v1/chat", status, "error", {}, None
+    )
+    with pytest.raises(AIBackendError, match=f"http_{status}"):
+        AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
+    assert urlopen.call_count == 1
+    sleep.assert_not_called()
+
+
+@patch("app.ai_client.time.sleep")
+@patch("app.ai_client.urllib.request.urlopen")
+def test_chat_timeout_is_not_retried(urlopen: Mock, sleep: Mock) -> None:
+    urlopen.side_effect = socket.timeout("slow")
+    with pytest.raises(AIBackendError, match="timeout"):
+        AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
+    assert urlopen.call_count == 1
+    sleep.assert_not_called()
+
+
+def shiftlight_source() -> str:
+    return (Path(__file__).parents[1] / "app/static/shiftlight_assistant.js").read_text()
+
+
+def shiftlight_partial() -> str:
+    return (Path(__file__).parents[1] / "app/templates/_shiftlight_assistant.html").read_text()
+
+
 def test_ai_template_uses_safe_text_rendering_and_only_kocc_endpoints() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
+    source = shiftlight_source()
     assert "innerHTML" not in source
     assert "textContent" in source
-    assert 'fetchKoccJson("/api/ai/clusters")' in source
-    assert 'fetchKoccJson("/api/ai/chat"' in source
+    assert 'fetchJson("/api/ai/clusters")' in source
+    assert 'fetchJson("/api/ai/chat"' in source
     assert "svc.cluster.local" not in source
     assert "data.evidence" in source
     assert "item.tool" in source
 
 
 def test_ai_template_checks_status_and_content_type_before_json() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
+    source = shiftlight_source()
     assert 'response.headers.get("Content-Type")' in source
     assert 'type.startsWith("application/json")' in source
-    assert "if(!response.ok)" in source
-    assert "return await response.json()" in source
-    assert "return null" in source
+    assert "if (!response.ok)" in source
+    assert "data = await response.json()" in source
+    assert "data = null" in source
     assert "response.text()" not in source
     assert "error.message" not in source
 
 
 def test_ai_template_maps_http_and_network_errors_to_safe_messages() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
-    assert 'status===400?"request"' in source
-    assert 'status===502||status===503?"unavailable"' in source
-    assert 'status===504?"timeout"' in source
-    assert "İstek ShiftAI tarafından işlenemedi." in source
-    assert "ShiftAI şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin." in source
-    assert "ShiftAI yanıtı zaman aşımına uğradı. Lütfen tekrar deneyin." in source
-    assert "ShiftAI isteği tamamlanamadı." in source
-    assert 'error.name==="AbortError"?"timeout":"unavailable"' in source
+    source = shiftlight_source()
+    assert 'status === 400 ? "request"' in source
+    assert 'status === 502 || status === 503 ? "unavailable"' in source
+    assert 'status === 504 ? "timeout"' in source
+    assert "İstek ShiftLight AI tarafından işlenemedi." in source
+    assert "ShiftLight AI şu anda kullanılamıyor." in source
+    assert "ShiftLight AI yanıtı zaman aşımına uğradı." in source
+    assert 'error.name === "AbortError" ? "timeout" : "unavailable"' in source
     assert "Unexpected token" not in source
     assert "Gateway Timeout" not in source
     assert "<html>" not in source
 
 
 def test_ai_template_preserves_loading_deduplication_and_evidence() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
-    assert "if(requestPending)return" in source
+    source = shiftlight_source()
+    assert "if (requestPending" in source
     assert "setPending(true)" in source
-    assert "sendButton.disabled=pending" in source
-    assert "data.evidence.forEach" in source
-    assert 'item.status!=="success"' in source
+    assert "sendButton.disabled = pending" in source
+    assert "safeEvidence(data.evidence)" in source
+    assert 'item.status !== "success"' in source
 
 
 def test_ai_template_is_a_scrollable_chat_workspace() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
-    assert 'class="chat-workspace"' in source
-    assert ".chat-workspace {" in source
-    assert "grid-template-rows:minmax(0,1fr) auto" in source
-    assert "overflow-y:auto" in source
+    partial = shiftlight_partial()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    source = shiftlight_source()
+    assert 'class="shiftlight-drawer"' in partial
+    assert ".shiftlight-drawer" in css
+    assert "grid-template-rows: auto auto auto minmax(0,1fr) auto" in css
+    assert "overflow-y:auto" in css
     assert "conversation.scrollHeight" in source
     assert "conversation.scrollTop" in source
-    assert "conversation.clientHeight<80" in source
-    assert "if(nearBottom)" in source
+    assert "conversation.scrollHeight" in source
 
 
 def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
-    assert '<form id="ai-form" class="composer">' in source
-    assert '<textarea id="ai-message"' in source
-    assert 'event.key==="Enter"&&!event.shiftKey' in source
+    partial, source = shiftlight_partial(), shiftlight_source()
+    assert '<form id="shiftlight-form" class="shiftlight-composer">' in partial
+    assert '<textarea id="shiftlight-message"' in partial
+    assert 'event.key === "Enter" && !event.shiftKey' in source
     assert "event.preventDefault();" in source
     assert "form.requestSubmit();" in source
-    assert "!message.trim()" in source
+    assert "!text.trim()" in source
 
 
 def test_ai_template_new_chat_and_cluster_change_isolate_history() -> None:
-    source = (
-        Path(__file__).parents[1] / "app/templates/ai_assistant.html"
-    ).read_text()
-    assert 'id="new-chat"' in source
+    partial, source = shiftlight_partial(), shiftlight_source()
+    assert 'id="shiftlight-new"' in partial
     assert "conversation.replaceChildren()" in source
-    assert 'newChatButton.addEventListener("click"' in source
+    assert 'newButton.addEventListener("click"' in source
     assert 'clusterSelect.addEventListener("change"' in source
-    assert "Cluster değiştirildi. Yeni sohbet başlatıldı." in source
-    assert "newChatButton.disabled=pending" in source
-    assert "suggestionButtons.forEach" in source
+    assert "startNew(selected)" in source
+    assert "newButton.disabled = pending" in source
+    assert "suggestions.forEach" in source
 
 
 def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
-    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
+    source = shiftlight_source()
     assert "renderMarkdown" in source
     assert "appendInline" in source
     assert 'document.createElement("table")' in source
@@ -275,7 +336,7 @@ def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
     assert 'document.createElement("strong")' not in source  # created through audited helper
     assert "javascript:" not in source
     assert "^https?:\\/\\/" in source
-    assert "root.textContent=" in source
+    assert "target.textContent =" in source
     assert "element.innerHTML" not in source
     assert "insertAdjacentHTML" not in source
     assert "document.write" not in source
@@ -283,21 +344,88 @@ def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
 
 
 def test_ai_template_loading_and_http_200_blank_regression() -> None:
-    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
-    assert "ShiftAI düşünüyor" in source
-    assert "appendLoading()" in source
-    assert "resolveAssistant(placeholder,data.answer,data)" in source
-    assert "resolveError(placeholder,safe)" in source
+    source = shiftlight_source()
+    assert "ShiftLight düşünüyor" in source
+    assert "addCurrentMessage({role: \"assistant\"" in source
     assert '!data.answer.trim()' in source
     assert "renderer produced no content" in source
 
 
 def test_ai_template_brand_context_evidence_and_responsive_hooks() -> None:
-    source = (Path(__file__).parents[1] / "app/templates/ai_assistant.html").read_text()
-    assert 'id="ai-cluster"' in source
-    assert 'id="new-chat"' in source
+    partial, source = shiftlight_partial(), shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert 'id="shiftlight-cluster"' in partial
+    assert 'id="shiftlight-new"' in partial
     assert "Kullanılan cluster verileri" in source
-    assert "details.evidence" in source
-    assert "@media(max-width:760px)" in source
-    assert "composer-shell" in source
-    assert "empty-state" in source
+    assert "shiftlight-evidence" in source
+    assert "@media (max-width: 620px)" in css
+    assert "shiftlight-composer" in partial
+    assert "shiftlight-empty" in source
+
+
+@pytest.mark.parametrize("path", ["/", "/workloads", "/health-overview"])
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_global_shiftlight_drawer_is_shared_across_portal_pages(
+    _new_client: Mock, collector_class: Mock, path: str
+) -> None:
+    from tests.test_main import dashboard_payload
+
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    response = client.get(f"{path}?cluster=kkbtest")
+    assert response.status_code == 200
+    assert response.text.count('id="shiftlight-root"') == 1
+    assert 'id="shiftlight-launcher"' in response.text
+    assert 'id="shiftlight-drawer"' in response.text
+
+
+def test_shiftlight_nav_is_deemphasized_and_legacy_route_opens_drawer() -> None:
+    navigation = (Path(__file__).parents[1] / "app/templates/_navigation.html").read_text()
+    response = client.get("/ai-assistant?cluster=kkbtest")
+    assert '"AI Assistant"' not in navigation
+    assert 'data-open-on-load="true"' in response.text
+    assert "/ai-assistant" not in navigation
+
+
+def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert "Merhaba 👋 Ben KKB ShiftLight AI." in partial
+    assert 'aria-controls="shiftlight-drawer"' in partial
+    assert "sessionStorage.getItem(NUDGE_KEY)" in source
+    assert "window.setTimeout(dismissNudge, 6500)" in source
+    assert "prefers-reduced-motion: reduce" in css
+    assert "https://" not in partial and "cdn" not in partial.lower()
+
+
+def test_shiftlight_session_history_is_minimal_and_cluster_isolated() -> None:
+    source = shiftlight_source()
+    assert 'const SESSION_KEY = "kocc.shiftlight.conversations.v1"' in source
+    assert "sessionStorage.setItem(SESSION_KEY" in source
+    assert "localStorage" not in source
+    assert "current: emptyConversation()" in source
+    assert "previous: null" in source
+    assert "store.previous = safeConversation(store.current)" in source
+    assert "store.current = emptyConversation(cluster)" in source
+    assert "selected !== store.current.cluster" in source
+    assert "raw MCP" not in source
+    assert "kubeconfig" not in source
+    assert "api-token" not in source
+    assert "tool_calls" not in source
+
+
+def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:
+    source = shiftlight_source()
+    for key in (
+        "resource_count", "degraded_true_count", "available_false_count",
+        "progressing_true_count",
+    ):
+        assert key in source
+    assert 'resource_count: "Toplam kaynak"' in source
+    assert 'progressing_true_count: "Progressing"' in source
+
+
+def test_favicon_uses_existing_kbb_asset() -> None:
+    response = client.get("/favicon.ico")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
