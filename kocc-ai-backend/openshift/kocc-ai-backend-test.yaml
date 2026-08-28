@@ -69,6 +69,26 @@ spec:
       securityContext:
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: combine-ca-bundles
+          image: image-registry.openshift-image-registry.svc:5000/test-openshift-ai-assistant/kocc-ai-backend:phase1
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - cat /etc/pki/tls/certs/ca-bundle.crt /kkb-ca/ca-bundle.crt > /combined-ca/ca-bundle.crt
+          volumeMounts:
+            - name: kkb-ca-bundle
+              mountPath: /kkb-ca
+              readOnly: true
+            - name: combined-ca
+              mountPath: /combined-ca
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: kocc-ai-backend
           image: image-registry.openshift-image-registry.svc:5000/test-openshift-ai-assistant/kocc-ai-backend:phase1
@@ -85,6 +105,12 @@ spec:
                 secretKeyRef:
                   name: kocc-ai-llm
                   key: api-token
+            - name: SSL_CERT_FILE
+              value: /combined-ca/ca-bundle.crt
+          volumeMounts:
+            - name: combined-ca
+              mountPath: /combined-ca
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /ready
@@ -114,6 +140,15 @@ spec:
             capabilities:
               drop:
                 - ALL
+      volumes:
+        - name: kkb-ca-bundle
+          configMap:
+            name: kkb-ca-bundle
+            items:
+              - key: ca-bundle.crt
+                path: ca-bundle.crt
+        - name: combined-ca
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
