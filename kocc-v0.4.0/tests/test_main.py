@@ -1068,8 +1068,8 @@ def test_shared_navigation_is_consistent_on_all_portal_pages(
     _new_cluster_client: Mock, collector_class: Mock,
 ) -> None:
     collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
-    expected = ["Overview", "Resources", "Workloads", "Platform", "Health", "Diagnostics"]
-    for route in ("/", "/resources", "/workloads", "/platform", "/health-overview", "/storage", "/routes", "/diagnostics", "/diagnostics/ns/pod"):
+    expected = ["Overview", "Resources", "Workloads", "Platform", "Health", "Diagnostics", "AI Assistant"]
+    for route in ("/", "/resources", "/workloads", "/platform", "/health-overview", "/storage", "/routes", "/diagnostics", "/diagnostics/ns/pod", "/ai-assistant"):
         response = client.get(f"{route}?cluster=kkbtest")
         assert response.status_code == 200
         nav = response.text.split('aria-label="Dashboard navigation"', 1)[1].split("</nav>", 1)[0]

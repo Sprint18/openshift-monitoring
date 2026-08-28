@@ -122,6 +122,19 @@ def test_test_deployment_mounts_existing_sqlite_pvc_with_fs_group() -> None:
     } in pod_spec["volumes"]
 
 
+def test_test_deployment_configures_internal_ai_backend() -> None:
+    deployment = manifest_resources()["Deployment"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item["value"] for item in container["env"]}
+    assert env == {
+        "KOCC_AI_BACKEND_URL": (
+            "http://kocc-ai-backend.test-openshift-ai-assistant."
+            "svc.cluster.local:8080"
+        ),
+        "KOCC_AI_BACKEND_TIMEOUT_SECONDS": "90",
+    }
+
+
 def test_secret_template_targets_the_deployment_project() -> None:
     secret_template = PROJECT_ROOT / "openshift" / "rmtest-secret-template.yaml"
     secret = yaml.safe_load(secret_template.read_text())

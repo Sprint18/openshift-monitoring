@@ -15,11 +15,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
+from pydantic import BaseModel
 
+from app.ai_client import AIBackendClient, AIBackendError
 from app.cluster_loader import (
     DEFAULT_CLUSTER,
     ClusterConfigurationError,
@@ -113,6 +115,8 @@ app.mount(
     name="static",
 )
 ISTANBUL_TIMEZONE = ZoneInfo("Europe/Istanbul")
+
+
 def positive_env_seconds(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
@@ -120,6 +124,21 @@ def positive_env_seconds(name: str, default: int) -> int:
     except ValueError:
         logger.warning("Invalid %s; using default %s", name, default)
         return default
+
+
+KOCC_AI_BACKEND_URL = os.getenv("KOCC_AI_BACKEND_URL", "").strip()
+KOCC_AI_BACKEND_TIMEOUT_SECONDS = positive_env_seconds(
+    "KOCC_AI_BACKEND_TIMEOUT_SECONDS", 90
+)
+AI_SUPPORTED_CLUSTER_IDS = frozenset({"kkbtest"})
+ai_backend_client = AIBackendClient(
+    KOCC_AI_BACKEND_URL, KOCC_AI_BACKEND_TIMEOUT_SECONDS
+)
+
+
+class AIChatRequest(BaseModel):
+    cluster: str
+    message: str
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -1210,6 +1229,59 @@ def api_clusters() -> dict[str, Any]:
     }
 
 
+def ai_error_response(exc: AIBackendError) -> JSONResponse:
+    if exc.code == "timeout":
+        return JSONResponse(
+            {"error": "ai_timeout", "message": "AI Assistant yanıtı zaman aşımına uğradı."},
+            status_code=504,
+        )
+    if exc.code.startswith("http_4"):
+        return JSONResponse(
+            {"error": "ai_request_rejected", "message": "İstek AI Assistant tarafından işlenemedi."},
+            status_code=400,
+        )
+    if exc.code in {"unavailable", "http_503"}:
+        return JSONResponse(
+            {"error": "ai_unavailable", "message": "AI Assistant şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin."},
+            status_code=503,
+        )
+    return JSONResponse(
+        {"error": "ai_invalid_response", "message": "AI Assistant geçerli bir yanıt döndürmedi."},
+        status_code=502,
+    )
+
+
+@app.get("/api/ai/clusters")
+def api_ai_clusters() -> JSONResponse:
+    try:
+        clusters = [
+            item for item in ai_backend_client.clusters()
+            if item["enabled"] and item["id"] in AI_SUPPORTED_CLUSTER_IDS
+        ]
+        return JSONResponse({"clusters": clusters})
+    except AIBackendError as exc:
+        return ai_error_response(exc)
+
+
+@app.post("/api/ai/chat")
+def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
+    cluster_key = payload.cluster.strip().lower()
+    if cluster_key not in AI_SUPPORTED_CLUSTER_IDS:
+        return JSONResponse(
+            {"error": "unsupported_cluster", "message": "Bu cluster AI Assistant tarafından desteklenmiyor."},
+            status_code=400,
+        )
+    if not payload.message.strip():
+        return JSONResponse(
+            {"error": "invalid_message", "message": "Lütfen bir soru girin."},
+            status_code=400,
+        )
+    try:
+        return JSONResponse(ai_backend_client.chat(cluster_key, payload.message))
+    except AIBackendError as exc:
+        return ai_error_response(exc)
+
+
 @app.get("/api/summary")
 def api_summary(
     cluster: str = Query(default=DEFAULT_CLUSTER),
@@ -1721,3 +1793,22 @@ def health_overview_page(
     cluster: str = Query(default=DEFAULT_CLUSTER),
 ) -> HTMLResponse:
     return render_dashboard_page(request, cluster, "health")
+
+
+@app.get("/ai-assistant", response_class=HTMLResponse)
+def ai_assistant_page(
+    request: Request,
+    cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    cluster_key = cluster.lower()
+    if cluster_key not in get_cluster_definitions():
+        cluster_key = DEFAULT_CLUSTER
+    return templates.TemplateResponse(
+        request=request,
+        name="ai_assistant.html",
+        context={
+            "selected_cluster": cluster_key,
+            "release": app.version,
+            "page": "ai-assistant",
+        },
+    )

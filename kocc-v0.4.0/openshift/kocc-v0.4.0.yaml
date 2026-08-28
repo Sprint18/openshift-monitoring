@@ -161,6 +161,11 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+          env:
+            - name: KOCC_AI_BACKEND_URL
+              value: http://kocc-ai-backend.test-openshift-ai-assistant.svc.cluster.local:8080
+            - name: KOCC_AI_BACKEND_TIMEOUT_SECONDS
+              value: "90"
           readinessProbe:
             httpGet:
               path: /ready

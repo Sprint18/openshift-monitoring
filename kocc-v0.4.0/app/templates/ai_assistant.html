@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Assistant · OpenShift Clusters Monitoring Platform</title>
+    <style>
+        :root { --navy:#132b4f; --orange:#f58220; --border:#d8dee6; --muted:#6a6e73; }
+        * { box-sizing:border-box; }
+        body { margin:0; background:#f4f5f5; color:#151515; font-family:Arial,sans-serif; }
+        header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 32px; color:white; background:var(--navy); border-bottom:4px solid var(--orange); }
+        .brand { display:flex; align-items:center; gap:14px; }
+        .brand img { width:54px; height:52px; padding:4px; object-fit:contain; background:white; border-radius:6px; }
+        h1,h2 { margin:0; }
+        header small { color:#dbe5ef; }
+        .primary-nav { display:flex; gap:4px; padding:0 32px; overflow:auto; background:#0d213d; }
+        .primary-nav a { padding:11px 14px; color:#dbe5ef; text-decoration:none; white-space:nowrap; border-bottom:3px solid transparent; }
+        .primary-nav a.active,.primary-nav a:hover { color:white; border-color:var(--orange); background:rgba(255,255,255,.06); }
+        main { max-width:1100px; margin:auto; padding:28px 32px 56px; }
+        .intro,.composer,.message { background:white; border:1px solid var(--border); border-radius:8px; }
+        .intro { padding:20px; border-top:3px solid var(--orange); }
+        .readonly { margin:14px 0 0; padding:10px 12px; color:#004b95; background:#e7f1fa; border-radius:5px; }
+        .examples { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
+        .example { padding:8px 11px; color:var(--navy); background:white; border:1px solid #9fb4ca; border-radius:16px; cursor:pointer; }
+        .composer { display:grid; gap:12px; padding:18px; }
+        .field { display:grid; gap:6px; }
+        select,textarea,button { font:inherit; }
+        select,textarea { width:100%; padding:10px 12px; border:1px solid #8a8d90; border-radius:5px; background:white; }
+        textarea { min-height:110px; resize:vertical; }
+        .actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+        .send { padding:10px 18px; color:white; background:var(--navy); border:0; border-radius:5px; cursor:pointer; font-weight:bold; }
+        button:disabled { cursor:not-allowed; opacity:.55; }
+        .status { color:var(--muted); }
+        .status.error { color:#a30000; }
+        .conversation { display:grid; gap:14px; margin-top:20px; }
+        .message { padding:16px 18px; overflow:hidden; }
+        .message.user { margin-left:12%; border-left:4px solid var(--orange); }
+        .message.assistant { margin-right:5%; border-left:4px solid #2b7bbb; }
+        .message-label { margin-bottom:8px; color:var(--muted); font-size:12px; font-weight:bold; text-transform:uppercase; }
+        .answer { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+        details { margin-top:14px; padding-top:10px; border-top:1px solid var(--border); }
+        summary { cursor:pointer; color:#004b95; font-weight:bold; }
+        .tool-list { display:flex; flex-wrap:wrap; gap:7px; padding:10px 0 0; margin:0; list-style:none; }
+        .tool-list li { padding:4px 8px; background:#eef3f7; border-radius:11px; font-size:12px; }
+        .tool-list .failed { color:#8a150d; background:#faeae8; }
+        footer { padding:24px 8px 12px; color:#999; opacity:.75; text-align:center; font-size:11px; }
+        @media(max-width:700px){ header,main{padding-left:16px;padding-right:16px}.primary-nav{padding:0 16px}.message.user,.message.assistant{margin-left:0;margin-right:0} }
+    </style>
+</head>
+<body>
+<header>
+    <div class="brand"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>AI Assistant</h1><small>OpenShift cluster analizi</small></div></div>
+    <span>v{{ release }}</span>
+</header>
+{% include "_navigation.html" %}
+<main>
+    <section class="intro">
+        <h2>OpenShift AI Assistant</h2>
+        <p>Cluster durumunu doğal dilde, gerçek ve başarılı MCP kanıtlarına dayanarak inceleyin.</p>
+        <p class="readonly">AI Assistant şu anda yalnızca read-only cluster işlemlerini destekler.</p>
+    </section>
+    <div class="examples" aria-label="Örnek sorular">
+        {% for question in [
+            "Cluster'ın genel sağlık durumunu kontrol et.",
+            "Degraded ClusterOperator var mı?",
+            "Node CPU ve memory kullanımını incele.",
+            "Belirli bir namespace'teki pod durumlarını kontrol et."
+        ] %}<button class="example" type="button" data-question="{{ question }}">{{ question }}</button>{% endfor %}
+    </div>
+    <form id="ai-form" class="composer">
+        <div class="field"><label for="ai-cluster">Cluster</label><select id="ai-cluster" disabled><option>Cluster listesi yükleniyor…</option></select></div>
+        <div class="field"><label for="ai-message">Sorunuz</label><textarea id="ai-message" required placeholder="Örneğin: Cluster'ın genel sağlık durumunu kontrol et."></textarea></div>
+        <div class="actions"><span id="ai-status" class="status" role="status" aria-live="polite"></span><button id="ai-send" class="send" type="submit" disabled>Gönder</button></div>
+    </form>
+    <section id="conversation" class="conversation" aria-live="polite"></section>
+</main>
+<footer>Bu uygulama Oğuzhan Alkın Sözen tarafından AI araçları kullanılarak geliştirilmiştir.</footer>
+<script>
+const initialCluster = {{ selected_cluster|tojson }};
+const form = document.getElementById("ai-form");
+const clusterSelect = document.getElementById("ai-cluster");
+const messageInput = document.getElementById("ai-message");
+const sendButton = document.getElementById("ai-send");
+const statusText = document.getElementById("ai-status");
+const conversation = document.getElementById("conversation");
+let requestPending = false;
+
+const addText = (parent, tag, className, text) => {
+    const element = document.createElement(tag);
+    element.className = className;
+    element.textContent = text;
+    parent.appendChild(element);
+    return element;
+};
+
+const appendMessage = (role, text, data = null) => {
+    const article = document.createElement("article");
+    article.className = `message ${role}`;
+    addText(article, "div", "message-label", role === "user" ? "Siz" : "AI Assistant");
+    addText(article, role === "assistant" ? "pre" : "p", role === "assistant" ? "answer" : "", text);
+    if (data && (data.evidence.length || data.tool_calls.some((item) => item.status !== "success"))) {
+        const details = document.createElement("details");
+        addText(details, "summary", "", "Kullanılan cluster verileri");
+        const list = document.createElement("ul");
+        list.className = "tool-list";
+        data.evidence.forEach((item) => addText(list, "li", "", `✓ ${item.tool}`));
+        data.tool_calls.filter((item) => item.status !== "success").forEach((item) => addText(list, "li", "failed", `⚠ ${item.name}`));
+        details.appendChild(list);
+        article.appendChild(details);
+    }
+    conversation.appendChild(article);
+};
+
+const setPending = (pending) => {
+    requestPending = pending;
+    sendButton.disabled = pending || !clusterSelect.value;
+    clusterSelect.disabled = pending;
+    messageInput.disabled = pending;
+    if (pending) {
+        statusText.classList.remove("error");
+        statusText.textContent = "AI Assistant cluster verilerini inceliyor…";
+    }
+};
+
+const loadClusters = async () => {
+    try {
+        const response = await fetch("/api/ai/clusters");
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data.clusters) || !data.clusters.length) throw new Error();
+        clusterSelect.replaceChildren();
+        data.clusters.forEach((cluster) => clusterSelect.add(new Option(cluster.name, cluster.id)));
+        if (data.clusters.some((cluster) => cluster.id === initialCluster)) clusterSelect.value = initialCluster;
+        clusterSelect.disabled = false;
+        sendButton.disabled = false;
+    } catch (_error) {
+        clusterSelect.replaceChildren(new Option("AI Assistant kullanılamıyor", ""));
+        statusText.textContent = "AI Assistant şu anda kullanılamıyor.";
+        statusText.classList.add("error");
+    }
+};
+
+form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (requestPending) return;
+    const message = messageInput.value;
+    if (!message.trim() || !clusterSelect.value) return;
+    appendMessage("user", message);
+    setPending(true);
+    try {
+        const response = await fetch("/api/ai/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({cluster:clusterSelect.value,message})});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || "AI Assistant isteği başarısız oldu.");
+        appendMessage("assistant", data.answer, data);
+        messageInput.value = "";
+        statusText.textContent = "";
+    } catch (error) {
+        statusText.textContent = error.message || "AI Assistant şu anda kullanılamıyor.";
+        statusText.classList.add("error");
+    } finally {
+        setPending(false);
+        messageInput.focus();
+    }
+});
+
+document.querySelectorAll(".example").forEach((button) => button.addEventListener("click", () => { messageInput.value = button.dataset.question; messageInput.focus(); }));
+loadClusters();
+</script>
+</body>
+</html>
