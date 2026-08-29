@@ -13,6 +13,7 @@ from app.egressip import (
     is_egressip_intent, namespace_labels, resource_items, resource_names,
     resource_object,
 )
+from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.llm_client import LLMClient, LLMUnavailable
 from app.mcp_client import MCPClient, MCPUnavailable
 from app.node_metrics import parse_node_metrics, render_node_metrics
@@ -115,13 +116,17 @@ class AgentLimitReached(RuntimeError):
 class AgentResult:
     answer: str
     tool_calls: list[dict[str, str]]
-    evidence_items: list[dict[str, Any]] = field(default_factory=list)
+    evidence_items: list[dict[str, Any] | EvidenceEnvelope] = field(default_factory=list)
     iterations: int = 0
 
     @property
     def evidence(self) -> list[dict[str, Any]]:
         if self.evidence_items:
-            return self.evidence_items
+            return [
+                item.legacy_metadata()
+                if isinstance(item, EvidenceEnvelope) else item
+                for item in self.evidence_items
+            ]
         return [
             {"tool": item["name"], "status": "success"}
             for item in self.tool_calls if item.get("status") == "success"
@@ -388,15 +393,14 @@ class AgentLoop:
                     if key in PUBLIC_FACT_KEYS and isinstance(value, int)
                 }
                 evidence.append({
-                    "tool": "resources_list", "status": "success",
-                    "facts": public_facts,
+                    "tool": "resources_list", "status": "success", "facts": public_facts,
                 })
                 if all(key in public_facts for key in PUBLIC_FACT_KEYS):
                     return AgentResult(
                         _direct_cluster_operator_answer(
                             public_facts, self.target_cluster_name
                         ),
-                        [summary], evidence, 0,
+                        [summary], [self._cluster_operator_evidence(public_facts)], 0,
                     )
             return AgentResult(
                 "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı.",
@@ -452,7 +456,7 @@ class AgentLoop:
                 )
             return AgentResult(
                 render_node_metrics(facts), [summary],
-                [{"tool": "nodes_top", "status": "success"}], 0,
+                [self._node_metrics_evidence(facts)], 0,
             )
 
         total_calls = 0
@@ -531,6 +535,44 @@ class AgentLoop:
                     )
 
         raise AgentLimitReached("iteration_limit")
+
+    def _cluster_operator_evidence(
+        self, facts: dict[str, Any]
+    ) -> EvidenceEnvelope:
+        return EvidenceEnvelope.create(
+            cluster_id=self.target_cluster_id or "unspecified",
+            operation="list",
+            resource=EvidenceResource(
+                api_version="config.openshift.io/v1", kind="ClusterOperator"
+            ),
+            completeness="complete",
+            facts=facts,
+            provenance={"tool": "resources_list"},
+        )
+
+    def _node_metrics_evidence(self, facts: Any) -> EvidenceEnvelope:
+        return EvidenceEnvelope.create(
+            cluster_id=self.target_cluster_id or "unspecified",
+            operation="metrics",
+            resource=EvidenceResource(api_version="metrics.k8s.io/v1beta1", kind="Node"),
+            completeness="complete",
+            facts={
+                "node_count": facts.node_count,
+                "role_counts": facts.role_counts,
+                "nodes": [
+                    {
+                        "name": node.node_name,
+                        "role": node.role,
+                        "cpu": node.cpu_raw,
+                        "cpu_percent": node.cpu_percent,
+                        "memory": node.memory_raw,
+                        "memory_percent": node.memory_percent,
+                    }
+                    for node in facts.nodes
+                ],
+            },
+            provenance={"tool": "nodes_top"},
+        )
 
     def _egressip_answer(
         self, message: str, available_names: set[str],

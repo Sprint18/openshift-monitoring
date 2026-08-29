@@ -140,6 +140,7 @@ class AIChatRequest(BaseModel):
     message: str
     context_cluster_id: str | None = None
     target_cluster_ids: list[str] | None = None
+    conversation_scope: str = "auto"
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -1289,9 +1290,12 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
             or any(item not in AI_SUPPORTED_CLUSTER_IDS for item in target_cluster_ids)
         ):
             return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
+        if payload.conversation_scope not in {"auto", "kkbtest", "rmtest", "all"}:
+            return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
         return JSONResponse(ai_backend_client.chat(
             "kkbtest", payload.message,
             target_cluster_ids=target_cluster_ids,
+            conversation_scope=payload.conversation_scope,
         ))
     except AIBackendError as exc:
         return ai_error_response(exc)

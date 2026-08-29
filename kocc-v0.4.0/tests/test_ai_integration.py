@@ -72,7 +72,8 @@ def test_ai_chat_proxy_preserves_safe_contract(ai_client: Mock) -> None:
     assert response.status_code == 200
     assert response.json() == ai_client.chat.return_value
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "Cluster health", target_cluster_ids=None
+        "kkbtest", "Cluster health", target_cluster_ids=None,
+        conversation_scope="auto",
     )
 
 
@@ -97,7 +98,8 @@ def test_ai_chat_ignores_legacy_browser_cluster_for_routing(ai_client: Mock) -> 
     })
     assert response.status_code == 200
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "RMTEST'e bak", target_cluster_ids=None
+        "kkbtest", "RMTEST'e bak", target_cluster_ids=None,
+        conversation_scope="auto",
     )
 
 
@@ -111,7 +113,8 @@ def test_ai_chat_proxy_does_not_forward_dashboard_context_hint(ai_client: Mock) 
     })
     assert response.status_code == 200
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "cluster durumuna bak", target_cluster_ids=None
+        "kkbtest", "cluster durumuna bak", target_cluster_ids=None,
+        conversation_scope="auto",
     )
 
     ai_client.reset_mock()
@@ -119,7 +122,8 @@ def test_ai_chat_proxy_does_not_forward_dashboard_context_hint(ai_client: Mock) 
         "message": "cluster durumuna bak", "context_cluster_id": "arbitrary-url",
     })
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "cluster durumuna bak", target_cluster_ids=None
+        "kkbtest", "cluster durumuna bak", target_cluster_ids=None,
+        conversation_scope="auto",
     )
 
 
@@ -418,12 +422,13 @@ def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
     assert "!text.trim()" in source
 
 
-def test_ai_template_new_chat_isolates_history_without_cluster_state() -> None:
+def test_ai_template_new_chat_defaults_to_auto_scope() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     assert 'id="shiftlight-new"' in partial
     assert "conversation.replaceChildren()" in source
     assert 'newButton.addEventListener("click"' in source
-    assert 'clusterSelect.addEventListener("change"' not in source
+    assert 'scope: "auto"' in source
+    assert 'scopeSelect.addEventListener("change"' in source
     assert "const startNew = ()" in source
     assert "newButton.disabled = pending" in source
     assert "suggestions.forEach" in source
@@ -457,7 +462,8 @@ def test_ai_template_loading_and_http_200_blank_regression() -> None:
 def test_ai_template_brand_context_evidence_and_responsive_hooks() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
-    assert 'id="shiftlight-cluster"' not in partial
+    assert 'id="shiftlight-scope"' in partial
+    assert '<option value="auto">Auto</option>' in partial
     assert 'id="shiftlight-new"' in partial
     assert "Kullanılan cluster verileri" in source
     assert "shiftlight-evidence" in source
@@ -617,7 +623,7 @@ def test_shiftlight_session_history_is_bounded_minimal_and_routing_free() -> Non
         source.index("const safeConversation"):source.index("const safeStore")
     ]
     assert "item.cluster" not in conversation_sanitizer
-    assert "createdAt, updatedAt, messages" in source
+    assert "createdAt, updatedAt, scope: safeScope(value.scope), messages" in source
     assert 'id="shiftlight-history-list"' in partial
     assert "Sohbetler" in partial
     assert "raw MCP" not in source
@@ -626,11 +632,13 @@ def test_shiftlight_session_history_is_bounded_minimal_and_routing_free() -> Non
     assert "tool_calls" not in source
 
 
-def test_shiftlight_has_no_assistant_selector_but_dashboard_selector_remains() -> None:
+def test_shiftlight_scope_is_conversation_level_and_dashboard_selector_remains() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     dashboard = (Path(__file__).parents[1] / "app/templates/index.html").read_text()
-    assert 'id="shiftlight-cluster"' not in partial
-    assert "clusterSelect" not in source
+    assert 'id="shiftlight-scope"' in partial
+    assert 'body.conversation_scope = currentScope' in source
+    assert 'body.target_cluster_ids = targetClusterIds' in source
+    assert "if (currentScope !== \"auto\")" in source
     assert 'id="cluster"' in dashboard
     assert "selectedCluster" in dashboard
     assert "context_cluster_id: root.dataset.contextCluster" not in source

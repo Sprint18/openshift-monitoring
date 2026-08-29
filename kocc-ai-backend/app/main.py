@@ -11,9 +11,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AgentLimitReached, AgentLoop, can_run_without_llm
+from app.classification import classify_conversation, conversational_answer
 from app.clusters import (
     UnknownClusterError, cluster_registry,
-    resolve_cluster_request, selected_cluster, validated_cluster_selection,
+    conversation_scope_selection, resolve_cluster_request, selected_cluster,
+    validated_cluster_selection,
 )
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
@@ -34,23 +36,8 @@ class ChatRequest(BaseModel):
     cluster: str = "kkbtest"
     context_cluster_id: str | None = None
     target_cluster_ids: list[str] | None = None
+    conversation_scope: str = "auto"
     message: str = Field(min_length=1)
-
-
-def _conversational_answer(message: str) -> str | None:
-    normalized = " ".join(message.casefold().strip(" .!?").split())
-    if normalized in {"merhaba", "selam", "hello", "hi", "teşekkürler", "tesekkurler"}:
-        return "Merhaba, OpenShift operasyonları hakkında nasıl yardımcı olabilirim?"
-    if normalized in {
-        "sen kimsin", "kimsin", "ne yapabilirsin", "yardım", "yardim",
-        "nasıl çalışıyorsun", "nasil calisiyorsun", "what can you do", "who are you",
-    }:
-        return (
-            "Ben KKB ShiftLight AI, KOCC içindeki read-only OpenShift operasyon "
-            "asistanıyım. Desteklenen cluster'larda, açıkça seçtiğiniz kapsam için "
-            "canlı veriyi MCP üzerinden inceleyebilirim."
-        )
-    return None
 
 
 def _attributed_answer(answer: str, cluster_name: str) -> str:
@@ -163,12 +150,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         chat_started = time.perf_counter()
         if len(payload.message) > configuration.agent_max_user_chars:
             return JSONResponse({"error": "message_too_large"}, status_code=400)
+        classification = classify_conversation(payload.message)
+        conversational = conversational_answer(classification)
+        if conversational is not None:
+            logger.info(
+                "ai_chat_scope scope=conversational subtype=%s",
+                classification.subtype,
+            )
+            return JSONResponse({
+                "answer": conversational, "clusters": [],
+                "tool_calls": [], "evidence": [],
+            })
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
         try:
             selected_scope = validated_cluster_selection(
                 payload.target_cluster_ids, application.state.clusters
+            )
+            conversation_decision = conversation_scope_selection(
+                payload.conversation_scope, application.state.clusters
             )
         except UnknownClusterError:
             return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
@@ -178,16 +179,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operational_message = resolved.operational_message or payload.message
         elif selected_scope is not None:
             scope = selected_scope
-            route_source = "selection"
+            route_source = "clarification"
+            operational_message = payload.message
+        elif conversation_decision.scope is not None:
+            scope = conversation_decision.scope
+            route_source = conversation_decision.source
             operational_message = payload.message
         else:
-            conversational = _conversational_answer(payload.message)
-            if conversational is not None:
-                logger.info("ai_chat_scope scope=conversational")
-                return JSONResponse({
-                    "answer": conversational, "clusters": [],
-                    "tool_calls": [], "evidence": [],
-                })
             logger.info("ai_chat_scope scope=clarification")
             return JSONResponse({
                 "answer": "Bu sorguyu hangi cluster veya clusterlar için çalıştırayım?",

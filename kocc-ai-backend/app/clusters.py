@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 from app.config import Settings
 
@@ -37,6 +38,16 @@ def cluster_registry(settings: Settings) -> dict[str, Cluster]:
 class ClusterScope:
     kind: str
     cluster_ids: tuple[str, ...]
+
+
+ScopeMode = Literal["auto", "explicit_single", "explicit_multi", "all"]
+
+
+@dataclass(frozen=True)
+class ScopeDecision:
+    mode: ScopeMode
+    scope: ClusterScope | None
+    source: str
 
 
 @dataclass(frozen=True)
@@ -139,6 +150,25 @@ def validated_cluster_selection(
         if cluster.enabled and cluster_id in requested
     )
     return ClusterScope("single" if len(ordered) == 1 else "multiple", ordered)
+
+
+def conversation_scope_selection(
+    value: str | None, registry: dict[str, Cluster]
+) -> ScopeDecision:
+    normalized = (value or "auto").strip().casefold()
+    if normalized == "auto":
+        return ScopeDecision("auto", None, "auto")
+    if normalized == "all":
+        cluster_ids = tuple(
+            cluster.id for cluster in registry.values() if cluster.enabled
+        )
+        return ScopeDecision("all", ClusterScope("all", cluster_ids), "conversation")
+    cluster = registry.get(normalized)
+    if cluster is None or not cluster.enabled:
+        raise UnknownClusterError("Invalid conversation scope")
+    return ScopeDecision(
+        "explicit_single", ClusterScope("single", (cluster.id,)), "conversation"
+    )
 
 
 def selected_cluster(registry: dict[str, Cluster], cluster_id: str) -> Cluster:

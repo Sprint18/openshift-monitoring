@@ -136,6 +136,7 @@ class AIBackendClient:
         self, cluster: str, message: str,
         context_cluster_id: str | None = None,
         target_cluster_ids: list[str] | None = None,
+        conversation_scope: str = "auto",
     ) -> dict[str, Any]:
         payload = {"cluster": cluster, "message": message}
         if context_cluster_id in {"kkbtest", "rmtest"}:
@@ -146,6 +147,10 @@ class AIBackendClient:
             ):
                 raise AIBackendError("invalid_cluster_scope")
             payload["target_cluster_ids"] = list(dict.fromkeys(target_cluster_ids))
+        if conversation_scope not in {"auto", "kkbtest", "rmtest", "all"}:
+            raise AIBackendError("invalid_cluster_scope")
+        if conversation_scope != "auto":
+            payload["conversation_scope"] = conversation_scope
         response = self._request(
             "POST", "/api/v1/chat", payload
         )

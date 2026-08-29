@@ -100,6 +100,8 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-readonly { padding:4px 7px; border:1px solid #9ebbd7; border-radius:11px; font-size:10px; }
 .shiftlight-header-actions button { width:30px; height:30px; color:#fff; background:transparent; border:0; border-radius:5px; font-size:24px; cursor:pointer; }
 .shiftlight-toolbar { display:flex; flex:0 0 auto; align-items:end; justify-content:space-between; gap:9px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--shiftlight-border); }
+.shiftlight-scope { display:flex; align-items:center; gap:6px; color:var(--shiftlight-muted); font-size:10px; font-weight:bold; }
+.shiftlight-scope select { min-width:98px; padding:6px 24px 6px 7px; color:var(--shiftlight-navy); background:#fff; border:1px solid #aebdcb; border-radius:6px; font-size:11px; }
 .shiftlight-toolbar > div { display:flex; gap:6px; margin-left:auto; }
 .shiftlight-toolbar button { padding:7px 8px; color:var(--shiftlight-navy); background:#fff; border:1px solid #aebdcb; border-radius:6px; font-size:11px; font-weight:bold; cursor:pointer; }
 .shiftlight-history { flex:0 1 auto; min-height:0; max-height:min(220px,30dvh); overflow-y:auto; overscroll-behavior:contain; padding:8px 10px 10px; background:#fff; border-bottom:1px solid var(--shiftlight-border); box-shadow:0 8px 18px rgba(19,43,79,.08); }

@@ -41,6 +41,7 @@
     const historyPanel = document.getElementById("shiftlight-history");
     const historyClose = document.getElementById("shiftlight-history-close");
     const historyList = document.getElementById("shiftlight-history-list");
+    const scopeSelect = document.getElementById("shiftlight-scope");
     const newButton = document.getElementById("shiftlight-new");
     const conversation = document.getElementById("shiftlight-conversation");
     const form = document.getElementById("shiftlight-form");
@@ -59,7 +60,8 @@
 
     const conversationId = () => globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const nowIso = () => new Date().toISOString();
-    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, messages: []}; };
+    const safeScope = (value) => ["auto", "kkbtest", "rmtest", "all"].includes(value) ? value : "auto";
+    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", messages: []}; };
     const emptyStore = () => ({version: STORE_VERSION, activeConversationId: null, conversations: []});
     const isSafeInteger = (value) => Number.isInteger(value) && value >= 0;
     const safeFacts = (facts) => {
@@ -104,7 +106,7 @@
         const messages = Array.isArray(value.messages) ? value.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES) : [];
         const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
         const updatedAt = typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
-        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, messages};
+        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, scope: safeScope(value.scope), messages};
     };
     const safeStore = (value) => {
         let conversations = [];
@@ -342,6 +344,8 @@
         const previousScrollTop = conversation.scrollTop;
         conversation.replaceChildren();
         const selected = activeConversation();
+        scopeSelect.value = selected ? safeScope(selected.scope) : "auto";
+        scopeSelect.disabled = isHistoricalConversation() || requestPending;
         if (!selected || !selected.messages.length) renderEmpty();
         else selected.messages.forEach((item) => {
             if (item.role === "user") addText(conversation, "article", "shiftlight-message user", item.text);
@@ -432,6 +436,7 @@
     const resizeComposer = () => { messageInput.style.height = "auto"; messageInput.style.height = `${Math.min(messageInput.scrollHeight, 125)}px`; };
     const setPending = (pending) => {
         requestPending = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending;
+        scopeSelect.disabled = pending || isHistoricalConversation();
     };
     const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
     const startNew = () => { createConversation(); closeHistory(); renderConversation(true); };
@@ -441,6 +446,8 @@
         if (addUser) addCurrentMessage({role: "user", text, evidence: []}, true);
         messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         const body = {message: text};
+        const currentScope = safeScope((activeConversation() || {}).scope);
+        if (currentScope !== "auto") body.conversation_scope = currentScope;
         if (Array.isArray(targetClusterIds)) body.target_cluster_ids = targetClusterIds;
         try {
             const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
@@ -466,6 +473,7 @@
     launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); flightMascot.addEventListener("animationend", (event) => { if (["shiftlight-flight", "shiftlight-flight-mobile"].includes(event.animationName) && flightMascot.dataset.state === "flying") landMascot(welcomeRun); }); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
     nudgeClose.addEventListener("click", () => collapseWelcome(welcomeRun)); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
     historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
+    scopeSelect.addEventListener("change", () => { const current = activeConversation() || createConversation(); current.scope = safeScope(scopeSelect.value); current.updatedAt = nowIso(); persistStore(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
     document.addEventListener("keydown", (event) => { if (event.key !== "Escape" || !drawer.classList.contains("open")) return; if (fullscreen) closeFullscreen(); else closeDrawer(); });
     renderConversation(); setPending(false); showNudge(); if (root.dataset.openOnLoad === "true") openDrawer();
