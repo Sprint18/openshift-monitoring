@@ -415,8 +415,8 @@ def test_shiftlight_mascot_flight_reuses_first_session_welcome_state() -> None:
     assert 'sessionStorage.getItem(NUDGE_KEY) === "true"' in source
     assert 'sessionStorage.setItem(NUDGE_KEY, "true")' in source
     assert "localStorage" not in source
-    assert 'flightMascot.classList.add("flying")' in source
-    assert "mobile ? 1250 : 1900" in source
+    assert 'setFlightState("flight-ready")' in source
+    assert 'setFlightState("flying")' in source
     assert "mobile ? 650 : 750" in source
     assert "collapseWelcome(run), 6800" in source
     assert 'launcher.addEventListener("click", openDrawer)' in source
@@ -425,7 +425,7 @@ def test_shiftlight_mascot_flight_reuses_first_session_welcome_state() -> None:
     assert "pointer-events:none" in css
     assert 'class="shiftlight-launcher-mascot"' in partial
     assert 'id="shiftlight-flight"' in partial
-    assert 'id="shiftlight-flight" class="shiftlight-flight" type="button" hidden' in partial
+    assert 'id="shiftlight-flight" class="shiftlight-flight" type="button" hidden data-state="idle"' in partial
 
 
 def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> None:
@@ -433,7 +433,7 @@ def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> Non
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
     assert 'window.matchMedia("(prefers-reduced-motion: reduce)").matches' in source
     reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
-    assert ".shiftlight-flight.flying" in reduced
+    assert ".shiftlight-flight[data-state]" in reduced
     assert "animation:none" in reduced
     assert "transform:none" in reduced
     assert 'drawer.classList.toggle("fullscreen", expanded)' in source
@@ -444,19 +444,49 @@ def test_shiftlight_flight_respects_reduced_motion_and_existing_layouts() -> Non
 def test_shiftlight_welcome_lands_greets_and_compacts_to_launcher() -> None:
     source = shiftlight_source()
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
-    assert 'flightMascot.classList.add("landed")' in source
+    assert 'setFlightState("landed")' in source
     assert "const landMascot = (run, settle = 320)" in source
     assert 'nudge.classList.add("visible")' in source
-    assert 'flightMascot.classList.add("compacting")' in source
+    assert 'setFlightState("resting")' in source
     assert 'launcher.classList.remove("welcome-hidden")' in source
     assert "}, 420)" in source
     assert "@keyframes shiftlight-land" in css
     assert "@keyframes shiftlight-compact" in css
     flight = css[css.index("@keyframes shiftlight-flight"):css.index("@keyframes shiftlight-land")]
-    assert all(step in flight for step in ("0%", "28%", "56%", "80%", "100%"))
+    assert all(step in flight for step in ("0%", "20%", "45%", "70%", "100%"))
     assert "translate3d" in flight
     assert "width:128px; height:128px" in css
     assert "width:62px; height:62px" in css
+
+
+def test_shiftlight_runtime_flight_paints_ready_state_before_animation() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    ready = source.index('setFlightState("flight-ready")')
+    raf = source.index("requestAnimationFrame(() => requestAnimationFrame", ready)
+    flying = source.index('setFlightState("flying")', raf)
+    assert ready < raf < flying
+    assert '[data-state="flight-ready"]' in css
+    assert "translate3d(190px,120px,0)" in css
+    assert "translate3d(-360px,-90px,0)" in css
+    assert 'flightMascot.addEventListener("animationend"' in source
+    assert 'event.animationName' in source
+    assert 'flightMascot.dataset.state === "flying"' in source
+    assert "landMascot(welcomeRun)" in source
+    flight_block = source[source.index('setFlightState("flight-ready")'):source.index("window.shiftLightReplayWelcome")]
+    assert "mobile ? 1250 : 1900" not in flight_block
+
+
+def test_shiftlight_greeting_follows_landing_and_resting_follows_greeting() -> None:
+    source = shiftlight_source()
+    landed = source.index('setFlightState("landed")')
+    reveal = source.index("revealNudge(run)", landed)
+    assert landed < reveal
+    reveal_block = source[source.index("const revealNudge"):source.index("const landMascot")]
+    collapse_block = source[source.index("const collapseWelcome"):source.index("const revealNudge")]
+    assert 'setFlightState("greeting")' in reveal_block
+    assert "collapseWelcome(run), 6800" in reveal_block
+    assert 'setFlightState("resting")' in collapse_block
 
 
 def test_shiftlight_welcome_replay_isolated_and_open_drawer_cancels_sequence() -> None:

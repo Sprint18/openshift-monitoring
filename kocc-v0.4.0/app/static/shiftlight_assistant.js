@@ -53,6 +53,8 @@
     let fullscreen = false;
     let welcomeRun = 0;
 
+    const setFlightState = (state) => { flightMascot.dataset.state = state; };
+
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
     }
@@ -339,7 +341,7 @@
     };
     const resetWelcomeVisuals = () => {
         nudge.hidden = true; nudge.classList.remove("visible", "exiting");
-        flightMascot.hidden = true; flightMascot.classList.remove("flying", "landed", "compacting");
+        setFlightState("idle"); flightMascot.hidden = true;
         launcher.classList.remove("welcome-hidden");
     };
     const cancelWelcome = () => {
@@ -347,18 +349,18 @@
     };
     const collapseWelcome = (run) => {
         if (run !== welcomeRun || flightMascot.hidden) return;
-        nudge.classList.remove("visible"); nudge.classList.add("exiting"); launcher.classList.remove("welcome-hidden"); flightMascot.classList.remove("landed"); flightMascot.classList.add("compacting");
+        nudge.classList.remove("visible"); nudge.classList.add("exiting"); launcher.classList.remove("welcome-hidden"); setFlightState("resting");
         window.setTimeout(() => { if (run === welcomeRun) resetWelcomeVisuals(); }, 420);
     };
     const revealNudge = (run) => {
         if (run !== welcomeRun) return;
-        nudge.hidden = false;
+        setFlightState("greeting"); nudge.hidden = false;
         requestAnimationFrame(() => nudge.classList.add("visible"));
         window.setTimeout(() => collapseWelcome(run), 6800);
     };
     const landMascot = (run, settle = 320) => {
         if (run !== welcomeRun) return;
-        flightMascot.classList.remove("flying"); flightMascot.classList.add("landed");
+        setFlightState("landed");
         window.setTimeout(() => revealNudge(run), settle);
     };
     const showNudge = (force = false) => {
@@ -371,10 +373,11 @@
         resetWelcomeVisuals(); launcher.classList.add("welcome-hidden");
         window.setTimeout(() => {
             if (run !== welcomeRun) return;
-            flightMascot.hidden = false;
+            flightMascot.hidden = false; setFlightState("flight-ready");
             if (reducedMotion) { landMascot(run, 0); return; }
-            flightMascot.classList.add("flying");
-            window.setTimeout(() => landMascot(run), mobile ? 1250 : 1900);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (run === welcomeRun) setFlightState("flying");
+            }));
         }, reducedMotion ? 120 : mobile ? 650 : 750);
     };
     window.shiftLightReplayWelcome = () => { sessionStorage.removeItem(NUDGE_KEY); showNudge(true); };
@@ -426,7 +429,7 @@
             const shell = assistantShell(); shell.article.classList.add("error"); addText(shell.answer, "p", "", message); conversation.appendChild(shell.article); conversation.scrollTop = conversation.scrollHeight;
         } finally { setPending(false); messageInput.focus(); }
     });
-    launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
+    launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); flightMascot.addEventListener("animationend", (event) => { if (["shiftlight-flight", "shiftlight-flight-mobile"].includes(event.animationName) && flightMascot.dataset.state === "flying") landMascot(welcomeRun); }); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
     nudgeClose.addEventListener("click", () => collapseWelcome(welcomeRun)); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
     historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
     clusterSelect.addEventListener("change", () => { if (!requestPending) changeCluster(); });
