@@ -134,14 +134,47 @@ class AIBackendClient:
     def chat(
         self, cluster: str, message: str,
         context_cluster_id: str | None = None,
+        target_cluster_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         payload = {"cluster": cluster, "message": message}
         if context_cluster_id in {"kkbtest", "rmtest"}:
             payload["context_cluster_id"] = context_cluster_id
+        if target_cluster_ids is not None:
+            if not target_cluster_ids or any(
+                item not in {"kkbtest", "rmtest"} for item in target_cluster_ids
+            ):
+                raise AIBackendError("invalid_cluster_scope")
+            payload["target_cluster_ids"] = list(dict.fromkeys(target_cluster_ids))
         response = self._request(
             "POST", "/api/v1/chat", payload
         )
         answer = response.get("answer")
+        if response.get("needs_cluster_selection") is True:
+            choices = response.get("cluster_choices")
+            if not isinstance(answer, str) or not answer.strip() or not isinstance(choices, list):
+                raise AIBackendError("invalid_response")
+            safe_choices = []
+            for item in choices:
+                if not isinstance(item, dict):
+                    raise AIBackendError("invalid_response")
+                cluster_id, name = item.get("id"), item.get("name")
+                if cluster_id not in {"kkbtest", "rmtest"} or not isinstance(name, str):
+                    raise AIBackendError("invalid_response")
+                safe_choices.append({"id": cluster_id, "name": name[:100]})
+            return {
+                "answer": answer,
+                "needs_cluster_selection": True,
+                "cluster_choices": safe_choices,
+                "allow_all": response.get("allow_all") is True,
+                "evidence": [],
+            }
+        if "cluster" not in response and response.get("clusters") == []:
+            if not isinstance(answer, str) or not answer.strip():
+                raise AIBackendError("invalid_response")
+            return {
+                "answer": answer, "clusters": [],
+                "tool_calls": [], "evidence": [],
+            }
         response_cluster = response.get("cluster", cluster)
         tool_calls = response.get("tool_calls", [])
         evidence = response.get("evidence", [])
@@ -152,8 +185,20 @@ class AIBackendClient:
             raise AIBackendError("invalid_response")
         if not isinstance(tool_calls, list) or not isinstance(evidence, list):
             raise AIBackendError("invalid_response")
+        clusters = response.get("clusters", [])
+        if not isinstance(clusters, list):
+            raise AIBackendError("invalid_response")
+        safe_clusters = []
+        for item in clusters:
+            if not isinstance(item, dict):
+                raise AIBackendError("invalid_response")
+            cluster_id, name = item.get("id"), item.get("name")
+            if cluster_id not in {"kkbtest", "rmtest"} or not isinstance(name, str):
+                raise AIBackendError("invalid_response")
+            safe_clusters.append({"id": cluster_id, "name": name[:100]})
         return {
             "cluster": response_cluster,
+            "clusters": safe_clusters,
             "answer": answer,
             "tool_calls": self._tool_metadata(tool_calls, "name"),
             "evidence": self._evidence_metadata(evidence),

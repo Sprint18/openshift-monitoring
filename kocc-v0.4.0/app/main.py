@@ -139,6 +139,7 @@ ai_backend_client = AIBackendClient(
 class AIChatRequest(BaseModel):
     message: str
     context_cluster_id: str | None = None
+    target_cluster_ids: list[str] | None = None
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -161,7 +162,10 @@ async def request_timing_middleware(request: Request, call_next: Any) -> Any:
     global _active_requests
     started = time.perf_counter()
     status = 500
-    cluster_key = request.query_params.get("cluster", DEFAULT_CLUSTER).lower()
+    cluster_key = (
+        "ai-scope" if request.url.path == "/api/ai/chat"
+        else request.query_params.get("cluster", DEFAULT_CLUSTER).lower()
+    )
     perf_token = set_perf_cluster(cluster_key)
     path_token = set_perf_path(request.url.path)
     with _active_requests_lock:
@@ -1279,12 +1283,15 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
             status_code=400,
         )
     try:
-        context_cluster_id = (
-            payload.context_cluster_id
-            if payload.context_cluster_id in AI_SUPPORTED_CLUSTER_IDS else None
-        )
+        target_cluster_ids = payload.target_cluster_ids
+        if target_cluster_ids is not None and (
+            not target_cluster_ids
+            or any(item not in AI_SUPPORTED_CLUSTER_IDS for item in target_cluster_ids)
+        ):
+            return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
         return JSONResponse(ai_backend_client.chat(
-            "kkbtest", payload.message, context_cluster_id=context_cluster_id
+            "kkbtest", payload.message,
+            target_cluster_ids=target_cluster_ids,
         ))
     except AIBackendError as exc:
         return ai_error_response(exc)

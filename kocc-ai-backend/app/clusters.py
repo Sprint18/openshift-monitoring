@@ -48,7 +48,8 @@ class ResolvedClusterRequest:
 ALL_CLUSTER_PHRASES = (
     "tüm clusterlara", "tüm clusterları", "bütün clusterlara",
     "bütün clusterları", "tüm clusterlarda", "bütün clusterlarda",
-    "hepsinin", "all clusters", "check all clusters",
+    "hepsinin", "hepsine bak", "all clusters", "check all clusters",
+    "check every cluster",
 )
 TURKISH_SUFFIXES = (
     "teki", "taki", "deki", "daki", "de", "da", "te", "ta", "e", "a",
@@ -118,6 +119,26 @@ def explicit_cluster_scope(
 
 class UnknownClusterError(ValueError):
     pass
+
+
+def validated_cluster_selection(
+    cluster_ids: list[str] | None, registry: dict[str, Cluster]
+) -> ClusterScope | None:
+    if cluster_ids is None:
+        return None
+    requested = set(cluster_ids)
+    if not requested or any(
+        not isinstance(value, str)
+        or value not in registry
+        or not registry[value].enabled
+        for value in cluster_ids
+    ):
+        raise UnknownClusterError("Invalid cluster selection")
+    ordered = tuple(
+        cluster_id for cluster_id, cluster in registry.items()
+        if cluster.enabled and cluster_id in requested
+    )
+    return ClusterScope("single" if len(ordered) == 1 else "multiple", ordered)
 
 
 def selected_cluster(registry: dict[str, Cluster], cluster_id: str) -> Cluster:

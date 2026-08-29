@@ -72,7 +72,7 @@ def test_ai_chat_proxy_preserves_safe_contract(ai_client: Mock) -> None:
     assert response.status_code == 200
     assert response.json() == ai_client.chat.return_value
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "Cluster health", context_cluster_id=None
+        "kkbtest", "Cluster health", target_cluster_ids=None
     )
 
 
@@ -97,12 +97,12 @@ def test_ai_chat_ignores_legacy_browser_cluster_for_routing(ai_client: Mock) -> 
     })
     assert response.status_code == 200
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "RMTEST'e bak", context_cluster_id=None
+        "kkbtest", "RMTEST'e bak", target_cluster_ids=None
     )
 
 
 @patch("app.main.ai_backend_client")
-def test_ai_chat_proxy_forwards_only_allowlisted_context_hint(ai_client: Mock) -> None:
+def test_ai_chat_proxy_does_not_forward_dashboard_context_hint(ai_client: Mock) -> None:
     ai_client.chat.return_value = {
         "cluster": "rmtest", "answer": "RMTEST", "tool_calls": [], "evidence": [],
     }
@@ -111,7 +111,7 @@ def test_ai_chat_proxy_forwards_only_allowlisted_context_hint(ai_client: Mock) -
     })
     assert response.status_code == 200
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "cluster durumuna bak", context_cluster_id="rmtest"
+        "kkbtest", "cluster durumuna bak", target_cluster_ids=None
     )
 
     ai_client.reset_mock()
@@ -119,7 +119,7 @@ def test_ai_chat_proxy_forwards_only_allowlisted_context_hint(ai_client: Mock) -
         "message": "cluster durumuna bak", "context_cluster_id": "arbitrary-url",
     })
     ai_client.chat.assert_called_once_with(
-        "kkbtest", "cluster durumuna bak", context_cluster_id=None
+        "kkbtest", "cluster durumuna bak", target_cluster_ids=None
     )
 
 
@@ -175,10 +175,31 @@ def test_ai_client_sanitizes_chat_response_metadata(urlopen: Mock) -> None:
     )
     assert result == {
         "cluster": "kkbtest",
+        "clusters": [],
         "answer": "Safe answer",
         "tool_calls": [{"name": "nodes_top", "status": "success"}],
         "evidence": [{"tool": "nodes_top", "status": "success"}],
     }
+
+
+@patch("app.ai_client.urllib.request.urlopen")
+def test_ai_client_preserves_safe_temporary_cluster_choices(urlopen: Mock) -> None:
+    urlopen.return_value = FakeResponse({
+        "answer": "Hangi cluster?", "needs_cluster_selection": True,
+        "cluster_choices": [
+            {"id": "kkbtest", "name": "KKB TEST"},
+            {"id": "rmtest", "name": "RMTEST"},
+        ],
+        "allow_all": True,
+    })
+    result = AIBackendClient("http://ai.internal:8080", 90).chat(
+        "kkbtest", "cluster durumuna bak"
+    )
+    assert result["needs_cluster_selection"] is True
+    assert [item["id"] for item in result["cluster_choices"]] == [
+        "kkbtest", "rmtest",
+    ]
+    assert "url" not in str(result).lower()
 
 
 @patch("app.ai_client.urllib.request.urlopen")
@@ -406,7 +427,7 @@ def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
 def test_ai_template_loading_and_http_200_blank_regression() -> None:
     source = shiftlight_source()
     assert "ShiftLight düşünüyor" in source
-    assert "addCurrentMessage({role: \"assistant\"" in source
+    assert 'role: "assistant", text: data.answer' in source
     assert '!data.answer.trim()' in source
     assert "renderer produced no content" in source
 
@@ -590,7 +611,8 @@ def test_shiftlight_has_no_assistant_selector_but_dashboard_selector_remains() -
     assert "clusterSelect" not in source
     assert 'id="cluster"' in dashboard
     assert "selectedCluster" in dashboard
-    assert 'context_cluster_id: root.dataset.contextCluster' in source
+    assert "context_cluster_id: root.dataset.contextCluster" not in source
+    assert "body.target_cluster_ids = targetClusterIds" in source
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:

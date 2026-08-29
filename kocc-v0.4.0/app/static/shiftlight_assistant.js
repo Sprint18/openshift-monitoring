@@ -79,11 +79,24 @@
             return [safe];
         }).slice(0, 20);
     };
+    const safeClusterChoices = (items) => {
+        if (!Array.isArray(items)) return [];
+        return items.flatMap((item) => {
+            if (!item || typeof item !== "object" || typeof item.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(item.id) || typeof item.name !== "string") return [];
+            return [{id: item.id, name: item.name.slice(0, 100)}];
+        });
+    };
     const safeMessage = (item) => {
         if (!item || typeof item !== "object" || !["user", "assistant"].includes(item.role) || typeof item.text !== "string") return null;
         const text = item.text.slice(0, MAX_TEXT_LENGTH);
         if (!text.trim()) return null;
-        return {role: item.role, text, evidence: item.role === "assistant" ? safeEvidence(item.evidence) : []};
+        const result = {role: item.role, text, evidence: item.role === "assistant" ? safeEvidence(item.evidence) : []};
+        if (item.role === "assistant" && typeof item.pendingQuestion === "string") {
+            result.pendingQuestion = item.pendingQuestion.slice(0, 8000);
+            result.clusterChoices = safeClusterChoices(item.clusterChoices);
+            result.allowAll = item.allowAll === true;
+        }
+        return result;
     };
     const safeConversation = (value) => {
         if (!value || typeof value !== "object") return emptyConversation();
@@ -262,6 +275,24 @@
         });
         article.appendChild(details);
     };
+    const appendClusterChoices = (article, item) => {
+        if (!item.pendingQuestion || !item.clusterChoices.length || isHistoricalConversation()) return;
+        const actions = document.createElement("div"); actions.className = "shiftlight-cluster-choices";
+        const select = (ids) => {
+            item.clusterChoices = []; item.allowAll = false;
+            persistStore(); renderConversation(true);
+            sendQuestion(item.pendingQuestion, ids, false);
+        };
+        item.clusterChoices.forEach((choice) => {
+            const button = addText(actions, "button", "", choice.name); button.type = "button";
+            button.addEventListener("click", () => select([choice.id]));
+        });
+        if (item.allowAll && item.clusterChoices.length > 1) {
+            const all = addText(actions, "button", "", "HEPSİ"); all.type = "button";
+            all.addEventListener("click", () => select(item.clusterChoices.map((choice) => choice.id)));
+        }
+        article.appendChild(actions);
+    };
     const assistantShell = () => {
         const article = document.createElement("article"); article.className = "shiftlight-message assistant";
         const identity = document.createElement("div"); identity.className = "shiftlight-identity";
@@ -311,7 +342,7 @@
         if (!selected || !selected.messages.length) renderEmpty();
         else selected.messages.forEach((item) => {
             if (item.role === "user") addText(conversation, "article", "shiftlight-message user", item.text);
-            else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); addDetailedViewAction(shell); appendEvidence(shell.article, item.evidence); conversation.appendChild(shell.article); }
+            else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); addDetailedViewAction(shell); appendEvidence(shell.article, item.evidence); appendClusterChoices(shell.article, item); conversation.appendChild(shell.article); }
         });
         form.hidden = isHistoricalConversation();
         renderHistory();
@@ -402,18 +433,31 @@
     const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
     const startNew = () => { createConversation(); closeHistory(); renderConversation(true); };
 
-    form.addEventListener("submit", async (event) => {
-        event.preventDefault(); if (requestPending || isHistoricalConversation()) return;
-        const text = messageInput.value; if (!text.trim()) return;
-        addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
+    const sendQuestion = async (text, targetClusterIds = null, addUser = true) => {
+        if (requestPending || isHistoricalConversation() || !text.trim()) return;
+        if (addUser) addCurrentMessage({role: "user", text, evidence: []}, true);
+        messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
+        const body = {message: text};
+        if (Array.isArray(targetClusterIds)) body.target_cluster_ids = targetClusterIds;
         try {
-            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text, context_cluster_id: root.dataset.contextCluster})});
+            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
-            addCurrentMessage({role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence)}); statusText.textContent = "";
+            addCurrentMessage({
+                role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence),
+                pendingQuestion: data.needs_cluster_selection === true ? text : undefined,
+                clusterChoices: data.cluster_choices, allowAll: data.allow_all === true
+            });
+            statusText.textContent = "";
         } catch (error) {
             const message = safeError(error); statusText.textContent = message; statusText.classList.add("error");
             const shell = assistantShell(); shell.article.classList.add("error"); addText(shell.answer, "p", "", message); conversation.appendChild(shell.article); conversation.scrollTop = conversation.scrollHeight;
         } finally { setPending(false); messageInput.focus(); }
+    };
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault(); if (requestPending || isHistoricalConversation()) return;
+        const text = messageInput.value; if (!text.trim()) return;
+        await sendQuestion(text);
     });
     launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); flightMascot.addEventListener("animationend", (event) => { if (["shiftlight-flight", "shiftlight-flight-mobile"].includes(event.animationName) && flightMascot.dataset.state === "flying") landMascot(welcomeRun); }); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
     nudgeClose.addEventListener("click", () => collapseWelcome(welcomeRun)); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });

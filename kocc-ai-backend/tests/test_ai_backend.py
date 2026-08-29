@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import logging
 import urllib.error
 from unittest.mock import Mock, patch
 
@@ -133,7 +135,7 @@ def test_runtime_alias_is_removed_from_operational_question(
 @pytest.mark.parametrize("message", [
     "tüm clusterlara bak", "bütün clusterları kontrol et",
     "hepsinin sağlık durumunu kontrol et", "all clusters",
-    "check all clusters",
+    "check all clusters", "hepsine bak", "check every cluster",
 ])
 def test_all_cluster_intent_is_registry_owned(message: str) -> None:
     scope = explicit_cluster_scope(message, cluster_registry(settings()))
@@ -174,15 +176,15 @@ def test_mcp_unavailable_is_controlled(mcp_class: Mock) -> None:
 def test_chat_missing_token_and_cluster_routing() -> None:
     client = TestClient(create_app(settings(token=None)))
     unavailable = client.post("/api/v1/chat", json={
-        "cluster": "kkbtest", "message": "operator durumunu kontrol et",
+        "message": "KKBTEST operator durumunu kontrol et",
     })
     assert unavailable.status_code == 503
-    assert unavailable.json() == {"error": "llm_unavailable"}
+    assert unavailable.json()["error"] == "llm_unavailable"
     unknown = client.post("/api/v1/chat", json={
-        "cluster": "unknown", "message": "test",
+        "message": "test", "target_cluster_ids": ["unknown"],
     })
-    assert unknown.status_code == 503
-    assert unknown.json() == {"error": "llm_unavailable"}
+    assert unknown.status_code == 400
+    assert unknown.json() == {"error": "invalid_cluster_scope"}
 
 
 @patch("app.main.MCPClient")
@@ -194,10 +196,10 @@ def test_llm_network_error_is_controlled(
     urlopen.side_effect = urllib.error.URLError("internal network detail")
     client = TestClient(create_app(settings(token="not-a-real-token")))
     response = client.post("/api/v1/chat", json={
-        "cluster": "kkbtest", "message": "durumu kontrol et",
+        "message": "KKBTEST durumunu kontrol et",
     })
     assert response.status_code == 503
-    assert response.json() == {"error": "llm_unavailable"}
+    assert response.json()["error"] == "llm_unavailable"
     assert "internal network detail" not in response.text
 
 
@@ -229,12 +231,13 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
     )
     response = TestClient(create_app(settings(token="token"))).post(
         "/api/v1/chat",
-        json={"cluster": "kkbtest", "message": "health"},
+        json={"message": "KKBTEST health"},
     )
     assert response.status_code == 200
     assert response.json() == {
         "cluster": "kkbtest",
-        "answer": "Grounded answer",
+        "clusters": [{"id": "kkbtest", "name": "KKB TEST"}],
+        "answer": "## Cluster: KKB TEST\n\nGrounded answer",
         "tool_calls": [
             {"name": "resources_list", "status": "success"},
             {"name": "nodes_top", "status": "error"},
@@ -272,63 +275,46 @@ def test_explicit_cluster_text_routes_only_to_registry_owned_mcp(
     assert agent_class.call_args.args[3] == expected_cluster
 
 
-@pytest.mark.parametrize(("context", "message", "expected_cluster", "source"), [
-    ("rmtest", "cluster sağlık durumunu kontrol et", "rmtest", "context"),
-    ("rmtest", "KKBTEST clusterını kontrol et", "kkbtest", "explicit"),
-    ("kkbtest", "RMTEST clusterını kontrol et", "rmtest", "explicit"),
-    ("unknown", "cluster durumuna bak", "kkbtest", "default"),
-    (None, "pod durumuna bak", "kkbtest", "default"),
-])
 @patch("app.main.AgentLoop")
 @patch("app.main.MCPClient")
-def test_context_hint_routing_precedence_and_validation(
-    mcp_class: Mock, agent_class: Mock, caplog,
-    context: str | None, message: str, expected_cluster: str, source: str,
+def test_context_hint_does_not_route_and_explicit_alias_wins(
+    mcp_class: Mock, agent_class: Mock,
 ) -> None:
     agent_class.return_value.run.return_value = AgentResult("Grounded", [])
-    payload = {"message": message}
-    if context is not None:
-        payload["context_cluster_id"] = context
-    with caplog.at_level("INFO", logger="kocc_ai"):
-        response = TestClient(create_app(settings(token="token"))).post(
-            "/api/v1/chat", json=payload,
-        )
-    assert response.status_code == 200
-    assert response.json()["cluster"] == expected_cluster
-    expected_url = (
-        "https://rm-mcp.example/mcp" if expected_cluster == "rmtest"
-        else "http://mcp.example/mcp"
+    client = TestClient(create_app(settings(token="token")))
+    clarification = client.post("/api/v1/chat", json={
+        "message": "cluster sağlık durumunu kontrol et",
+        "context_cluster_id": "rmtest",
+    })
+    assert clarification.json()["needs_cluster_selection"] is True
+    mcp_class.assert_not_called()
+    response = client.post(
+        "/api/v1/chat", json={
+            "message": "KKBTEST clusterını kontrol et",
+            "context_cluster_id": "rmtest",
+        },
     )
-    mcp_class.assert_called_once_with(expected_url, 2)
-    assert (
-        f"ai_chat_route scope=single target_cluster={expected_cluster} "
-        f"source={source}"
-    ) in caplog.text
-    assert "private" not in caplog.text
+    assert response.json()["cluster"] == "kkbtest"
+    mcp_class.assert_called_once_with("http://mcp.example/mcp", 2)
 
 
 @patch("app.main.AgentLoop")
 @patch("app.main.MCPClient")
 def test_all_cluster_intent_overrides_context_hint(
-    mcp_class: Mock, agent_class: Mock, caplog,
+    mcp_class: Mock, agent_class: Mock,
 ) -> None:
     agent_class.return_value.run.side_effect = [
         AgentResult("KKB", []), AgentResult("RM", []),
     ]
-    with caplog.at_level("INFO", logger="kocc_ai"):
-        response = TestClient(create_app(settings(token="token"))).post(
-            "/api/v1/chat", json={
-                "context_cluster_id": "rmtest",
-                "message": "tüm clusterlarda degraded ClusterOperator var mı?",
-            },
-        )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={
+            "context_cluster_id": "rmtest",
+            "message": "tüm clusterlarda degraded ClusterOperator var mı?",
+        },
+    )
     assert response.status_code == 200
     assert response.json()["cluster"] == "all"
     assert len(mcp_class.call_args_list) == 2
-    assert (
-        "ai_chat_route scope=all target_clusters=kkbtest,rmtest source=explicit"
-        in caplog.text
-    )
 
 
 @patch("app.main.AgentLoop")
@@ -454,7 +440,7 @@ def test_all_cluster_operator_query_preserves_local_facts_on_remote_failure(
 @patch("app.main.AgentLoop")
 @patch("app.main.MCPClient")
 def test_ai_chat_operational_log_contains_only_safe_metadata(
-    mcp_class: Mock, agent_class: Mock, caplog
+    mcp_class: Mock, agent_class: Mock,
 ) -> None:
     secret_prompt = "private-user-question-never-log"
     agent_class.return_value.run.return_value = AgentResult(
@@ -466,19 +452,25 @@ def test_ai_chat_operational_log_contains_only_safe_metadata(
         }],
         iterations=1,
     )
-    with caplog.at_level("INFO", logger="kocc_ai"):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.getLogger("kocc_ai").addHandler(handler)
+    try:
         response = TestClient(create_app(settings(token="secret-token"))).post(
             "/api/v1/chat",
-            json={"cluster": "kkbtest", "message": secret_prompt},
+            json={"message": secret_prompt, "target_cluster_ids": ["kkbtest"]},
         )
+    finally:
+        logging.getLogger("kocc_ai").removeHandler(handler)
+    logs = stream.getvalue()
     assert response.status_code == 200
-    assert "ai_chat_route scope=single target_cluster=kkbtest" in caplog.text
-    assert "ai_chat_complete cluster=kkbtest outcome=success" in caplog.text
-    assert "tools=resources_list:success" in caplog.text
-    assert "facts=True iterations=1" in caplog.text
-    assert secret_prompt not in caplog.text
-    assert "secret-token" not in caplog.text
-    assert "mcp.example" not in caplog.text
+    assert "ai_chat_scope scope=single target_clusters=kkbtest" in logs
+    assert "ai_chat_complete cluster=kkbtest outcome=success" in logs
+    assert "tools=resources_list:success" in logs
+    assert "facts=True iterations=1" in logs
+    assert secret_prompt not in logs
+    assert "secret-token" not in logs
+    assert "mcp.example" not in logs
 
 
 def test_sse_response_parser() -> None:

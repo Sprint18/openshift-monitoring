@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import Settings
+from app.egressip import (
+    egressip_namespace, is_egressip_intent, matching_egressips,
+    namespace_labels, resource_items,
+)
 from app.llm_client import LLMClient, LLMUnavailable
 from app.mcp_client import MCPClient, MCPUnavailable
 from app.observations import deterministic_observation
@@ -169,6 +173,14 @@ def _node_metrics_intent(message: str) -> bool:
         and any(term in normalized for term in (
             "cpu", "memory", "bellek", "ram", "kullanım", "metric",
         ))
+    )
+
+
+def can_run_without_llm(message: str) -> bool:
+    return (
+        _direct_resource_identity(message)
+        == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
+        or is_egressip_intent(message)
     )
 
 
@@ -342,6 +354,7 @@ class AgentLoop:
 
     def run(self, message: str) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
+        egress_intent = direct_identity is None and is_egressip_intent(message)
         general_health = direct_identity is None and _general_health_intent(message)
         node_metrics = direct_identity is None and _node_metrics_intent(message)
         available_tools = openai_tools(self.mcp.list_tools())
@@ -357,6 +370,10 @@ class AgentLoop:
         available_names = {
             item["function"]["name"] for item in available_tools
         }
+        if egress_intent:
+            return self._egressip_answer(
+                message, available_names, tool_schemas
+            )
         if direct_identity == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]:
             summary, facts = self._fetch_cluster_operators(
                 available_names, tool_schemas
@@ -520,6 +537,92 @@ class AgentLoop:
                     )
 
         raise AgentLimitReached("iteration_limit")
+
+    def _egressip_answer(
+        self, message: str, available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]],
+    ) -> AgentResult:
+        namespace = egressip_namespace(message)
+        if namespace is None:
+            return AgentResult(
+                "EgressIP sorgusu için namespace adını belirtin.", [], [], 0
+            )
+        egress_result, egress_summary = self._call_backend_resource(
+            {
+                "apiVersion": "k8s.ovn.org/v1",
+                "kind": "EgressIP",
+            }, available_names, tool_schemas,
+        )
+        namespace_result, namespace_summary = self._call_backend_resource(
+            {"apiVersion": "v1", "kind": "Namespace"},
+            available_names, tool_schemas,
+        )
+        summaries = [egress_summary, namespace_summary]
+        if egress_result is None or namespace_result is None:
+            return AgentResult(
+                f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                summaries, [], 0,
+            )
+        egress_items = resource_items(egress_result)
+        namespaces = resource_items(namespace_result)
+        labels = namespace_labels(namespaces or [], namespace)
+        if egress_items is None or namespaces is None or labels is None:
+            return AgentResult(
+                f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                summaries, [], 0,
+            )
+        matches = matching_egressips(egress_items, labels)
+        evidence = [{"tool": "resources_list", "status": "success"}]
+        if not matches:
+            return AgentResult(
+                f"**{namespace}** namespace'iyle eşleşen EgressIP bulunamadı.",
+                summaries, evidence, 0,
+            )
+        lines = [f"**Namespace:** {namespace}"]
+        for match in matches:
+            lines.append(f"\n**EgressIP nesnesi:** {match['name']}")
+            assignments = match["assignments"]
+            if assignments:
+                for assignment in assignments:
+                    node = f" — node: `{assignment['node']}`" if assignment["node"] else ""
+                    lines.append(f"- EgressIP: `{assignment['ip']}`{node}")
+            else:
+                lines.append("- Atanmış EgressIP adresi yok.")
+            if match["pod_selector"]:
+                lines.append(
+                    "- Not: Nesne ayrıca bir podSelector içeriyor; yalnız eşleşen "
+                    "pod'lar bu EgressIP kapsamındadır."
+                )
+        return AgentResult("\n".join(lines), summaries, evidence, 0)
+
+    def _call_backend_resource(
+        self, arguments: dict[str, Any], available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, dict[str, str]]:
+        name = "resources_list"
+        summary = {"name": name, "status": "error"}
+        schema = tool_schemas.get(name)
+        if name not in available_names or not isinstance(schema, dict):
+            return None, summary
+        validation_error = validate_tool_arguments(arguments, schema)
+        if validation_error:
+            return None, summary
+        started = time.perf_counter()
+        try:
+            result = self.mcp.call_tool(name, arguments)
+            if result.get("isError"):
+                return None, summary
+            summary["status"] = "success"
+            return result, summary
+        except MCPUnavailable:
+            return None, summary
+        finally:
+            logger.info(
+                "ai_tool_complete cluster_id=%s tool=%s success=%s duration_ms=%s",
+                self.target_cluster_id or "unspecified", name,
+                str(summary["status"] == "success").lower(),
+                round((time.perf_counter() - started) * 1000),
+            )
 
     def _fetch_cluster_operators(
         self, available_names: set[str],

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import logging
+
 import pytest
 
 from app.agent import AgentLoop, SYSTEM_PROMPT, openai_tools
@@ -67,13 +70,19 @@ def test_cluster_operator_arguments_are_canonical_before_mcp_call() -> None:
     assert result.evidence[0]["facts"]["degraded_true_count"] == 0
 
 
-def test_direct_cluster_operator_path_does_not_use_llm_prose(caplog) -> None:
+def test_direct_cluster_operator_path_does_not_use_llm_prose() -> None:
     llm = FakeLLM([{"content": "Toplam 35 ClusterOperator", "tool_calls": None}])
     mcp = mcp_with([{"content": [{"type": "text", "text": operator_table()}]}])
-    with caplog.at_level("INFO", logger="kocc_ai.agent"):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.getLogger("kocc_ai").addHandler(handler)
+    try:
         result = AgentLoop(
             configured(), llm, mcp, "rmtest", "RMTEST"
         ).run("degraded CO var mı?")
+    finally:
+        logging.getLogger("kocc_ai").removeHandler(handler)
+    logs = stream.getvalue()
     assert llm.calls == []
     assert result.answer.startswith("## RMTEST")
     assert "Toplam ClusterOperator: **34**" in result.answer
@@ -81,8 +90,8 @@ def test_direct_cluster_operator_path_does_not_use_llm_prose(caplog) -> None:
     assert (
         "ai_tool_complete cluster_id=rmtest tool=resources_list "
         "resource=ClusterOperator success=true"
-    ) in caplog.text
-    assert "config.openshift.io" not in caplog.text
+    ) in logs
+    assert "config.openshift.io" not in logs
 
 
 def test_cluster_operator_facts_remain_isolated_by_agent_target() -> None:

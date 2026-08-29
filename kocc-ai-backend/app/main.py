@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -9,10 +10,10 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.agent import AgentLimitReached, AgentLoop
+from app.agent import AgentLimitReached, AgentLoop, can_run_without_llm
 from app.clusters import (
-    ClusterScope, UnknownClusterError, cluster_registry,
-    resolve_cluster_request, selected_cluster,
+    UnknownClusterError, cluster_registry,
+    resolve_cluster_request, selected_cluster, validated_cluster_selection,
 )
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
@@ -20,13 +21,37 @@ from app.mcp_client import MCPClient, MCPUnavailable
 
 
 logger = logging.getLogger("kocc_ai")
+if not any(getattr(handler, "_kocc_ai_runtime", False) for handler in logger.handlers):
+    runtime_handler = logging.StreamHandler(sys.stderr)
+    runtime_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+    runtime_handler._kocc_ai_runtime = True  # type: ignore[attr-defined]
+    logger.addHandler(runtime_handler)
 logger.setLevel(logging.INFO)
+logger.propagate = False
 
 
 class ChatRequest(BaseModel):
     cluster: str = "kkbtest"
     context_cluster_id: str | None = None
+    target_cluster_ids: list[str] | None = None
     message: str = Field(min_length=1)
+
+
+def _conversational_answer(message: str) -> str | None:
+    normalized = " ".join(message.casefold().strip(" .!?").split())
+    if normalized in {"merhaba", "selam", "hello", "hi", "teşekkürler", "tesekkurler"}:
+        return "Merhaba, OpenShift operasyonları hakkında nasıl yardımcı olabilirim?"
+    return None
+
+
+def _attributed_answer(answer: str, cluster_name: str) -> str:
+    legacy_heading = f"## {cluster_name}\n"
+    trusted_heading = f"## Cluster: {cluster_name}\n"
+    if answer.startswith(trusted_heading):
+        return answer
+    if answer.startswith(legacy_heading):
+        return trusted_heading + answer[len(legacy_heading):]
+    return f"## Cluster: {cluster_name}\n\n{answer}"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -126,48 +151,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.post("/api/v1/chat")
     def chat(payload: ChatRequest) -> JSONResponse:
+        chat_started = time.perf_counter()
         if len(payload.message) > configuration.agent_max_user_chars:
             return JSONResponse({"error": "message_too_large"}, status_code=400)
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
-        if resolved is None:
-            context_cluster = application.state.clusters.get(
-                payload.context_cluster_id or ""
+        try:
+            selected_scope = validated_cluster_selection(
+                payload.target_cluster_ids, application.state.clusters
             )
-            if context_cluster is not None and context_cluster.enabled:
-                scope = ClusterScope("single", (context_cluster.id,))
-                route_source = "context"
-                operational_message = payload.message
-            else:
-                try:
-                    fallback = selected_cluster(
-                        application.state.clusters, payload.cluster
-                    )
-                except UnknownClusterError:
-                    fallback = selected_cluster(
-                        application.state.clusters, "kkbtest"
-                    )
-                scope = ClusterScope("single", (fallback.id,))
-                route_source = "default"
-                operational_message = payload.message
-        else:
+        except UnknownClusterError:
+            return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
+        if resolved is not None:
             scope = resolved.scope
             route_source = "explicit"
             operational_message = resolved.operational_message or payload.message
-        if not application.state.llm_client.is_configured():
-            return JSONResponse({"error": "llm_unavailable"}, status_code=503)
-
+        elif selected_scope is not None:
+            scope = selected_scope
+            route_source = "selection"
+            operational_message = payload.message
+        else:
+            conversational = _conversational_answer(payload.message)
+            if conversational is not None:
+                logger.info("ai_chat_scope scope=conversational")
+                return JSONResponse({
+                    "answer": conversational, "clusters": [],
+                    "tool_calls": [], "evidence": [],
+                })
+            logger.info("ai_chat_scope scope=clarification")
+            return JSONResponse({
+                "answer": "Bu sorguyu hangi cluster için çalıştırayım?",
+                "needs_cluster_selection": True,
+                "cluster_choices": [
+                    {"id": cluster.id, "name": cluster.name}
+                    for cluster in application.state.clusters.values()
+                    if cluster.enabled
+                ],
+                "allow_all": True,
+            })
         if scope.kind == "single":
             logger.info(
-                "ai_chat_route scope=single target_cluster=%s source=%s",
+                "ai_chat_scope scope=single target_clusters=%s source=%s",
                 scope.cluster_ids[0], route_source,
             )
         else:
             logger.info(
-                "ai_chat_route scope=%s target_clusters=%s source=%s",
-                scope.kind, ",".join(scope.cluster_ids), route_source,
+                "ai_chat_scope scope=%s target_clusters=%s source=%s",
+                "multi" if scope.kind == "multiple" else scope.kind,
+                ",".join(scope.cluster_ids), route_source,
             )
+        if (
+            not application.state.llm_client.is_configured()
+            and not can_run_without_llm(operational_message)
+        ):
+            logger.warning(
+                "ai_chat_failure target_clusters=%s reason=llm_unavailable duration_ms=%s",
+                ",".join(scope.cluster_ids),
+                round((time.perf_counter() - chat_started) * 1000),
+            )
+            return JSONResponse({
+                "error": "llm_unavailable",
+                "message": "ShiftLight AI şu anda kullanılamıyor.",
+            }, status_code=503)
 
         def execute(cluster_id: str) -> dict:
             selected, mcp_client = mcp_for(cluster_id)
@@ -205,9 +251,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "agent_tool_call_limit" if str(exc) == "tool_call_limit"
                     else "agent_iteration_limit"
                 )
+            except Exception:
+                error = "internal_error"
             logger.warning(
-                "ai_chat_complete cluster=%s outcome=%s scope=%s duration_ms=%s",
-                selected.id, error, scope.kind,
+                "ai_chat_failure target_clusters=%s reason=%s duration_ms=%s",
+                selected.id, error,
                 round((time.perf_counter() - started) * 1000),
             )
             return {
@@ -219,9 +267,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if scope.kind == "single":
             outcome = outcomes[0]
             if outcome["status"] != "success":
-                return JSONResponse({"error": outcome["error"]}, status_code=503)
+                return JSONResponse({
+                    "error": outcome["error"],
+                    "message": f"{outcome['name']} cluster verisi şu anda kullanılamıyor.",
+                }, status_code=503)
             return JSONResponse({
-                "cluster": outcome["cluster"], "answer": outcome["answer"],
+                "cluster": outcome["cluster"],
+                "clusters": [{"id": outcome["cluster"], "name": outcome["name"]}],
+                "answer": _attributed_answer(outcome["answer"], outcome["name"]),
                 "tool_calls": outcome["tool_calls"],
                 "evidence": outcome["evidence"],
             })
@@ -246,6 +299,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         return JSONResponse({
             "cluster": "all" if scope.kind == "all" else "multiple",
+            "clusters": [
+                {"id": item["cluster"], "name": item["name"]}
+                for item in outcomes
+            ],
             "answer": "\n\n".join(sections),
             "tool_calls": [
                 {"cluster": item["cluster"], **tool}
