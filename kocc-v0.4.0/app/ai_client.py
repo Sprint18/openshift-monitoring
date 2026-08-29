@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import socket
 import time
 import urllib.error
@@ -151,7 +152,16 @@ class AIBackendClient:
         answer = response.get("answer")
         if response.get("needs_cluster_selection") is True:
             choices = response.get("cluster_choices")
-            if not isinstance(answer, str) or not answer.strip() or not isinstance(choices, list):
+            clarification_id = response.get("clarification_id")
+            if (
+                not isinstance(answer, str) or not answer.strip()
+                or not isinstance(choices, list)
+                or not isinstance(clarification_id, str)
+                or re.fullmatch(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                    clarification_id, flags=re.IGNORECASE,
+                ) is None
+            ):
                 raise AIBackendError("invalid_response")
             safe_choices = []
             for item in choices:
@@ -164,6 +174,7 @@ class AIBackendClient:
             return {
                 "answer": answer,
                 "needs_cluster_selection": True,
+                "clarification_id": clarification_id,
                 "cluster_choices": safe_choices,
                 "allow_all": response.get("allow_all") is True,
                 "evidence": [],

@@ -181,8 +181,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 })
             logger.info("ai_chat_scope scope=clarification")
             return JSONResponse({
-                "answer": "Bu sorguyu hangi cluster için çalıştırayım?",
+                "answer": "Bu sorguyu hangi cluster veya clusterlar için çalıştırayım?",
                 "needs_cluster_selection": True,
+                "clarification_id": str(uuid.uuid4()),
                 "cluster_choices": [
                     {"id": cluster.id, "name": cluster.name}
                     for cluster in application.state.clusters.values()

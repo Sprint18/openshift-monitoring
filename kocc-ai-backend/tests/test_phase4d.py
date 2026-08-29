@@ -34,8 +34,10 @@ def test_ambiguous_operational_request_returns_choices_without_mcp(
         },
     )
     assert response.status_code == 200
-    assert response.json() == {
-        "answer": "Bu sorguyu hangi cluster için çalıştırayım?",
+    payload = response.json()
+    assert isinstance(payload.pop("clarification_id"), str)
+    assert payload == {
+        "answer": "Bu sorguyu hangi cluster veya clusterlar için çalıştırayım?",
         "needs_cluster_selection": True,
         "cluster_choices": [
             {"id": "kkbtest", "name": "KKB TEST"},
@@ -90,6 +92,9 @@ def test_egressip_namespace_intent_forms_are_narrowly_parsed() -> None:
     assert egressip_namespace("test-webmethods-gw egressip nedir") == "test-webmethods-gw"
     assert egressip_namespace("test-webmethods-gw namespace egress ip") == "test-webmethods-gw"
     assert egressip_namespace("test-webmethods-gw'ye ait egressip nedir") == "test-webmethods-gw"
+    assert egressip_namespace(
+        "test-webmethods-gw namespace'inin EgressIP'i nedir?"
+    ) == "test-webmethods-gw"
     assert egressip_namespace("hangi egress ip kullanıyor") is None
 
 
@@ -108,19 +113,37 @@ def _resource_tool() -> dict:
     }
 
 
+def _resource_get_tool() -> dict:
+    return {
+        "name": "resources_get",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "apiVersion": {"type": "string"},
+                "kind": {"type": "string"},
+                "name": {"type": "string"},
+            },
+            "required": ["apiVersion", "kind", "name"],
+        },
+    }
+
+
 def _egress_mcp(namespace: str, ip: str) -> Mock:
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_tool()]
     mcp.call_tool.side_effect = [
         {"items": [{
-            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
-            "metadata": {"name": f"assignment-{namespace}"},
-            "spec": {"namespaceSelector": {"matchLabels": {"scope": namespace}}},
-            "status": {"items": [{"egressIP": ip}]},
-        }]},
-        {"items": [{
             "apiVersion": "v1", "kind": "Namespace",
             "metadata": {"name": namespace, "labels": {"scope": namespace}},
+        }]},
+        {"items": [{
+            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+            "metadata": {"name": f"assignment-{namespace}"},
+            "spec": {
+                "namespaceSelector": {"matchLabels": {"scope": namespace}},
+                "podSelector": {},
+            },
+            "status": {"items": [{"egressIP": ip}]},
         }]},
     ]
     return mcp
@@ -131,6 +154,10 @@ def test_egressip_uses_namespace_selector_and_status_assignment() -> None:
     mcp.list_tools.return_value = [_resource_tool()]
     mcp.call_tool.side_effect = [
         {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-payments", "labels": {"team": "payments"}},
+        }]},
+        {"items": [{
             "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
             "metadata": {"name": "egress-payments"},
             "spec": {
@@ -139,10 +166,6 @@ def test_egressip_uses_namespace_selector_and_status_assignment() -> None:
             },
             "status": {"items": [{"egressIP": "10.60.1.10", "node": "worker-1"}]},
         }]},
-        {"items": [{
-            "apiVersion": "v1", "kind": "Namespace",
-            "metadata": {"name": "test-payments", "labels": {"team": "payments"}},
-        }]},
     ]
     result = AgentLoop(
         settings(token="token"), Mock(), mcp, "kkbtest", "KKB TEST"
@@ -150,9 +173,113 @@ def test_egressip_uses_namespace_selector_and_status_assignment() -> None:
     assert "10.60.1.10" in result.answer
     assert "worker-1" in result.answer
     assert "podSelector" in result.answer
-    assert mcp.call_tool.call_args_list[0].args == (
+    assert mcp.call_tool.call_args_list[1].args == (
         "resources_list", {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"}
     )
+    assert all(call.args[0] != "resources_get" for call in mcp.call_tool.call_args_list)
+
+
+def test_egressip_table_list_uses_get_for_full_runtime_fixture() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool(), _resource_get_tool()]
+    mcp.call_tool.side_effect = [
+        {
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {
+                "name": "test-webmethods-gw",
+                "labels": {"kubernetes.io/metadata.name": "test-webmethods-gw"},
+            },
+        },
+        {"content": [{"type": "text", "text": (
+            "k8s.ovn.org/v1 EgressIP egress-test-ibm-gw\n"
+        )}]},
+        {
+            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+            "metadata": {"name": "egress-test-ibm-gw"},
+            "spec": {
+                "namespaceSelector": {"matchLabels": {
+                    "kubernetes.io/metadata.name": "test-webmethods-gw",
+                }},
+                "podSelector": {},
+            },
+            "status": {"items": [{
+                "egressIP": "10.60.1.207",
+                "node": "kkbocptest1-695gq-ai-worker-z8fr9",
+            }]},
+        },
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST"
+    ).run("test-webmethods-gw namespace EgressIP nedir")
+    assert "test-webmethods-gw" in result.answer
+    assert "egress-test-ibm-gw" in result.answer
+    assert "10.60.1.207" in result.answer
+    assert "kkbocptest1-695gq-ai-worker-z8fr9" in result.answer
+    assert [call.args[0] for call in mcp.call_tool.call_args_list] == [
+        "resources_get", "resources_list", "resources_get",
+    ]
+    assert "podSelector" not in result.answer
+
+
+def test_egressip_list_failure_is_verification_failure() -> None:
+    from app.mcp_client import MCPUnavailable
+
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-payments", "labels": {"scope": "test"}},
+        }]},
+        MCPUnavailable("private list failure"),
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST"
+    ).run("test-payments egressip nedir")
+    assert "doğrulanamadı" in result.answer
+    assert "private" not in result.answer
+
+
+def test_multiple_matching_egressips_are_returned_and_assignments_deduplicated() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-payments", "labels": {"team": "payments"}},
+        }]},
+        {"items": [
+            {
+                "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+                "metadata": {"name": "egress-a"},
+                "spec": {
+                    "namespaceSelector": {"matchLabels": {"team": "payments"}},
+                    "podSelector": {},
+                },
+                "status": {"items": [
+                    {"egressIP": "10.60.1.10", "node": "worker-1"},
+                    {"egressIP": "10.60.1.10", "node": "worker-1"},
+                ]},
+            },
+            {
+                "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+                "metadata": {"name": "egress-b"},
+                "spec": {
+                    "namespaceSelector": {"matchExpressions": [{
+                        "key": "team", "operator": "Exists",
+                    }]},
+                    "podSelector": {},
+                },
+                "status": {"items": [{"egressIP": "10.60.1.11"}]},
+            },
+        ]},
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST"
+    ).run("test-payments egressip nedir")
+    assert "egress-a" in result.answer and "egress-b" in result.answer
+    assert result.answer.count("10.60.1.10") == 1
+    assert "10.60.1.11" in result.answer
 
 
 def test_egressip_no_match_and_mcp_failure_never_fabricate_ip() -> None:
@@ -160,14 +287,17 @@ def test_egressip_no_match_and_mcp_failure_never_fabricate_ip() -> None:
     no_match.list_tools.return_value = [_resource_tool()]
     no_match.call_tool.side_effect = [
         {"items": [{
-            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
-            "metadata": {"name": "unrelated-assignment"},
-            "spec": {"namespaceSelector": {"matchLabels": {"scope": "other"}}},
-            "status": {"items": [{"egressIP": "10.60.1.99"}]},
-        }]},
-        {"items": [{
             "apiVersion": "v1", "kind": "Namespace",
             "metadata": {"name": "test-payments", "labels": {"scope": "test-payments"}},
+        }]},
+        {"items": [{
+            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+            "metadata": {"name": "unrelated-assignment"},
+            "spec": {
+                "namespaceSelector": {"matchLabels": {"scope": "other"}},
+                "podSelector": {},
+            },
+            "status": {"items": [{"egressIP": "10.60.1.99"}]},
         }]},
     ]
     result = AgentLoop(

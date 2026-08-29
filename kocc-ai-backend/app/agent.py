@@ -9,11 +9,13 @@ from typing import Any
 
 from app.config import Settings
 from app.egressip import (
-    egressip_namespace, is_egressip_intent, matching_egressips,
-    namespace_labels, resource_items,
+    egressip_has_full_detail, egressip_namespace, evaluate_egressips,
+    is_egressip_intent, namespace_labels, resource_items, resource_names,
+    resource_object,
 )
 from app.llm_client import LLMClient, LLMUnavailable
 from app.mcp_client import MCPClient, MCPUnavailable
+from app.node_metrics import parse_node_metrics, render_node_metrics
 from app.observations import deterministic_observation
 from app.tool_contracts import (
     KNOWN_RESOURCE_IDENTITIES,
@@ -103,6 +105,7 @@ PUBLIC_FACT_KEYS = frozenset({
     "available_false_count",
     "progressing_true_count",
 })
+MAX_EGRESSIP_DETAIL_CALLS = 25
 
 
 class AgentLimitReached(RuntimeError):
@@ -181,6 +184,7 @@ def can_run_without_llm(message: str) -> bool:
         _direct_resource_identity(message)
         == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
         or is_egressip_intent(message)
+        or _node_metrics_intent(message)
     )
 
 
@@ -435,30 +439,21 @@ class AgentLoop:
                 )
 
         if node_metrics:
-            call = {
-                "id": "backend-node-metrics",
-                "type": "function",
-                "function": {"name": "nodes_top", "arguments": "{}"},
-            }
-            tool_message, summary, _facts = self._execute_call(
-                call, available_names, tool_schemas, failed_calls, None,
+            metrics_result, summary = self._call_backend_tool(
+                "nodes_top", {}, available_names, tool_schemas,
             )
-            if summary["status"] != "success":
+            facts = (
+                parse_node_metrics(metrics_result, self.target_cluster_id)
+                if metrics_result is not None else None
+            )
+            if facts is None:
                 return AgentResult(
                     "Node CPU ve memory metrikleri bu sorguda doğrulanamadı.",
                     [summary], [], 0,
                 )
-            messages.extend([{
-                "role": "assistant", "content": None, "tool_calls": [call],
-            }, tool_message])
-            assistant = self.llm.chat_completion(
-                messages, tools=[], tool_choice="none"
-            )
-            content = assistant.get("content")
-            if not isinstance(content, str) or assistant.get("tool_calls"):
-                raise LLMUnavailable("LLM returned an invalid response")
             return AgentResult(
-                content, [summary], [{"tool": "nodes_top", "status": "success"}], 1
+                render_node_metrics(facts), [summary],
+                [{"tool": "nodes_top", "status": "success"}], 0,
             )
 
         total_calls = 0
@@ -547,35 +542,109 @@ class AgentLoop:
             return AgentResult(
                 "EgressIP sorgusu için namespace adını belirtin.", [], [], 0
             )
-        egress_result, egress_summary = self._call_backend_resource(
+        namespace_result: dict[str, Any] | None = None
+        namespace_summary = {"name": "resources_get", "status": "error"}
+        namespace_get_arguments = self._resource_get_arguments(
+            "v1", "Namespace", namespace, tool_schemas.get("resources_get")
+        )
+        if "resources_get" in available_names and namespace_get_arguments is not None:
+            namespace_result, namespace_summary = self._call_backend_tool(
+                "resources_get", namespace_get_arguments,
+                available_names, tool_schemas, resource="Namespace",
+            )
+        else:
+            namespace_result, namespace_summary = self._call_backend_tool(
+                "resources_list", {"apiVersion": "v1", "kind": "Namespace"},
+                available_names, tool_schemas, resource="Namespace",
+            )
+        namespace_object = (
+            resource_object(namespace_result) if namespace_result is not None else None
+        )
+        namespace_items = (
+            [namespace_object] if namespace_object is not None
+            else resource_items(namespace_result) if namespace_result is not None else None
+        )
+        labels = namespace_labels(namespace_items or [], namespace)
+        if namespace_items is None or labels is None:
+            return AgentResult(
+                f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                [namespace_summary], [], 0,
+            )
+
+        egress_result, egress_summary = self._call_backend_tool(
+            "resources_list",
             {
                 "apiVersion": "k8s.ovn.org/v1",
                 "kind": "EgressIP",
-            }, available_names, tool_schemas,
+            }, available_names, tool_schemas, resource="EgressIP",
         )
-        namespace_result, namespace_summary = self._call_backend_resource(
-            {"apiVersion": "v1", "kind": "Namespace"},
-            available_names, tool_schemas,
-        )
-        summaries = [egress_summary, namespace_summary]
-        if egress_result is None or namespace_result is None:
+        summaries = [namespace_summary, egress_summary]
+        if egress_result is None:
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
             )
-        egress_items = resource_items(egress_result)
-        namespaces = resource_items(namespace_result)
-        labels = namespace_labels(namespaces or [], namespace)
-        if egress_items is None or namespaces is None or labels is None:
+        listed_items = resource_items(egress_result)
+        if listed_items == []:
+            detailed_items: list[dict[str, Any]] = []
+        else:
+            names = resource_names(egress_result, "EgressIP")
+            if names is None:
+                return AgentResult(
+                    f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                    summaries, [], 0,
+                )
+            listed_by_name = {
+                item["metadata"]["name"]: item for item in (listed_items or [])
+                if isinstance(item.get("metadata"), dict)
+                and isinstance(item["metadata"].get("name"), str)
+            }
+            detail_names = [
+                name for name in names
+                if not egressip_has_full_detail(listed_by_name.get(name, {}))
+            ]
+            if len(detail_names) > MAX_EGRESSIP_DETAIL_CALLS:
+                return AgentResult(
+                    f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                    summaries, [], 0,
+                )
+            detailed_items = [
+                item for name, item in listed_by_name.items()
+                if name not in detail_names
+            ]
+            for name in detail_names:
+                arguments = self._resource_get_arguments(
+                    "k8s.ovn.org/v1", "EgressIP", name,
+                    tool_schemas.get("resources_get"),
+                )
+                if arguments is None:
+                    return AgentResult(
+                        f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                        summaries, [], 0,
+                    )
+                detail, detail_summary = self._call_backend_tool(
+                    "resources_get", arguments, available_names, tool_schemas,
+                    resource="EgressIP",
+                )
+                summaries.append(detail_summary)
+                item = resource_object(detail) if detail is not None else None
+                if item is None or not egressip_has_full_detail(item):
+                    return AgentResult(
+                        f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
+                        summaries, [], 0,
+                    )
+                detailed_items.append(item)
+        matches, verified = evaluate_egressips(detailed_items, labels)
+        if not verified:
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
             )
-        matches = matching_egressips(egress_items, labels)
         evidence = [{"tool": "resources_list", "status": "success"}]
         if not matches:
             return AgentResult(
-                f"**{namespace}** namespace'iyle eşleşen EgressIP bulunamadı.",
+                f"**Namespace:** {namespace}\n\n"
+                "Bu namespace ile eşleşen bir EgressIP bulunamadı.",
                 summaries, evidence, 0,
             )
         lines = [f"**Namespace:** {namespace}"]
@@ -584,8 +653,9 @@ class AgentLoop:
             assignments = match["assignments"]
             if assignments:
                 for assignment in assignments:
-                    node = f" — node: `{assignment['node']}`" if assignment["node"] else ""
-                    lines.append(f"- EgressIP: `{assignment['ip']}`{node}")
+                    lines.append(f"- EgressIP: `{assignment['ip']}`")
+                    if assignment["node"]:
+                        lines.append(f"  - Node: `{assignment['node']}`")
             else:
                 lines.append("- Atanmış EgressIP adresi yok.")
             if match["pod_selector"]:
@@ -595,11 +665,21 @@ class AgentLoop:
                 )
         return AgentResult("\n".join(lines), summaries, evidence, 0)
 
-    def _call_backend_resource(
-        self, arguments: dict[str, Any], available_names: set[str],
-        tool_schemas: dict[str, dict[str, Any]],
+    @staticmethod
+    def _resource_get_arguments(
+        api_version: str, kind: str, name: str, schema: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict):
+            return None
+        properties = schema["properties"]
+        values = {"apiVersion": api_version, "kind": kind, "name": name}
+        arguments = {key: value for key, value in values.items() if key in properties}
+        return arguments if {"apiVersion", "kind", "name"}.issubset(arguments) else None
+
+    def _call_backend_tool(
+        self, name: str, arguments: dict[str, Any], available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]], resource: str | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, str]]:
-        name = "resources_list"
         summary = {"name": name, "status": "error"}
         schema = tool_schemas.get(name)
         if name not in available_names or not isinstance(schema, dict):
@@ -618,8 +698,9 @@ class AgentLoop:
             return None, summary
         finally:
             logger.info(
-                "ai_tool_complete cluster_id=%s tool=%s success=%s duration_ms=%s",
+                "ai_tool_complete cluster_id=%s tool=%s%s success=%s duration_ms=%s",
                 self.target_cluster_id or "unspecified", name,
+                f" resource={resource}" if resource else "",
                 str(summary["status"] == "success").lower(),
                 round((time.perf_counter() - started) * 1000),
             )

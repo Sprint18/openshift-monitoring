@@ -93,6 +93,7 @@
         const result = {role: item.role, text, evidence: item.role === "assistant" ? safeEvidence(item.evidence) : []};
         if (item.role === "assistant" && typeof item.pendingQuestion === "string") {
             result.pendingQuestion = item.pendingQuestion.slice(0, 8000);
+            result.clarificationId = typeof item.clarificationId === "string" ? item.clarificationId.slice(0, 100) : "";
             result.clusterChoices = safeClusterChoices(item.clusterChoices);
             result.allowAll = item.allowAll === true;
         }
@@ -276,20 +277,22 @@
         article.appendChild(details);
     };
     const appendClusterChoices = (article, item) => {
-        if (!item.pendingQuestion || !item.clusterChoices.length || isHistoricalConversation()) return;
+        if (!item.pendingQuestion || !item.clarificationId || !item.clusterChoices.length || isHistoricalConversation()) return;
         const actions = document.createElement("div"); actions.className = "shiftlight-cluster-choices";
-        const select = (ids) => {
+        const select = (label, ids) => {
+            const pendingQuestion = item.pendingQuestion;
             item.clusterChoices = []; item.allowAll = false;
             persistStore(); renderConversation(true);
-            sendQuestion(item.pendingQuestion, ids, false);
+            addCurrentMessage({role: "user", text: label, evidence: []}, true);
+            sendQuestion(pendingQuestion, ids, false);
         };
         item.clusterChoices.forEach((choice) => {
             const button = addText(actions, "button", "", choice.name); button.type = "button";
-            button.addEventListener("click", () => select([choice.id]));
+            button.addEventListener("click", () => select(choice.name, [choice.id]));
         });
         if (item.allowAll && item.clusterChoices.length > 1) {
             const all = addText(actions, "button", "", "HEPSİ"); all.type = "button";
-            all.addEventListener("click", () => select(item.clusterChoices.map((choice) => choice.id)));
+            all.addEventListener("click", () => select("HEPSİ", item.clusterChoices.map((choice) => choice.id)));
         }
         article.appendChild(actions);
     };
@@ -445,6 +448,7 @@
             addCurrentMessage({
                 role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence),
                 pendingQuestion: data.needs_cluster_selection === true ? text : undefined,
+                clarificationId: data.clarification_id,
                 clusterChoices: data.cluster_choices, allowAll: data.allow_all === true
             });
             statusText.textContent = "";

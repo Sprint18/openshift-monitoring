@@ -190,15 +190,17 @@ def test_direct_node_metrics_intent_forces_nodes_top_only() -> None:
     llm = FakeLLM([{
         "content": "worker-1 CPU 120m, memory 1Gi", "tool_calls": None,
     }])
-    mcp = node_metrics_mcp([{"nodes": [{"name": "worker-1"}]}])
+    mcp = node_metrics_mcp([{"nodes": [{
+        "name": "worker-1", "cpu": "120m", "cpuPercent": "6%",
+        "memory": "1Gi", "memoryPercent": "25%",
+    }]}])
     result = AgentLoop(
         configured(), llm, mcp, "rmtest", "RMTEST"
     ).run("node CPU ve memory kullanımı")
     assert mcp.calls == [("nodes_top", {})]
     assert result.evidence == [{"tool": "nodes_top", "status": "success"}]
-    assert result.answer == "worker-1 CPU 120m, memory 1Gi"
-    assert llm.calls[0]["tools"] == []
-    assert llm.calls[0]["messages"][1]["content"] == "node CPU ve memory kullanımı"
+    assert "| worker-1 | 120m | 6% | 1Gi | 25% |" in result.answer
+    assert llm.calls == []
 
 
 def test_direct_node_metrics_failure_does_not_fabricate_values() -> None:

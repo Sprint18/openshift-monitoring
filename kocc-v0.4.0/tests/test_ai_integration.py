@@ -186,6 +186,7 @@ def test_ai_client_sanitizes_chat_response_metadata(urlopen: Mock) -> None:
 def test_ai_client_preserves_safe_temporary_cluster_choices(urlopen: Mock) -> None:
     urlopen.return_value = FakeResponse({
         "answer": "Hangi cluster?", "needs_cluster_selection": True,
+        "clarification_id": "79f71180-9f62-4bdb-83c2-0ba4458ac878",
         "cluster_choices": [
             {"id": "kkbtest", "name": "KKB TEST"},
             {"id": "rmtest", "name": "RMTEST"},
@@ -196,6 +197,7 @@ def test_ai_client_preserves_safe_temporary_cluster_choices(urlopen: Mock) -> No
         "kkbtest", "cluster durumuna bak"
     )
     assert result["needs_cluster_selection"] is True
+    assert result["clarification_id"] == "79f71180-9f62-4bdb-83c2-0ba4458ac878"
     assert [item["id"] for item in result["cluster_choices"]] == [
         "kkbtest", "rmtest",
     ]
@@ -613,6 +615,18 @@ def test_shiftlight_has_no_assistant_selector_but_dashboard_selector_remains() -
     assert "selectedCluster" in dashboard
     assert "context_cluster_id: root.dataset.contextCluster" not in source
     assert "body.target_cluster_ids = targetClusterIds" in source
+
+
+def test_shiftlight_clarification_selection_is_a_bound_history_turn() -> None:
+    source = shiftlight_source()
+    assert "result.clarificationId" in source
+    assert "!item.clarificationId" in source
+    assert 'addCurrentMessage({role: "user", text: label' in source
+    assert 'select(choice.name, [choice.id])' in source
+    assert 'select("HEPSİ"' in source
+    assert "sendQuestion(pendingQuestion, ids, false)" in source
+    assert "addCurrentMessage({role: \"user\", text: pendingQuestion" not in source
+    assert "mcp_url" not in source.lower()
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:
