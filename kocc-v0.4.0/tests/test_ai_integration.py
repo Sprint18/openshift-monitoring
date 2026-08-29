@@ -86,13 +86,15 @@ def test_ai_chat_rejects_empty_message(ai_client: Mock, message: str) -> None:
 
 
 @patch("app.main.ai_backend_client")
-def test_ai_chat_rejects_unsupported_cluster(ai_client: Mock) -> None:
+def test_ai_chat_ignores_legacy_browser_cluster_for_routing(ai_client: Mock) -> None:
+    ai_client.chat.return_value = {
+        "cluster": "rmtest", "answer": "RMTEST", "tool_calls": [], "evidence": [],
+    }
     response = client.post("/api/ai/chat", json={
-        "cluster": "unknown", "message": "health",
+        "cluster": "unknown", "message": "RMTEST'e bak",
     })
-    assert response.status_code == 400
-    assert response.json()["error"] == "unsupported_cluster"
-    ai_client.chat.assert_not_called()
+    assert response.status_code == 200
+    ai_client.chat.assert_called_once_with("kkbtest", "RMTEST'e bak")
 
 
 @pytest.mark.parametrize(("code", "status", "error"), [
@@ -257,8 +259,8 @@ def test_ai_template_uses_safe_text_rendering_and_only_kocc_endpoints() -> None:
     source = shiftlight_source()
     assert "innerHTML" not in source
     assert "textContent" in source
-    assert 'fetchJson("/api/ai/clusters")' in source
     assert 'fetchJson("/api/ai/chat"' in source
+    assert 'fetchJson("/api/ai/clusters")' not in source
     assert "svc.cluster.local" not in source
     assert "data.evidence" in source
     assert "item.tool" in source
@@ -326,13 +328,13 @@ def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
     assert "!text.trim()" in source
 
 
-def test_ai_template_new_chat_and_cluster_change_isolate_history() -> None:
+def test_ai_template_new_chat_isolates_history_without_cluster_state() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     assert 'id="shiftlight-new"' in partial
     assert "conversation.replaceChildren()" in source
     assert 'newButton.addEventListener("click"' in source
-    assert 'clusterSelect.addEventListener("change"' in source
-    assert "startNew(selected)" in source
+    assert 'clusterSelect.addEventListener("change"' not in source
+    assert "const startNew = ()" in source
     assert "newButton.disabled = pending" in source
     assert "suggestions.forEach" in source
 
@@ -365,7 +367,7 @@ def test_ai_template_loading_and_http_200_blank_regression() -> None:
 def test_ai_template_brand_context_evidence_and_responsive_hooks() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
-    assert 'id="shiftlight-cluster"' in partial
+    assert 'id="shiftlight-cluster"' not in partial
     assert 'id="shiftlight-new"' in partial
     assert "Kullanılan cluster verileri" in source
     assert "shiftlight-evidence" in source
@@ -510,10 +512,10 @@ def test_shiftlight_welcome_replay_isolated_and_open_drawer_cancels_sequence() -
     assert 'pointer-events:none' in (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
 
 
-def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() -> None:
+def test_shiftlight_session_history_is_bounded_minimal_and_routing_free() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     assert 'const SESSION_KEY = "kocc.shiftlight.conversations.v1"' in source
-    assert "const STORE_VERSION = 1" in source
+    assert "const STORE_VERSION = 2" in source
     assert "const MAX_CONVERSATIONS = 10" in source
     assert "sessionStorage.setItem(SESSION_KEY" in source
     assert "localStorage" not in source
@@ -521,7 +523,10 @@ def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() ->
     assert "conversations: []" in source
     assert "store.conversations.push(item)" in source
     assert "store.conversations = store.conversations.slice(-MAX_CONVERSATIONS)" in source
-    assert "item.cluster" in source
+    conversation_sanitizer = source[
+        source.index("const safeConversation"):source.index("const safeStore")
+    ]
+    assert "item.cluster" not in conversation_sanitizer
     assert "createdAt, updatedAt, messages" in source
     assert 'id="shiftlight-history-list"' in partial
     assert "Sohbetler" in partial
@@ -529,6 +534,16 @@ def test_shiftlight_session_history_is_bounded_minimal_and_cluster_isolated() ->
     assert "kubeconfig" not in source
     assert "api-token" not in source
     assert "tool_calls" not in source
+
+
+def test_shiftlight_has_no_assistant_selector_but_dashboard_selector_remains() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
+    dashboard = (Path(__file__).parents[1] / "app/templates/index.html").read_text()
+    assert 'id="shiftlight-cluster"' not in partial
+    assert "clusterSelect" not in source
+    assert 'id="cluster"' in dashboard
+    assert "selectedCluster" in dashboard
+    assert 'JSON.stringify({message: text})' in source
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:

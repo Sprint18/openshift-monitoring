@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from app.agent import AgentLimitReached, AgentLoop
 from app.clusters import (
     ClusterScope, UnknownClusterError, cluster_registry,
-    explicit_cluster_scope, selected_cluster,
+    resolve_cluster_request, selected_cluster,
 )
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
@@ -23,7 +23,7 @@ logger = logging.getLogger("kocc_ai")
 
 
 class ChatRequest(BaseModel):
-    cluster: str
+    cluster: str = "kkbtest"
     message: str = Field(min_length=1)
 
 
@@ -126,25 +126,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def chat(payload: ChatRequest) -> JSONResponse:
         if len(payload.message) > configuration.agent_max_user_chars:
             return JSONResponse({"error": "message_too_large"}, status_code=400)
-        scope = explicit_cluster_scope(
+        resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
-        if scope is None:
+        if resolved is None:
             try:
                 selected_cluster(application.state.clusters, payload.cluster)
             except UnknownClusterError:
                 return JSONResponse({"error": "unknown_cluster"}, status_code=404)
             scope = ClusterScope("single", (payload.cluster,))
+            operational_message = payload.message
+        else:
+            scope = resolved.scope
+            operational_message = resolved.operational_message or payload.message
         if not application.state.llm_client.is_configured():
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
+
+        if scope.kind == "single":
+            logger.info(
+                "ai_chat_route scope=single target_cluster=%s",
+                scope.cluster_ids[0],
+            )
+        else:
+            logger.info(
+                "ai_chat_route scope=%s clusters=%s",
+                scope.kind, ",".join(scope.cluster_ids),
+            )
 
         def execute(cluster_id: str) -> dict:
             selected, mcp_client = mcp_for(cluster_id)
             started = time.perf_counter()
             try:
                 result = AgentLoop(
-                    configuration, application.state.llm_client, mcp_client
-                ).run(payload.message)
+                    configuration, application.state.llm_client, mcp_client,
+                    selected.id, selected.name,
+                ).run(operational_message)
                 evidence = [
                     {"cluster": selected.id, **item}
                     for item in result.evidence
@@ -201,11 +217,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         sections = []
         for outcome in outcomes:
-            body = (
-                outcome["answer"] if outcome["status"] == "success"
-                else "Cluster verisi şu anda kullanılamıyor."
-            )
-            sections.append(f"## {outcome['name']}\n\n{body}")
+            if outcome["status"] == "success":
+                body = outcome["answer"]
+                sections.append(
+                    body if body.startswith(f"## {outcome['name']}\n")
+                    else f"## {outcome['name']}\n\n{body}"
+                )
+            else:
+                sections.append(
+                    f"## {outcome['name']}\n\n"
+                    "Cluster verisi şu anda kullanılamıyor."
+                )
         return JSONResponse({
             "cluster": "all" if scope.kind == "all" else "multiple",
             "answer": "\n\n".join(sections),

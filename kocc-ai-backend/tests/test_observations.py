@@ -108,12 +108,12 @@ def test_cluster_operator_question_stops_after_sufficient_resource_evidence() ->
     result = AgentLoop(configured(), llm, mcp).run(
         "Degraded ClusterOperator var mı?"
     )
-    assert "1 ClusterOperator" in result.answer
+    assert "Toplam ClusterOperator: **1**" in result.answer
     assert "Degraded=True: **0**" in result.answer
     assert mcp.calls == [("resources_list", {
         "apiVersion": "config.openshift.io/v1", "kind": "ClusterOperator"
     })]
-    assert len(llm.calls) == 1
+    assert llm.calls == []
 
 
 def test_exact_failed_tool_call_is_not_executed_twice() -> None:

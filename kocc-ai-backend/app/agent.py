@@ -70,7 +70,7 @@ DIRECT_RESOURCE_TERMS = {
 }
 DIRECT_STATUS_TERMS = (
     "degraded", "available", "progressing", "status", "durum", "sağlık",
-    "health",
+    "health", "kaç", "say", "envanter",
 )
 
 TOOL_ALLOWLIST = frozenset({
@@ -147,16 +147,20 @@ def _direct_resource_identity(message: str) -> ResourceIdentity | None:
     for key, aliases in DIRECT_RESOURCE_TERMS.items():
         if any(alias in normalized for alias in aliases):
             return KNOWN_RESOURCE_IDENTITIES[key]
+    if re.search(r"\bco\b", normalized):
+        return KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
     return None
 
 
-def _direct_cluster_operator_answer(facts: dict[str, Any]) -> str:
-    return (
-        f"Doğrudan cluster verisiyle **{facts['resource_count']} ClusterOperator** "
-        "doğrulandı.\n\n"
-        f"- Available=False: **{facts['available_false_count']}**\n"
+def _direct_cluster_operator_answer(
+    facts: dict[str, Any], cluster_name: str | None = None
+) -> str:
+    heading = f"## {cluster_name}\n\n" if cluster_name else ""
+    return heading + (
+        f"- Toplam ClusterOperator: **{facts['resource_count']}**\n"
         f"- Degraded=True: **{facts['degraded_true_count']}**\n"
-        f"- Progressing=True: **{facts['progressing_true_count']}**"
+        f"- Progressing=True: **{facts['progressing_true_count']}**\n"
+        f"- Available=False: **{facts['available_false_count']}**"
     )
 
 
@@ -306,11 +310,15 @@ def _tool_context(
 
 class AgentLoop:
     def __init__(
-        self, settings: Settings, llm_client: LLMClient, mcp_client: MCPClient
+        self, settings: Settings, llm_client: LLMClient, mcp_client: MCPClient,
+        target_cluster_id: str | None = None,
+        target_cluster_name: str | None = None,
     ) -> None:
         self.settings = settings
         self.llm = llm_client
         self.mcp = mcp_client
+        self.target_cluster_id = target_cluster_id
+        self.target_cluster_name = target_cluster_name
 
     def run(self, message: str) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
@@ -327,8 +335,50 @@ class AgentLoop:
         available_names = {
             item["function"]["name"] for item in available_tools
         }
+        if direct_identity == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]:
+            call = {
+                "id": "backend-clusteroperator",
+                "function": {
+                    "name": "resources_list",
+                    "arguments": json.dumps({
+                        "apiVersion": "config.openshift.io/v1",
+                        "kind": "ClusterOperator",
+                    }),
+                },
+            }
+            _tool_message, summary, facts = self._execute_call(
+                call, available_names, tool_schemas, set(), direct_identity,
+            )
+            evidence: list[dict[str, Any]] = []
+            if summary["status"] == "success":
+                public_facts = {
+                    key: value for key, value in facts.items()
+                    if key in PUBLIC_FACT_KEYS and isinstance(value, int)
+                }
+                evidence.append({
+                    "tool": "resources_list", "status": "success",
+                    "facts": public_facts,
+                })
+                if all(key in public_facts for key in PUBLIC_FACT_KEYS):
+                    return AgentResult(
+                        _direct_cluster_operator_answer(
+                            public_facts, self.target_cluster_name
+                        ),
+                        [summary], evidence, 0,
+                    )
+            return AgentResult(
+                "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı.",
+                [summary], evidence, 0,
+            )
+
+        trusted_cluster = (
+            f"\nTRUSTED BACKEND TARGET CLUSTER: {self.target_cluster_name} "
+            f"(canonical id: {self.target_cluster_id}). The target is routing "
+            "context, not a Kubernetes namespace or resource name."
+            if self.target_cluster_id and self.target_cluster_name else ""
+        )
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + trusted_cluster},
             {"role": "user", "content": message},
         ]
         audit: list[dict[str, str]] = []
@@ -463,8 +513,9 @@ class AgentLoop:
             failed_calls.add(signature)
             content = "Tool execution failed: unavailable or timeout."
         logger.info(
-            "tool_execution tool_name=%s tool_status=%s duration_ms=%s",
-            name, summary["status"],
+            "tool_execution cluster_id=%s tool=%s success=%s duration_ms=%s",
+            self.target_cluster_id or "unspecified", name,
+            summary["status"] == "success",
             round((time.perf_counter() - started) * 1000),
         )
         return _tool_error(call_id, content), summary, facts

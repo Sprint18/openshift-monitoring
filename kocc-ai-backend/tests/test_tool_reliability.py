@@ -62,9 +62,38 @@ def test_cluster_operator_arguments_are_canonical_before_mcp_call() -> None:
     assert mcp.calls == [("resources_list", {
         "apiVersion": "config.openshift.io/v1", "kind": "ClusterOperator"
     })]
-    assert "34 ClusterOperator" in result.answer
+    assert "Toplam ClusterOperator: **34**" in result.answer
     assert "operator.openshift.io" not in result.answer
     assert result.evidence[0]["facts"]["degraded_true_count"] == 0
+
+
+def test_direct_cluster_operator_path_does_not_use_llm_prose() -> None:
+    llm = FakeLLM([{"content": "Toplam 35 ClusterOperator", "tool_calls": None}])
+    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+    result = AgentLoop(
+        configured(), llm, mcp, "rmtest", "RMTEST"
+    ).run("degraded CO var mı?")
+    assert llm.calls == []
+    assert result.answer.startswith("## RMTEST")
+    assert "Toplam ClusterOperator: **34**" in result.answer
+    assert "35" not in result.answer
+
+
+def test_cluster_operator_facts_remain_isolated_by_agent_target() -> None:
+    kkb = AgentLoop(
+        configured(), FakeLLM([]),
+        mcp_with([{"items": [operator(f"kkb-{index}") for index in range(33)]}]),
+        "kkbtest", "KKB TEST",
+    ).run("ClusterOperator sağlık durumuna bak")
+    rm = AgentLoop(
+        configured(), FakeLLM([]),
+        mcp_with([{"items": [operator(f"rm-{index}") for index in range(34)]}]),
+        "rmtest", "RMTEST",
+    ).run("ClusterOperator sağlık durumuna bak")
+    assert "## KKB TEST" in kkb.answer and "**33**" in kkb.answer
+    assert "## RMTEST" in rm.answer and "**34**" in rm.answer
+    assert "**34**" not in kkb.answer
+    assert "**33**" not in rm.answer
 
 
 def test_invalid_unknown_argument_never_reaches_mcp() -> None:
@@ -144,31 +173,37 @@ def test_cluster_operator_numeric_contradiction_uses_deterministic_fallback(
     assert "Degraded=True: **0**" in result
     assert "Available=False: **0**" in result
     assert "Progressing=True: **0**" in result
-    assert "Degraded ClusterOperator tespit edilmedi." in result
 
 
-def test_cluster_operator_consistent_answer_is_not_rewritten() -> None:
-    expected = "34 ClusterOperator bulundu. Degraded: 0."
-    assert cluster_operator_answer(expected) == expected
+def test_direct_cluster_operator_answer_is_always_backend_rendered() -> None:
+    assert cluster_operator_answer("34 ClusterOperator bulundu. Degraded: 0.") == (
+        "- Toplam ClusterOperator: **34**\n"
+        "- Degraded=True: **0**\n"
+        "- Progressing=True: **0**\n"
+        "- Available=False: **0**"
+    )
 
 
 @pytest.mark.parametrize("answer", [
     "Available 34/34",
     "34 ClusterOperator bulundu. OpenShift sürümü 4.18.40.",
 ])
-def test_cluster_operator_consistent_aggregate_or_unrelated_version_is_preserved(
+def test_cluster_operator_llm_prose_cannot_override_authoritative_facts(
     answer: str,
 ) -> None:
-    assert cluster_operator_answer(answer) == answer
+    result = cluster_operator_answer(answer)
+    assert "Toplam ClusterOperator: **34**" in result
+    assert "4.18.40" not in result
 
 
-def test_cluster_operator_answer_without_authoritative_facts_is_not_rewritten() -> None:
+def test_cluster_operator_answer_without_authoritative_facts_never_invents_count() -> None:
     expected = "35 ClusterOperator bulundu."
     result = AgentLoop(
         configured(), FakeLLM([{"content": expected, "tool_calls": None}]), mcp_with([])
     ).run("ClusterOperator envanterini say")
 
-    assert result.answer == expected
+    assert result.answer == "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı."
+    assert "35" not in result.answer
 
 
 def test_prompt_forbids_unsupported_rbac_inference() -> None:

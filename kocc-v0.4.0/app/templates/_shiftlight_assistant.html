@@ -1,6 +1,6 @@
 <link rel="icon" href="/static/kkb-turuncu-lacivert-logo.png">
 <link rel="stylesheet" href="/static/shiftlight_assistant.css">
-<div id="shiftlight-root" data-initial-cluster="{{ selected_cluster }}" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
+<div id="shiftlight-root" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
     <div id="shiftlight-nudge" class="shiftlight-nudge" hidden role="status">
         <button id="shiftlight-nudge-close" type="button" aria-label="ShiftLight karşılama mesajını kapat">×</button>
         <strong>Merhaba 👋</strong><span>Ben KKB ShiftLight AI.<br>Size nasıl yardımcı olabilirim?</span>
@@ -16,7 +16,6 @@
             <div class="shiftlight-header-actions"><span class="shiftlight-readonly">Read-only</span><button id="shiftlight-expand" type="button" aria-label="ShiftLight'ı tam ekran aç" title="Tam Ekran" aria-pressed="false">⛶</button><button id="shiftlight-close" type="button" aria-label="Asistanı kapat">×</button></div>
         </header>
         <div class="shiftlight-toolbar">
-            <label for="shiftlight-cluster">Cluster<select id="shiftlight-cluster" disabled><option>Yükleniyor…</option></select></label>
             <div><button id="shiftlight-history-toggle" type="button" aria-controls="shiftlight-history" aria-expanded="false">Sohbetler</button><button id="shiftlight-new" type="button">Yeni Sohbet</button></div>
         </div>
         <div id="shiftlight-history" class="shiftlight-history" hidden><div class="shiftlight-history-title"><strong>Sohbetler</strong><button id="shiftlight-history-close" type="button" aria-label="Sohbet listesini kapat">×</button></div><div id="shiftlight-history-list" class="shiftlight-history-list"></div></div>

@@ -6,7 +6,7 @@
 
     const SESSION_KEY = "kocc.shiftlight.conversations.v1";
     const NUDGE_KEY = "kocc.shiftlight.nudge-dismissed.v1";
-    const STORE_VERSION = 1;
+    const STORE_VERSION = 2;
     const MAX_CONVERSATIONS = 10;
     const MAX_MESSAGES = 100;
     const MAX_TEXT_LENGTH = 50000;
@@ -37,7 +37,6 @@
     const expandButton = document.getElementById("shiftlight-expand");
     const nudge = document.getElementById("shiftlight-nudge");
     const nudgeClose = document.getElementById("shiftlight-nudge-close");
-    const clusterSelect = document.getElementById("shiftlight-cluster");
     const historyToggle = document.getElementById("shiftlight-history-toggle");
     const historyPanel = document.getElementById("shiftlight-history");
     const historyClose = document.getElementById("shiftlight-history-close");
@@ -49,7 +48,6 @@
     const sendButton = document.getElementById("shiftlight-send");
     const statusText = document.getElementById("shiftlight-status");
     let requestPending = false;
-    let supportedClusters = [];
     let fullscreen = false;
     let welcomeRun = 0;
 
@@ -61,7 +59,7 @@
 
     const conversationId = () => globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const nowIso = () => new Date().toISOString();
-    const emptyConversation = (cluster = "") => { const timestamp = nowIso(); return {id: conversationId(), cluster, createdAt: timestamp, updatedAt: timestamp, messages: []}; };
+    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, messages: []}; };
     const emptyStore = () => ({version: STORE_VERSION, activeConversationId: null, conversations: []});
     const isSafeInteger = (value) => Number.isInteger(value) && value >= 0;
     const safeFacts = (facts) => {
@@ -88,16 +86,16 @@
         return {role: item.role, text, evidence: item.role === "assistant" ? safeEvidence(item.evidence) : []};
     };
     const safeConversation = (value) => {
-        if (!value || typeof value !== "object" || typeof value.cluster !== "string") return emptyConversation();
+        if (!value || typeof value !== "object") return emptyConversation();
         const messages = Array.isArray(value.messages) ? value.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES) : [];
         const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
         const updatedAt = typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
-        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), cluster: value.cluster.slice(0, 80), createdAt, updatedAt, messages};
+        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, messages};
     };
     const safeStore = (value) => {
         let conversations = [];
         let activeConversationId = null;
-        if (value && value.version === STORE_VERSION && Array.isArray(value.conversations)) {
+        if (value && [1, STORE_VERSION].includes(value.version) && Array.isArray(value.conversations)) {
             conversations = value.conversations.map(safeConversation).slice(-MAX_CONVERSATIONS);
             activeConversationId = typeof value.activeConversationId === "string" ? value.activeConversationId : null;
         } else if (value && (value.current || value.previous)) {
@@ -118,8 +116,8 @@
     };
     const activeConversation = () => store.conversations.find((item) => item.id === store.activeConversationId) || null;
     const isHistoricalConversation = () => Boolean(store.conversations.length && store.activeConversationId !== store.conversations[store.conversations.length - 1].id);
-    const createConversation = (cluster = "") => {
-        const item = emptyConversation(cluster);
+    const createConversation = () => {
+        const item = emptyConversation();
         store.conversations.push(item);
         store.conversations = store.conversations.slice(-MAX_CONVERSATIONS);
         store.activeConversationId = item.id;
@@ -297,8 +295,8 @@
         [...store.conversations].reverse().forEach((item) => {
             const button = document.createElement("button"); button.type = "button"; button.className = `shiftlight-history-item${item.id === store.activeConversationId ? " active" : ""}`;
             const time = addText(button, "time", "", new Date(item.updatedAt).toLocaleTimeString("tr-TR", {hour: "2-digit", minute: "2-digit"})); time.dateTime = item.updatedAt;
-            addText(button, "strong", "", conversationTitle(item)); addText(button, "small", "", item.cluster.toUpperCase());
-            button.addEventListener("click", () => { store.activeConversationId = item.id; persistStore(); clusterSelect.value = item.cluster; closeHistory(); renderConversation(true); });
+            addText(button, "strong", "", conversationTitle(item));
+            button.addEventListener("click", () => { store.activeConversationId = item.id; persistStore(); closeHistory(); renderConversation(true); });
             historyList.appendChild(button);
         });
     };
@@ -399,32 +397,17 @@
     const safeError = (error) => error instanceof ShiftLightUIError && MESSAGES[error.kind] ? MESSAGES[error.kind] : MESSAGES.unavailable;
     const resizeComposer = () => { messageInput.style.height = "auto"; messageInput.style.height = `${Math.min(messageInput.scrollHeight, 125)}px`; };
     const setPending = (pending) => {
-        requestPending = pending; clusterSelect.disabled = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending || !clusterSelect.value;
+        requestPending = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending;
     };
-    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(clusterSelect.value); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
-    const startNew = (cluster = clusterSelect.value) => { createConversation(cluster); closeHistory(); renderConversation(true); };
-    const changeCluster = () => { const selected = clusterSelect.value; const current = activeConversation(); if (!current || selected !== current.cluster) startNew(selected); statusText.textContent = `Cluster context: ${selected.toUpperCase()}`; };
-    const loadClusters = async () => {
-        try {
-            const data = await fetchJson("/api/ai/clusters");
-            supportedClusters = Array.isArray(data.clusters) ? data.clusters.filter((item) => item && item.enabled && typeof item.id === "string" && typeof item.name === "string") : [];
-            if (!supportedClusters.length) throw new ShiftLightUIError("unavailable");
-            clusterSelect.replaceChildren(); supportedClusters.forEach((item) => clusterSelect.add(new Option(item.name, item.id)));
-            const supportedIds = new Set(supportedClusters.map((item) => item.id));
-            const portalCluster = root.dataset.initialCluster;
-            const current = activeConversation();
-            const selected = supportedIds.has(portalCluster) ? portalCluster : current && supportedIds.has(current.cluster) ? current.cluster : supportedClusters[0].id;
-            if (!current || !supportedIds.has(current.cluster) || (supportedIds.has(portalCluster) && current.cluster !== portalCluster)) startNew(selected);
-            clusterSelect.value = activeConversation().cluster; clusterSelect.disabled = false; sendButton.disabled = false; renderConversation(true);
-        } catch (_error) { clusterSelect.replaceChildren(new Option("ShiftLight kullanılamıyor", "")); statusText.textContent = MESSAGES.unavailable; statusText.classList.add("error"); }
-    };
+    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
+    const startNew = () => { createConversation(); closeHistory(); renderConversation(true); };
 
     form.addEventListener("submit", async (event) => {
         event.preventDefault(); if (requestPending || isHistoricalConversation()) return;
-        const text = messageInput.value; if (!text.trim() || !clusterSelect.value) return;
+        const text = messageInput.value; if (!text.trim()) return;
         addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         try {
-            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({cluster: clusterSelect.value, message: text})});
+            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text})});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
             addCurrentMessage({role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence)}); statusText.textContent = "";
         } catch (error) {
@@ -435,8 +418,7 @@
     launcher.addEventListener("click", openDrawer); flightMascot.addEventListener("click", openDrawer); flightMascot.addEventListener("animationend", (event) => { if (["shiftlight-flight", "shiftlight-flight-mobile"].includes(event.animationName) && flightMascot.dataset.state === "flying") landMascot(welcomeRun); }); closeButton.addEventListener("click", closeDrawer); expandButton.addEventListener("click", () => fullscreen ? closeFullscreen() : openFullscreen()); overlay.addEventListener("click", () => fullscreen ? closeFullscreen() : closeDrawer());
     nudgeClose.addEventListener("click", () => collapseWelcome(welcomeRun)); newButton.addEventListener("click", () => { if (!requestPending) startNew(); });
     historyToggle.addEventListener("click", toggleHistory); historyClose.addEventListener("click", closeHistory);
-    clusterSelect.addEventListener("change", () => { if (!requestPending) changeCluster(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
     document.addEventListener("keydown", (event) => { if (event.key !== "Escape" || !drawer.classList.contains("open")) return; if (fullscreen) closeFullscreen(); else closeDrawer(); });
-    renderConversation(); loadClusters(); showNudge(); if (root.dataset.openOnLoad === "true") openDrawer();
+    renderConversation(); setPending(false); showNudge(); if (root.dataset.openOnLoad === "true") openDrawer();
 })();

@@ -137,7 +137,6 @@ ai_backend_client = AIBackendClient(
 
 
 class AIChatRequest(BaseModel):
-    cluster: str
     message: str
 
 
@@ -1273,19 +1272,16 @@ def api_ai_clusters() -> JSONResponse:
 
 @app.post("/api/ai/chat")
 def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
-    cluster_key = payload.cluster.strip().lower()
-    if cluster_key not in AI_SUPPORTED_CLUSTER_IDS:
-        return JSONResponse(
-            {"error": "unsupported_cluster", "message": "Bu cluster ShiftLight AI tarafından desteklenmiyor."},
-            status_code=400,
-        )
     if not payload.message.strip():
         return JSONResponse(
             {"error": "invalid_message", "message": "Lütfen bir soru girin."},
             status_code=400,
         )
     try:
-        return JSONResponse(ai_backend_client.chat(cluster_key, payload.message))
+        # The AI backend's deterministic resolver is the sole routing authority.
+        # kkbtest remains only the backward-compatible API fallback when the
+        # message contains no explicit cluster reference.
+        return JSONResponse(ai_backend_client.chat("kkbtest", payload.message))
     except AIBackendError as exc:
         return ai_error_response(exc)
 

@@ -252,6 +252,18 @@ def test_tool_result_is_truncated_deterministically() -> None:
     assert content.endswith(TRUNCATION_MARKER)
 
 
+def test_trusted_cluster_context_is_separate_from_operational_message() -> None:
+    llm = FakeLLM([{"content": "grounded", "tool_calls": None}])
+    AgentLoop(
+        configured(), llm, FakeMCP(), "rmtest", "RMTEST"
+    ).run("node CPU durumuna bak")
+    messages = llm.calls[0]["messages"]
+    assert "TRUSTED BACKEND TARGET CLUSTER: RMTEST" in messages[0]["content"]
+    assert "not a Kubernetes namespace" in messages[0]["content"]
+    assert messages[1]["content"] == "node CPU durumuna bak"
+    assert "rmtest" not in messages[1]["content"].lower()
+
+
 @pytest.mark.parametrize("arguments", [
     '{"cluster":"rmtest"}',
     '{"options":{"mcp_url":"http://other/mcp"}}',

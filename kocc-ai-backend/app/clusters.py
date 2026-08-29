@@ -39,38 +39,80 @@ class ClusterScope:
     cluster_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ResolvedClusterRequest:
+    scope: ClusterScope
+    operational_message: str
+
+
 ALL_CLUSTER_PHRASES = (
     "tüm clusterlara", "tüm clusterları", "bütün clusterlara",
     "bütün clusterları", "hepsinin", "all clusters", "check all clusters",
 )
 TURKISH_SUFFIXES = (
-    "de", "da", "te", "ta", "e", "a", "in", "ın", "un", "ün",
-    "nin", "nın", "nun", "nün",
+    "teki", "taki", "deki", "daki", "de", "da", "te", "ta", "e", "a",
+    "in", "ın", "un", "ün", "nin", "nın", "nun", "nün",
 )
+CLUSTER_WORD_SUFFIXES = (
+    "ındaki", "indeki", "undaki", "ündeki", "ında", "inde", "unda", "ünde",
+    "ına", "ine", "una", "üne", "ın", "in", "un", "ün", "da", "de",
+    "ta", "te",
+)
+
+
+def _clean_operational_message(message: str, spans: list[tuple[int, int]]) -> str:
+    chars = list(message)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return " ".join("".join(chars).split()).strip(" ,;:-")
+
+
+def resolve_cluster_request(
+    message: str, registry: dict[str, Cluster]
+) -> ResolvedClusterRequest | None:
+    search_text = message.replace("’", "'")
+    for phrase in ALL_CLUSTER_PHRASES:
+        match = re.search(re.escape(phrase), search_text, flags=re.IGNORECASE)
+        if match:
+            return ResolvedClusterRequest(
+                ClusterScope(
+                    "all", tuple(item.id for item in registry.values() if item.enabled)
+                ),
+                _clean_operational_message(message, [match.span()]),
+            )
+
+    matches: list[tuple[str, tuple[int, int]]] = []
+    suffix = "|".join(TURKISH_SUFFIXES)
+    cluster_suffix = "|".join(CLUSTER_WORD_SUFFIXES)
+    for cluster in registry.values():
+        if not cluster.enabled:
+            continue
+        for alias in cluster.aliases:
+            pattern = (
+                rf"(?<!\w){re.escape(alias)}(?:'?(?:{suffix}))?"
+                rf"(?:\s+cluster(?:{cluster_suffix})?)?(?!\w)"
+            )
+            match = re.search(pattern, search_text, flags=re.IGNORECASE)
+            if match:
+                matches.append((cluster.id, match.span()))
+                break
+    cluster_ids = tuple(
+        cluster_id for cluster_id in registry
+        if any(match_id == cluster_id for match_id, _span in matches)
+    )
+    if not cluster_ids:
+        return None
+    return ResolvedClusterRequest(
+        ClusterScope("single" if len(cluster_ids) == 1 else "multiple", cluster_ids),
+        _clean_operational_message(message, [span for _cluster_id, span in matches]),
+    )
 
 
 def explicit_cluster_scope(
     message: str, registry: dict[str, Cluster]
 ) -> ClusterScope | None:
-    normalized = " ".join(message.casefold().replace("’", "'").split())
-    if any(phrase in normalized for phrase in ALL_CLUSTER_PHRASES):
-        return ClusterScope(
-            "all", tuple(item.id for item in registry.values() if item.enabled)
-        )
-    matches: list[str] = []
-    suffix = "|".join(TURKISH_SUFFIXES)
-    for cluster in registry.values():
-        if not cluster.enabled:
-            continue
-        for alias in cluster.aliases:
-            pattern = rf"(?<!\w){re.escape(alias)}(?:'?(?:{suffix}))?(?!\w)"
-            if re.search(pattern, normalized):
-                matches.append(cluster.id)
-                break
-    unique = tuple(cluster_id for cluster_id in registry if cluster_id in matches)
-    if not unique:
-        return None
-    return ClusterScope("single" if len(unique) == 1 else "multiple", unique)
+    resolved = resolve_cluster_request(message, registry)
+    return resolved.scope if resolved else None
 
 
 class UnknownClusterError(ValueError):
