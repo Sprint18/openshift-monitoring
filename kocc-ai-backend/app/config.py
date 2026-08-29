@@ -50,6 +50,7 @@ class Settings:
     llm_model: str
     llm_timeout_seconds: float
     mcp_kkbtest_url: str
+    mcp_rmtest_url: str
     mcp_timeout_seconds: float
     agent_max_iterations: int = 6
     agent_max_tool_calls: int = 10
@@ -66,6 +67,10 @@ def load_settings() -> Settings:
         llm_timeout_seconds=positive_float("AI_LLM_TIMEOUT_SECONDS", 20.0),
         mcp_kkbtest_url=os.getenv(
             "AI_MCP_KKBTEST_URL", "http://openshift-mcp:8080/mcp"
+        ),
+        mcp_rmtest_url=os.getenv(
+            "AI_MCP_RMTEST_URL",
+            "https://mcp.apps.rmocptest1.kkbdomain.com/mcp",
         ),
         mcp_timeout_seconds=positive_float("AI_MCP_TIMEOUT_SECONDS", 10.0),
         agent_max_iterations=bounded_int("AI_AGENT_MAX_ITERATIONS", 6, 1, 10),

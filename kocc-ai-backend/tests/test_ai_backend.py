@@ -7,7 +7,10 @@ from unittest.mock import Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.clusters import cluster_registry, selected_cluster, UnknownClusterError
+from app.clusters import (
+    ClusterScope, UnknownClusterError, cluster_registry,
+    explicit_cluster_scope, selected_cluster,
+)
 from app.agent import AgentResult
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
@@ -22,6 +25,7 @@ def settings(token: str | None = None) -> Settings:
         llm_model="test-model",
         llm_timeout_seconds=2,
         mcp_kkbtest_url="http://mcp.example/mcp",
+        mcp_rmtest_url="https://rm-mcp.example/mcp",
         mcp_timeout_seconds=2,
     )
 
@@ -29,7 +33,7 @@ def settings(token: str | None = None) -> Settings:
 def test_configuration_defaults_and_missing_token(monkeypatch) -> None:
     for name in (
         "AI_LLM_BASE_URL", "AI_LLM_API_TOKEN", "AI_LLM_MODEL",
-        "AI_LLM_TIMEOUT_SECONDS", "AI_MCP_KKBTEST_URL",
+        "AI_LLM_TIMEOUT_SECONDS", "AI_MCP_KKBTEST_URL", "AI_MCP_RMTEST_URL",
         "AI_MCP_TIMEOUT_SECONDS", "AI_AGENT_MAX_ITERATIONS",
         "AI_AGENT_MAX_TOOL_CALLS", "AI_AGENT_MAX_TOOL_RESULT_CHARS",
         "AI_AGENT_MAX_USER_CHARS",
@@ -39,6 +43,7 @@ def test_configuration_defaults_and_missing_token(monkeypatch) -> None:
     assert configured.llm_base_url == "https://llm.kkb.com.tr"
     assert configured.llm_api_token is None
     assert configured.mcp_kkbtest_url == "http://openshift-mcp:8080/mcp"
+    assert configured.mcp_rmtest_url == "https://mcp.apps.rmocptest1.kkbdomain.com/mcp"
     assert configured.agent_max_iterations == 6
     assert configured.agent_max_tool_calls == 10
     with pytest.raises(LLMUnavailable):
@@ -69,21 +74,60 @@ def test_agent_configuration_limits(monkeypatch) -> None:
 
 def test_cluster_registry_exposes_only_public_fields() -> None:
     registry = cluster_registry(settings())
-    assert list(registry) == ["kkbtest"]
+    assert list(registry) == ["kkbtest", "rmtest"]
     assert registry["kkbtest"].public_dict() == {
         "id": "kkbtest", "name": "KKB TEST", "enabled": True,
     }
     assert "mcp_url" not in registry["kkbtest"].public_dict()
+    assert registry["rmtest"].public_dict() == {
+        "id": "rmtest", "name": "RMTEST", "enabled": True,
+    }
+    assert "mcp_url" not in registry["rmtest"].public_dict()
     with pytest.raises(UnknownClusterError):
-        selected_cluster(registry, "rmtest")
+        selected_cluster(registry, "unknown")
 
 
 def test_health_and_cluster_endpoint_do_not_require_dependencies() -> None:
     client = TestClient(create_app(settings()))
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/clusters").json() == {
-        "clusters": [{"id": "kkbtest", "name": "KKB TEST", "enabled": True}]
+        "clusters": [
+            {"id": "kkbtest", "name": "KKB TEST", "enabled": True},
+            {"id": "rmtest", "name": "RMTEST", "enabled": True},
+        ]
     }
+
+
+@pytest.mark.parametrize(("message", "expected"), [
+    ("KKBTEST nasıl?", "kkbtest"),
+    ("kkb test node durumuna bak", "kkbtest"),
+    ("RMTEST'e bak", "rmtest"),
+    ("RMTEST'te degraded operator var mı?", "rmtest"),
+    ("RMTEST'in durumunu kontrol et", "rmtest"),
+    ("rm test clusterında degraded operator var mı?", "rmtest"),
+    ("rmocptest1 durumunu kontrol et", "rmtest"),
+])
+def test_explicit_cluster_alias_resolution(message: str, expected: str) -> None:
+    scope = explicit_cluster_scope(message, cluster_registry(settings()))
+    assert scope == ClusterScope("single", (expected,))
+
+
+@pytest.mark.parametrize("message", [
+    "tüm clusterlara bak", "bütün clusterları kontrol et",
+    "hepsinin sağlık durumunu kontrol et", "all clusters",
+    "check all clusters",
+])
+def test_all_cluster_intent_is_registry_owned(message: str) -> None:
+    scope = explicit_cluster_scope(message, cluster_registry(settings()))
+    assert scope == ClusterScope("all", ("kkbtest", "rmtest"))
+
+
+def test_unknown_and_conflicting_alias_resolution_is_conservative() -> None:
+    registry = cluster_registry(settings())
+    assert explicit_cluster_scope("unknown cluster'a bak", registry) is None
+    assert explicit_cluster_scope("KKBTEST ve RMTEST'i karşılaştır", registry) == (
+        ClusterScope("multiple", ("kkbtest", "rmtest"))
+    )
 
 
 @patch("app.main.MCPClient")
@@ -117,7 +161,7 @@ def test_chat_missing_token_and_cluster_routing() -> None:
     assert unavailable.status_code == 503
     assert unavailable.json() == {"error": "llm_unavailable"}
     unknown = client.post("/api/v1/chat", json={
-        "cluster": "rmtest", "message": "test",
+        "cluster": "unknown", "message": "test",
     })
     assert unknown.status_code == 404
 
@@ -177,9 +221,96 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
             {"name": "nodes_top", "status": "error"},
         ],
         "evidence": [
-            {"tool": "resources_list", "status": "success"}
+            {"cluster": "kkbtest", "tool": "resources_list", "status": "success"}
         ],
     }
+
+
+@pytest.mark.parametrize(("message", "expected_url", "expected_cluster"), [
+    ("KKBTEST durumuna bak", "http://mcp.example/mcp", "kkbtest"),
+    ("RMTEST'te operator durumuna bak", "https://rm-mcp.example/mcp", "rmtest"),
+])
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_explicit_cluster_text_routes_only_to_registry_owned_mcp(
+    mcp_class: Mock, agent_class: Mock, message: str,
+    expected_url: str, expected_cluster: str,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult(
+        "Grounded", [{"name": "resources_list", "status": "success"}]
+    )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={"cluster": "kkbtest", "message": message},
+    )
+    assert response.status_code == 200
+    assert response.json()["cluster"] == expected_cluster
+    assert response.json()["evidence"] == [{
+        "cluster": expected_cluster,
+        "tool": "resources_list", "status": "success",
+    }]
+    mcp_class.assert_called_once_with(expected_url, 2)
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_all_clusters_fans_out_with_cluster_scoped_facts(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.side_effect = [
+        AgentResult("KKB grounded", [], [{
+            "tool": "resources_list", "status": "success",
+            "facts": {"resource_count": 34},
+        }]),
+        AgentResult("RM grounded", [], [{
+            "tool": "resources_list", "status": "success",
+            "facts": {"resource_count": 35},
+        }]),
+    ]
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat",
+        json={"cluster": "kkbtest", "message": "tüm clusterlara bak"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cluster"] == "all"
+    assert "## KKB TEST\n\nKKB grounded" in payload["answer"]
+    assert "## RMTEST\n\nRM grounded" in payload["answer"]
+    assert payload["evidence"] == [
+        {"cluster": "kkbtest", "tool": "resources_list", "status": "success",
+         "facts": {"resource_count": 34}},
+        {"cluster": "rmtest", "tool": "resources_list", "status": "success",
+         "facts": {"resource_count": 35}},
+    ]
+    assert [call.args[0] for call in mcp_class.call_args_list] == [
+        "http://mcp.example/mcp", "https://rm-mcp.example/mcp",
+    ]
+    assert "mcp.example" not in response.text
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_all_clusters_preserves_success_when_remote_cluster_fails(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.side_effect = [
+        AgentResult("KKB grounded", [], [{
+            "tool": "resources_list", "status": "success",
+            "facts": {"resource_count": 34},
+        }]),
+        MCPUnavailable("private remote detail"),
+    ]
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat",
+        json={"cluster": "kkbtest", "message": "check all clusters"},
+    )
+    assert response.status_code == 200
+    assert "## KKB TEST\n\nKKB grounded" in response.json()["answer"]
+    assert "## RMTEST\n\nCluster verisi şu anda kullanılamıyor." in response.json()["answer"]
+    assert response.json()["evidence"] == [{
+        "cluster": "kkbtest", "tool": "resources_list", "status": "success",
+        "facts": {"resource_count": 34},
+    }]
+    assert "private remote detail" not in response.text
 
 
 @patch("app.main.AgentLoop")

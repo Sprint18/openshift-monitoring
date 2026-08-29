@@ -130,7 +130,7 @@ KOCC_AI_BACKEND_URL = os.getenv("KOCC_AI_BACKEND_URL", "").strip()
 KOCC_AI_BACKEND_TIMEOUT_SECONDS = positive_env_seconds(
     "KOCC_AI_BACKEND_TIMEOUT_SECONDS", 90
 )
-AI_SUPPORTED_CLUSTER_IDS = frozenset({"kkbtest"})
+AI_SUPPORTED_CLUSTER_IDS = frozenset({"kkbtest", "rmtest"})
 ai_backend_client = AIBackendClient(
     KOCC_AI_BACKEND_URL, KOCC_AI_BACKEND_TIMEOUT_SECONDS
 )

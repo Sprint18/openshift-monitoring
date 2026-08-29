@@ -51,7 +51,10 @@ def test_ai_cluster_discovery_proxy_filters_supported_clusters(ai_client: Mock) 
     response = client.get("/api/ai/clusters")
     assert response.status_code == 200
     assert response.json() == {
-        "clusters": [{"id": "kkbtest", "name": "KKB TEST", "enabled": True}]
+        "clusters": [
+            {"id": "kkbtest", "name": "KKB TEST", "enabled": True},
+            {"id": "rmtest", "name": "RM TEST", "enabled": True},
+        ]
     }
 
 
@@ -85,7 +88,7 @@ def test_ai_chat_rejects_empty_message(ai_client: Mock, message: str) -> None:
 @patch("app.main.ai_backend_client")
 def test_ai_chat_rejects_unsupported_cluster(ai_client: Mock) -> None:
     response = client.post("/api/ai/chat", json={
-        "cluster": "rmtest", "message": "health",
+        "cluster": "unknown", "message": "health",
     })
     assert response.status_code == 400
     assert response.json()["error"] == "unsupported_cluster"
@@ -153,9 +156,11 @@ def test_ai_client_sanitizes_chat_response_metadata(urlopen: Mock) -> None:
 @patch("app.ai_client.urllib.request.urlopen")
 def test_ai_client_preserves_only_safe_numeric_evidence_facts(urlopen: Mock) -> None:
     urlopen.return_value = FakeResponse({
+        "cluster": "kkbtest",
         "answer": "34 operators",
         "tool_calls": [{"name": "resources_list", "status": "success"}],
         "evidence": [{
+            "cluster": "kkbtest",
             "tool": "resources_list", "status": "success",
             "facts": {
                 "resource_count": 34,
@@ -169,6 +174,7 @@ def test_ai_client_preserves_only_safe_numeric_evidence_facts(urlopen: Mock) -> 
     })
     result = AIBackendClient("http://ai.internal:8080", 90).chat("kkbtest", "health")
     assert result["evidence"] == [{
+        "cluster": "kkbtest",
         "tool": "resources_list", "status": "success",
         "facts": {
             "resource_count": 34,
@@ -534,6 +540,8 @@ def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None
         assert key in source
     assert 'resource_count: "Toplam kaynak"' in source
     assert 'progressing_true_count: "Progressing"' in source
+    assert '["kkbtest", "rmtest"].includes(item.cluster)' in source
+    assert 'addText(list, "dt", "", "Cluster")' in source
 
 
 def test_favicon_uses_existing_kbb_asset() -> None:

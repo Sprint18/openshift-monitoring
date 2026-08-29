@@ -47,6 +47,7 @@ def configured(**changes) -> Settings:
         llm_model="test-model",
         llm_timeout_seconds=2,
         mcp_kkbtest_url="http://mcp.example/mcp",
+        mcp_rmtest_url="https://rm-mcp.example/mcp",
         mcp_timeout_seconds=2,
     )
     return replace(base, **changes)

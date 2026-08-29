@@ -76,7 +76,9 @@
         if (!Array.isArray(items)) return [];
         return items.flatMap((item) => {
             if (!item || typeof item !== "object" || typeof item.tool !== "string" || item.status !== "success") return [];
-            return [{tool: item.tool.slice(0, 100), status: "success", facts: safeFacts(item.facts)}];
+            const safe = {tool: item.tool.slice(0, 100), status: "success", facts: safeFacts(item.facts)};
+            if (["kkbtest", "rmtest"].includes(item.cluster)) safe.cluster = item.cluster;
+            return [safe];
         }).slice(0, 20);
     };
     const safeMessage = (item) => {
@@ -252,6 +254,7 @@
         addText(details, "summary", "", "Kullanılan cluster verileri");
         evidence.forEach((item) => {
             const list = document.createElement("dl");
+            if (item.cluster) { addText(list, "dt", "", "Cluster"); addText(list, "dd", "", item.cluster.toUpperCase()); }
             addText(list, "dt", "", "Kaynak"); addText(list, "dd", "", item.tool);
             addText(list, "dt", "", "Durum"); addText(list, "dd", "", "Başarılı");
             Object.entries(item.facts).forEach(([key, value]) => {

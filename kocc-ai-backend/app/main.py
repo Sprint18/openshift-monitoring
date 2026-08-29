@@ -10,7 +10,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AgentLimitReached, AgentLoop
-from app.clusters import UnknownClusterError, cluster_registry, selected_cluster
+from app.clusters import (
+    ClusterScope, UnknownClusterError, cluster_registry,
+    explicit_cluster_scope, selected_cluster,
+)
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
 from app.mcp_client import MCPClient, MCPUnavailable
@@ -123,55 +126,97 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def chat(payload: ChatRequest) -> JSONResponse:
         if len(payload.message) > configuration.agent_max_user_chars:
             return JSONResponse({"error": "message_too_large"}, status_code=400)
-        try:
-            selected, mcp_client = mcp_for(payload.cluster)
-        except UnknownClusterError:
-            return JSONResponse({"error": "unknown_cluster"}, status_code=404)
+        scope = explicit_cluster_scope(
+            payload.message, application.state.clusters
+        )
+        if scope is None:
+            try:
+                selected_cluster(application.state.clusters, payload.cluster)
+            except UnknownClusterError:
+                return JSONResponse({"error": "unknown_cluster"}, status_code=404)
+            scope = ClusterScope("single", (payload.cluster,))
         if not application.state.llm_client.is_configured():
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
-        started = time.perf_counter()
-        try:
-            result = AgentLoop(
-                configuration, application.state.llm_client, mcp_client
-            ).run(payload.message)
-            tool_summary = ",".join(
-                f"{item['name']}:{item['status']}" for item in result.tool_calls
-            ) or "none"
-            logger.info(
-                "ai_chat_complete cluster=%s outcome=success tools=%s facts=%s iterations=%s duration_ms=%s",
-                selected.id,
-                tool_summary,
-                any("facts" in item for item in result.evidence),
-                result.iterations,
+
+        def execute(cluster_id: str) -> dict:
+            selected, mcp_client = mcp_for(cluster_id)
+            started = time.perf_counter()
+            try:
+                result = AgentLoop(
+                    configuration, application.state.llm_client, mcp_client
+                ).run(payload.message)
+                evidence = [
+                    {"cluster": selected.id, **item}
+                    for item in result.evidence
+                ]
+                tool_summary = ",".join(
+                    f"{item['name']}:{item['status']}"
+                    for item in result.tool_calls
+                ) or "none"
+                logger.info(
+                    "ai_chat_complete cluster=%s outcome=success scope=%s tools=%s facts=%s iterations=%s duration_ms=%s",
+                    selected.id, scope.kind, tool_summary,
+                    any("facts" in item for item in evidence), result.iterations,
+                    round((time.perf_counter() - started) * 1000),
+                )
+                return {
+                    "cluster": selected.id, "name": selected.name,
+                    "status": "success", "answer": result.answer,
+                    "tool_calls": result.tool_calls, "evidence": evidence,
+                }
+            except MCPUnavailable:
+                error = "mcp_unavailable"
+            except LLMUnavailable:
+                error = "llm_unavailable"
+            except AgentLimitReached as exc:
+                error = (
+                    "agent_tool_call_limit" if str(exc) == "tool_call_limit"
+                    else "agent_iteration_limit"
+                )
+            logger.warning(
+                "ai_chat_complete cluster=%s outcome=%s scope=%s duration_ms=%s",
+                selected.id, error, scope.kind,
                 round((time.perf_counter() - started) * 1000),
             )
+            return {
+                "cluster": selected.id, "name": selected.name,
+                "status": "unavailable", "error": error,
+            }
+
+        outcomes = [execute(cluster_id) for cluster_id in scope.cluster_ids]
+        if scope.kind == "single":
+            outcome = outcomes[0]
+            if outcome["status"] != "success":
+                return JSONResponse({"error": outcome["error"]}, status_code=503)
             return JSONResponse({
-                "cluster": selected.id,
-                "answer": result.answer,
-                "tool_calls": result.tool_calls,
-                "evidence": result.evidence,
+                "cluster": outcome["cluster"], "answer": outcome["answer"],
+                "tool_calls": outcome["tool_calls"],
+                "evidence": outcome["evidence"],
             })
-        except MCPUnavailable:
-            logger.warning(
-                "ai_chat_complete cluster=%s outcome=mcp_unavailable duration_ms=%s",
-                selected.id, round((time.perf_counter() - started) * 1000),
+
+        successful = [item for item in outcomes if item["status"] == "success"]
+        if not successful:
+            return JSONResponse(
+                {"error": "multi_cluster_unavailable"}, status_code=503
             )
-            return JSONResponse({"error": "mcp_unavailable"}, status_code=503)
-        except LLMUnavailable:
-            logger.warning(
-                "ai_chat_complete cluster=%s outcome=llm_unavailable duration_ms=%s",
-                selected.id, round((time.perf_counter() - started) * 1000),
+        sections = []
+        for outcome in outcomes:
+            body = (
+                outcome["answer"] if outcome["status"] == "success"
+                else "Cluster verisi şu anda kullanılamıyor."
             )
-            return JSONResponse({"error": "llm_unavailable"}, status_code=503)
-        except AgentLimitReached as exc:
-            error = "agent_iteration_limit"
-            if str(exc) == "tool_call_limit":
-                error = "agent_tool_call_limit"
-            logger.warning(
-                "ai_chat_complete cluster=%s outcome=%s duration_ms=%s",
-                selected.id, error, round((time.perf_counter() - started) * 1000),
-            )
-            return JSONResponse({"error": error}, status_code=503)
+            sections.append(f"## {outcome['name']}\n\n{body}")
+        return JSONResponse({
+            "cluster": "all" if scope.kind == "all" else "multiple",
+            "answer": "\n\n".join(sections),
+            "tool_calls": [
+                {"cluster": item["cluster"], **tool}
+                for item in successful for tool in item["tool_calls"]
+            ],
+            "evidence": [
+                evidence for item in successful for evidence in item["evidence"]
+            ],
+        })
 
     return application
 

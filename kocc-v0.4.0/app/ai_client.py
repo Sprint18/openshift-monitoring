@@ -136,14 +136,18 @@ class AIBackendClient:
             "POST", "/api/v1/chat", {"cluster": cluster, "message": message}
         )
         answer = response.get("answer")
+        response_cluster = response.get("cluster", cluster)
         tool_calls = response.get("tool_calls", [])
         evidence = response.get("evidence", [])
-        if not isinstance(answer, str) or not answer.strip():
+        if (
+            not isinstance(answer, str) or not answer.strip()
+            or response_cluster not in {"kkbtest", "rmtest", "all", "multiple"}
+        ):
             raise AIBackendError("invalid_response")
         if not isinstance(tool_calls, list) or not isinstance(evidence, list):
             raise AIBackendError("invalid_response")
         return {
-            "cluster": cluster,
+            "cluster": response_cluster,
             "answer": answer,
             "tool_calls": self._tool_metadata(tool_calls, "name"),
             "evidence": self._evidence_metadata(evidence),
@@ -177,6 +181,9 @@ class AIBackendClient:
             if not isinstance(tool, str) or not isinstance(status, str):
                 raise AIBackendError("invalid_response")
             safe: dict[str, Any] = {"tool": tool, "status": status}
+            cluster = item.get("cluster")
+            if cluster in {"kkbtest", "rmtest"}:
+                safe["cluster"] = cluster
             facts = item.get("facts")
             if isinstance(facts, dict):
                 safe_facts = {
