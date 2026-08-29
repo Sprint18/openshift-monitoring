@@ -105,7 +105,6 @@ PUBLIC_FACT_KEYS = frozenset({
     "available_false_count",
     "progressing_true_count",
 })
-MAX_EGRESSIP_DETAIL_CALLS = 25
 
 
 class AgentLimitReached(RuntimeError):
@@ -603,7 +602,8 @@ class AgentLoop:
                 name for name in names
                 if not egressip_has_full_detail(listed_by_name.get(name, {}))
             ]
-            if len(detail_names) > MAX_EGRESSIP_DETAIL_CALLS:
+            detail_call_budget = max(0, self.settings.agent_max_tool_calls - 2)
+            if len(detail_names) > detail_call_budget:
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                     summaries, [], 0,

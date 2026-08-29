@@ -384,6 +384,26 @@ def test_ai_template_is_a_scrollable_chat_workspace() -> None:
     assert partial.index('id="shiftlight-conversation"') < partial.index('id="shiftlight-form"')
     assert ".shiftlight-drawer.open.fullscreen" in css and "height:94dvh" in css
     assert "conversation.scrollHeight" in source
+
+
+def test_history_panel_is_bounded_without_competing_with_composer() -> None:
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    partial = shiftlight_partial()
+    source = shiftlight_source()
+    history_css = css[
+        css.index(".shiftlight-history {"):css.index(".shiftlight-history-title")
+    ]
+    assert "flex:0 1 auto" in history_css
+    assert "min-height:0" in history_css
+    assert "max-height:min(220px,30dvh)" in history_css
+    assert "overflow-y:auto" in history_css
+    assert "overscroll-behavior:contain" in history_css
+    assert partial.index('id="shiftlight-history"') < partial.index(
+        'id="shiftlight-conversation"'
+    ) < partial.index('id="shiftlight-form"')
+    assert ".shiftlight-conversation { display:flex; flex:1 1 auto" in css
+    assert ".shiftlight-composer { position:relative; bottom:auto; flex:0 0 auto" in css
+    assert ".shiftlight-drawer.open.fullscreen" in css and "height:94dvh" in css
     assert "conversation.scrollTop" in source
     assert "conversation.scrollHeight" in source
 

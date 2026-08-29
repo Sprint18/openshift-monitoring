@@ -199,7 +199,7 @@ def test_direct_node_metrics_intent_forces_nodes_top_only() -> None:
     ).run("node CPU ve memory kullanımı")
     assert mcp.calls == [("nodes_top", {})]
     assert result.evidence == [{"tool": "nodes_top", "status": "success"}]
-    assert "| worker-1 | 120m | 6% | 1Gi | 25% |" in result.answer
+    assert "| worker-1 | N/A | 120m | 6% | 1Gi | 25% |" in result.answer
     assert llm.calls == []
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import io
 from unittest.mock import Mock, patch
+import json
+from dataclasses import replace
 
 from fastapi.testclient import TestClient
 
@@ -45,6 +47,20 @@ def test_ambiguous_operational_request_returns_choices_without_mcp(
         ],
         "allow_all": True,
     }
+    mcp_class.assert_not_called()
+
+
+@patch("app.main.MCPClient")
+def test_cluster_independent_identity_and_help_do_not_use_mcp(
+    mcp_class: Mock,
+) -> None:
+    client = TestClient(create_app(settings(token=None)))
+    for message in ("sen kimsin", "ne yapabilirsin", "what can you do"):
+        response = client.post("/api/v1/chat", json={"message": message})
+        assert response.status_code == 200
+        assert response.json()["clusters"] == []
+        assert "read-only OpenShift operasyon asistanıyım" in response.json()["answer"]
+        assert "KKB TEST'e bağlı" not in response.json()["answer"]
     mcp_class.assert_not_called()
 
 
@@ -183,17 +199,21 @@ def test_egressip_table_list_uses_get_for_full_runtime_fixture() -> None:
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_tool(), _resource_get_tool()]
     mcp.call_tool.side_effect = [
-        {
-            "apiVersion": "v1", "kind": "Namespace",
-            "metadata": {
-                "name": "test-webmethods-gw",
-                "labels": {"kubernetes.io/metadata.name": "test-webmethods-gw"},
-            },
-        },
-        {"content": [{"type": "text", "text": (
-            "k8s.ovn.org/v1 EgressIP egress-test-ibm-gw\n"
-        )}]},
-        {
+        {"structuredContent": {"result": {"content": [{
+            "type": "text", "text": json.dumps({
+                "apiVersion": "v1", "kind": "Namespace",
+                "metadata": {
+                    "name": "test-webmethods-gw",
+                    "labels": {"kubernetes.io/metadata.name": "test-webmethods-gw"},
+                },
+            }),
+        }]}}},
+        {"structuredContent": {"result": {"content": [{
+            "type": "text", "text": (
+                "k8s.ovn.org/v1 EgressIP egress-test-ibm-gw\n"
+            ),
+        }]}}},
+        {"structuredContent": {"result": {"resource": {
             "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
             "metadata": {"name": "egress-test-ibm-gw"},
             "spec": {
@@ -206,7 +226,7 @@ def test_egressip_table_list_uses_get_for_full_runtime_fixture() -> None:
                 "egressIP": "10.60.1.207",
                 "node": "kkbocptest1-695gq-ai-worker-z8fr9",
             }]},
-        },
+        }}}},
     ]
     result = AgentLoop(
         settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST"
@@ -238,6 +258,27 @@ def test_egressip_list_failure_is_verification_failure() -> None:
     ).run("test-payments egressip nedir")
     assert "doğrulanamadı" in result.answer
     assert "private" not in result.answer
+
+
+def test_egressip_get_fallback_respects_existing_tool_call_budget() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool(), _resource_get_tool()]
+    mcp.call_tool.side_effect = [
+        {
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-payments", "labels": {"scope": "test"}},
+        },
+        {"items": [{
+            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+            "metadata": {"name": f"candidate-{index}"},
+        } for index in range(9)]},
+    ]
+    limited = replace(settings(token=None), agent_max_tool_calls=10)
+    result = AgentLoop(
+        limited, Mock(), mcp, "kkbtest", "KKB TEST"
+    ).run("test-payments egressip nedir")
+    assert "doğrulanamadı" in result.answer
+    assert mcp.call_tool.call_count == 2
 
 
 def test_multiple_matching_egressips_are_returned_and_assignments_deduplicated() -> None:

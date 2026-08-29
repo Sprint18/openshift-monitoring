@@ -6,6 +6,10 @@ from typing import Any
 
 
 _DNS_LABEL = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+_WRAPPER_KEYS = frozenset({
+    "content", "structuredContent", "result", "data", "resource", "object",
+    "response", "items",
+})
 
 
 def egressip_namespace(message: str) -> str | None:
@@ -33,35 +37,69 @@ def is_egressip_intent(message: str) -> bool:
     return re.search(r"\begress\s*ip\b", message.casefold()) is not None
 
 
+def _decoded_json(value: str) -> Any:
+    candidate = value.strip()
+    if candidate.startswith("data:"):
+        candidate = candidate.removeprefix("data:").strip()
+    if candidate.startswith("```") and candidate.endswith("```"):
+        lines = candidate.splitlines()
+        candidate = "\n".join(lines[1:-1]).strip()
+    if not candidate.startswith(("{", "[")):
+        return None
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
+def _payloads(value: Any, seen: set[int] | None = None) -> list[Any]:
+    visited = seen or set()
+    if isinstance(value, (dict, list)):
+        identity = id(value)
+        if identity in visited:
+            return []
+        visited.add(identity)
+    values = [value]
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str) and (decoded := _decoded_json(text)) is not None:
+            values.extend(_payloads(decoded, visited))
+        for key, nested in value.items():
+            if key in _WRAPPER_KEYS:
+                values.extend(_payloads(nested, visited))
+    elif isinstance(value, list):
+        for nested in value:
+            values.extend(_payloads(nested, visited))
+    elif isinstance(value, str) and (decoded := _decoded_json(value)) is not None:
+        values.extend(_payloads(decoded, visited))
+    return values
+
+
+def _text_fragments(value: Any) -> list[str]:
+    fragments: list[str] = []
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "text" and isinstance(nested, str):
+                fragments.append(nested)
+            elif key in _WRAPPER_KEYS:
+                fragments.extend(_text_fragments(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            fragments.extend(_text_fragments(nested))
+    elif isinstance(value, str):
+        fragments.append(value)
+    return fragments
+
+
 def resource_items(result: dict[str, Any]) -> list[dict[str, Any]] | None:
-    candidates: list[Any] = [result, result.get("structuredContent")]
-    content = result.get("content")
-    if isinstance(content, list):
-        for item in content:
-            if not isinstance(item, dict) or not isinstance(item.get("text"), str):
-                continue
-            try:
-                candidates.append(json.loads(item["text"]))
-            except json.JSONDecodeError:
-                continue
-    for candidate in candidates:
+    for candidate in _payloads(result):
         if isinstance(candidate, dict) and isinstance(candidate.get("items"), list):
             return [item for item in candidate["items"] if isinstance(item, dict)]
     return None
 
 
 def resource_object(result: dict[str, Any]) -> dict[str, Any] | None:
-    candidates: list[Any] = [result, result.get("structuredContent")]
-    content = result.get("content")
-    if isinstance(content, list):
-        for item in content:
-            if not isinstance(item, dict) or not isinstance(item.get("text"), str):
-                continue
-            try:
-                candidates.append(json.loads(item["text"]))
-            except json.JSONDecodeError:
-                continue
-    return next((item for item in candidates if isinstance(item, dict) and (
+    return next((item for item in _payloads(result) if isinstance(item, dict) and (
         isinstance(item.get("metadata"), dict) or isinstance(item.get("spec"), dict)
     )), None)
 
@@ -75,17 +113,12 @@ def resource_names(result: dict[str, Any], kind: str) -> list[str] | None:
             and isinstance((name := item["metadata"].get("name")), str)
             and name
         ))
-    content = result.get("content")
-    if not isinstance(content, list):
-        return None
     names: list[str] = []
     pattern = re.compile(
         rf"^(?:\S+\s+)?{re.escape(kind)}\s+(\S+)(?:\s|$)", re.IGNORECASE
     )
-    for item in content:
-        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
-            continue
-        for line in item["text"].splitlines():
+    for fragment in _text_fragments(result):
+        for line in fragment.splitlines():
             match = pattern.match(line.strip().strip("|").replace("|", " "))
             if match and match.group(1).casefold() != "name":
                 names.append(match.group(1))

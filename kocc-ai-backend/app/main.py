@@ -41,6 +41,15 @@ def _conversational_answer(message: str) -> str | None:
     normalized = " ".join(message.casefold().strip(" .!?").split())
     if normalized in {"merhaba", "selam", "hello", "hi", "teşekkürler", "tesekkurler"}:
         return "Merhaba, OpenShift operasyonları hakkında nasıl yardımcı olabilirim?"
+    if normalized in {
+        "sen kimsin", "kimsin", "ne yapabilirsin", "yardım", "yardim",
+        "nasıl çalışıyorsun", "nasil calisiyorsun", "what can you do", "who are you",
+    }:
+        return (
+            "Ben KKB ShiftLight AI, KOCC içindeki read-only OpenShift operasyon "
+            "asistanıyım. Desteklenen cluster'larda, açıkça seçtiğiniz kapsam için "
+            "canlı veriyi MCP üzerinden inceleyebilirim."
+        )
     return None
 
 

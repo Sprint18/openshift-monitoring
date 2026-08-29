@@ -14,12 +14,25 @@ class NodeMetric:
     cpu_percent: float | None
     memory_raw: str
     memory_percent: float | None
+    role: str | None = None
 
 
 @dataclass(frozen=True)
 class NodeMetricsFacts:
     cluster_id: str | None
     nodes: tuple[NodeMetric, ...]
+
+    @property
+    def node_count(self) -> int:
+        return len(self.nodes)
+
+    @property
+    def role_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for node in self.nodes:
+            role = node.role or "Unspecified"
+            counts[role] = counts.get(role, 0) + 1
+        return counts
 
 
 def _cpu_millicores(value: str) -> float | None:
@@ -63,7 +76,29 @@ def _metric(item: Any) -> NodeMetric | None:
         _percent(item.get("cpuPercent", item.get("cpu_percent"))),
         memory.strip(),
         _percent(item.get("memoryPercent", item.get("memory_percent"))),
+        str(item.get("role") or item.get("category")).strip()
+        if item.get("role") or item.get("category") else None,
     )
+
+
+def _completeness(metric: NodeMetric) -> int:
+    return sum((
+        metric.cpu_millicores is not None,
+        metric.cpu_percent is not None,
+        bool(metric.memory_raw),
+        metric.memory_percent is not None,
+        metric.role is not None,
+    ))
+
+
+def _canonical_nodes(nodes: list[NodeMetric]) -> tuple[NodeMetric, ...]:
+    """Keep one row per node; prefer more complete data, otherwise first row."""
+    selected: dict[str, NodeMetric] = {}
+    for node in nodes:
+        current = selected.get(node.node_name)
+        if current is None or _completeness(node) > _completeness(current):
+            selected[node.node_name] = node
+    return tuple(selected.values())
 
 
 def _objects(result: dict[str, Any]) -> list[Any]:
@@ -89,7 +124,9 @@ def parse_node_metrics(
         candidates = payload.get("nodes", payload.get("items"))
         if not isinstance(candidates, list):
             continue
-        nodes = tuple(metric for item in candidates if (metric := _metric(item)))
+        nodes = _canonical_nodes([
+            metric for item in candidates if (metric := _metric(item))
+        ])
         if nodes:
             return NodeMetricsFacts(cluster_id, nodes)
 
@@ -117,15 +154,18 @@ def parse_node_metrics(
             columns[0], columns[1], cpu_millicores, cpu_percent,
             columns[memory_index], memory_percent,
         ))
-    return NodeMetricsFacts(cluster_id, tuple(parsed)) if parsed else None
+    canonical = _canonical_nodes(parsed)
+    return NodeMetricsFacts(cluster_id, canonical) if canonical else None
 
 
 def render_node_metrics(facts: NodeMetricsFacts) -> str:
     rows = [
         "## Node CPU ve Memory Kullanımı",
         "",
-        "| Node | CPU | CPU % | Memory | Memory % |",
-        "|---|---:|---:|---:|---:|",
+        f"Toplam benzersiz node: **{facts.node_count}**",
+        "",
+        "| Node | Rol | CPU | CPU % | Memory | Memory % |",
+        "|---|---|---:|---:|---:|---:|",
     ]
     for node in facts.nodes:
         cpu_percent = f"{node.cpu_percent:g}%" if node.cpu_percent is not None else "N/A"
@@ -133,7 +173,7 @@ def render_node_metrics(facts: NodeMetricsFacts) -> str:
             f"{node.memory_percent:g}%" if node.memory_percent is not None else "N/A"
         )
         rows.append(
-            f"| {node.node_name} | {node.cpu_raw} | {cpu_percent} | "
+            f"| {node.node_name} | {node.role or 'N/A'} | {node.cpu_raw} | {cpu_percent} | "
             f"{node.memory_raw} | {memory_percent} |"
         )
     return "\n".join(rows)
