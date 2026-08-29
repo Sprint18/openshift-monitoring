@@ -407,7 +407,7 @@
         const text = messageInput.value; if (!text.trim()) return;
         addCurrentMessage({role: "user", text, evidence: []}, true); messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         try {
-            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text})});
+            const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text, context_cluster_id: root.dataset.contextCluster})});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
             addCurrentMessage({role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence)}); statusText.textContent = "";
         } catch (error) {

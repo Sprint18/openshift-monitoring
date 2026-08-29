@@ -6,7 +6,7 @@ from app.agent import AgentLoop, SYSTEM_PROMPT, openai_tools
 from app.mcp_client import MCPUnavailable
 from app.tool_contracts import validate_tool_arguments
 from tests.test_agent import FakeLLM, FakeMCP, configured, tool_call
-from tests.test_observations import operator
+from tests.test_observations import operator, operator_table
 
 
 RESOURCE_TOOLS = [{
@@ -55,7 +55,7 @@ def test_cluster_operator_arguments_are_canonical_before_mcp_call() -> None:
         "resources_list",
         '{"apiVersion":"operator.openshift.io/v1","kind":"ClusterOperator"}',
     )]}])
-    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+    mcp = mcp_with([{"content": [{"type": "text", "text": operator_table()}]}])
     result = AgentLoop(configured(), llm, mcp).run(
         "Degraded ClusterOperator var mı?"
     )
@@ -67,16 +67,22 @@ def test_cluster_operator_arguments_are_canonical_before_mcp_call() -> None:
     assert result.evidence[0]["facts"]["degraded_true_count"] == 0
 
 
-def test_direct_cluster_operator_path_does_not_use_llm_prose() -> None:
+def test_direct_cluster_operator_path_does_not_use_llm_prose(caplog) -> None:
     llm = FakeLLM([{"content": "Toplam 35 ClusterOperator", "tool_calls": None}])
-    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
-    result = AgentLoop(
-        configured(), llm, mcp, "rmtest", "RMTEST"
-    ).run("degraded CO var mı?")
+    mcp = mcp_with([{"content": [{"type": "text", "text": operator_table()}]}])
+    with caplog.at_level("INFO", logger="kocc_ai.agent"):
+        result = AgentLoop(
+            configured(), llm, mcp, "rmtest", "RMTEST"
+        ).run("degraded CO var mı?")
     assert llm.calls == []
     assert result.answer.startswith("## RMTEST")
     assert "Toplam ClusterOperator: **34**" in result.answer
     assert "35" not in result.answer
+    assert (
+        "ai_tool_complete cluster_id=rmtest tool=resources_list "
+        "resource=ClusterOperator success=true"
+    ) in caplog.text
+    assert "config.openshift.io" not in caplog.text
 
 
 def test_cluster_operator_facts_remain_isolated_by_agent_target() -> None:
@@ -133,10 +139,68 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
         ]},
         {"content": "Genel sağlık kanıtları incelendi.", "tool_calls": None},
     ])
-    mcp = mcp_with([{"items": []}, {"content": []}])
+    mcp = mcp_with([
+        {"items": [operator(f"co-{index}") for index in range(34)]},
+        {"items": []}, {"content": []},
+    ])
     result = AgentLoop(configured(), llm, mcp).run("Cluster genel sağlığını incele")
-    assert len(mcp.calls) == 2
-    assert result.answer == "Genel sağlık kanıtları incelendi."
+    assert len(mcp.calls) == 3
+    assert "Toplam ClusterOperator: **34**" in result.answer
+    assert "Genel sağlık kanıtları incelendi." in result.answer
+
+
+@pytest.mark.parametrize(("cluster_id", "cluster_name"), [
+    ("kkbtest", "KKB TEST"), ("rmtest", "RMTEST"),
+])
+def test_general_health_uses_canonical_cluster_operator_facts(
+    cluster_id: str, cluster_name: str,
+) -> None:
+    llm = FakeLLM([{
+        "content": "Toplam: 35 ClusterOperator", "tool_calls": None,
+    }])
+    mcp = mcp_with([{"items": [operator(f"co-{index}") for index in range(34)]}])
+    result = AgentLoop(
+        configured(), llm, mcp, cluster_id, cluster_name
+    ).run("cluster sağlık durumunu kontrol et")
+    assert f"## {cluster_name}" in result.answer
+    assert "Toplam ClusterOperator: **34**" in result.answer
+    assert "35" not in result.answer
+    assert result.evidence[0]["facts"]["resource_count"] == 34
+
+
+def node_metrics_mcp(results):
+    mcp = FakeMCP(results)
+    mcp.list_tools = lambda: [{
+        "name": "nodes_top", "description": "Node CPU and memory metrics",
+        "inputSchema": {"type": "object", "properties": {}},
+    }]
+    return mcp
+
+
+def test_direct_node_metrics_intent_forces_nodes_top_only() -> None:
+    llm = FakeLLM([{
+        "content": "worker-1 CPU 120m, memory 1Gi", "tool_calls": None,
+    }])
+    mcp = node_metrics_mcp([{"nodes": [{"name": "worker-1"}]}])
+    result = AgentLoop(
+        configured(), llm, mcp, "rmtest", "RMTEST"
+    ).run("node CPU ve memory kullanımı")
+    assert mcp.calls == [("nodes_top", {})]
+    assert result.evidence == [{"tool": "nodes_top", "status": "success"}]
+    assert result.answer == "worker-1 CPU 120m, memory 1Gi"
+    assert llm.calls[0]["tools"] == []
+    assert llm.calls[0]["messages"][1]["content"] == "node CPU ve memory kullanımı"
+
+
+def test_direct_node_metrics_failure_does_not_fabricate_values() -> None:
+    llm = FakeLLM([])
+    result = AgentLoop(
+        configured(), llm,
+        node_metrics_mcp([MCPUnavailable("metrics unavailable")]),
+        "rmtest", "RMTEST",
+    ).run("node CPU ve memory kullanımı")
+    assert result.answer == "Node CPU ve memory metrikleri bu sorguda doğrulanamadı."
+    assert llm.calls == []
 
 
 def cluster_operator_answer(answer: str) -> str:

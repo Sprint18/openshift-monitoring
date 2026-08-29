@@ -71,7 +71,9 @@ def test_ai_chat_proxy_preserves_safe_contract(ai_client: Mock) -> None:
     })
     assert response.status_code == 200
     assert response.json() == ai_client.chat.return_value
-    ai_client.chat.assert_called_once_with("kkbtest", "Cluster health")
+    ai_client.chat.assert_called_once_with(
+        "kkbtest", "Cluster health", context_cluster_id=None
+    )
 
 
 @pytest.mark.parametrize("message", ["", "   ", "\n\t"])
@@ -94,7 +96,31 @@ def test_ai_chat_ignores_legacy_browser_cluster_for_routing(ai_client: Mock) -> 
         "cluster": "unknown", "message": "RMTEST'e bak",
     })
     assert response.status_code == 200
-    ai_client.chat.assert_called_once_with("kkbtest", "RMTEST'e bak")
+    ai_client.chat.assert_called_once_with(
+        "kkbtest", "RMTEST'e bak", context_cluster_id=None
+    )
+
+
+@patch("app.main.ai_backend_client")
+def test_ai_chat_proxy_forwards_only_allowlisted_context_hint(ai_client: Mock) -> None:
+    ai_client.chat.return_value = {
+        "cluster": "rmtest", "answer": "RMTEST", "tool_calls": [], "evidence": [],
+    }
+    response = client.post("/api/ai/chat", json={
+        "message": "cluster durumuna bak", "context_cluster_id": "rmtest",
+    })
+    assert response.status_code == 200
+    ai_client.chat.assert_called_once_with(
+        "kkbtest", "cluster durumuna bak", context_cluster_id="rmtest"
+    )
+
+    ai_client.reset_mock()
+    client.post("/api/ai/chat", json={
+        "message": "cluster durumuna bak", "context_cluster_id": "arbitrary-url",
+    })
+    ai_client.chat.assert_called_once_with(
+        "kkbtest", "cluster durumuna bak", context_cluster_id=None
+    )
 
 
 @pytest.mark.parametrize(("code", "status", "error"), [
@@ -153,6 +179,23 @@ def test_ai_client_sanitizes_chat_response_metadata(urlopen: Mock) -> None:
         "tool_calls": [{"name": "nodes_top", "status": "success"}],
         "evidence": [{"tool": "nodes_top", "status": "success"}],
     }
+
+
+@patch("app.ai_client.urllib.request.urlopen")
+def test_ai_client_sends_only_canonical_context_cluster_id(urlopen: Mock) -> None:
+    urlopen.return_value = FakeResponse({
+        "cluster": "rmtest", "answer": "Safe", "tool_calls": [], "evidence": [],
+    })
+    AIBackendClient("http://ai.internal:8080", 90).chat(
+        "kkbtest", "health", context_cluster_id="rmtest"
+    )
+    request = urlopen.call_args.args[0]
+    payload = json.loads(request.data)
+    assert payload == {
+        "cluster": "kkbtest", "message": "health",
+        "context_cluster_id": "rmtest",
+    }
+    assert "mcp" not in json.dumps(payload).lower()
 
 
 @patch("app.ai_client.urllib.request.urlopen")
@@ -313,6 +356,10 @@ def test_ai_template_is_a_scrollable_chat_workspace() -> None:
     assert "min-height:0" in css or "min-height: 0" in css
     assert ".shiftlight-composer { position:relative; bottom:auto; flex:0 0 auto" in css
     assert "overflow-y:auto" in css
+    drawer_css = css[css.index(".shiftlight-drawer {"):css.index(".shiftlight-drawer.open")]
+    assert "overflow: hidden" in drawer_css
+    assert partial.index('id="shiftlight-conversation"') < partial.index('id="shiftlight-form"')
+    assert ".shiftlight-drawer.open.fullscreen" in css and "height:94dvh" in css
     assert "conversation.scrollHeight" in source
     assert "conversation.scrollTop" in source
     assert "conversation.scrollHeight" in source
@@ -543,7 +590,7 @@ def test_shiftlight_has_no_assistant_selector_but_dashboard_selector_remains() -
     assert "clusterSelect" not in source
     assert 'id="cluster"' in dashboard
     assert "selectedCluster" in dashboard
-    assert 'JSON.stringify({message: text})' in source
+    assert 'context_cluster_id: root.dataset.contextCluster' in source
 
 
 def test_shiftlight_evidence_fact_labels_and_allowlist_survive_ui_path() -> None:
@@ -641,7 +688,7 @@ def test_shiftlight_tables_have_independent_safe_csv_exports() -> None:
     assert "shiftlight-table-" in source
     assert "URL.revokeObjectURL(url)" in source
     assert "position:sticky" in css
-    assert ".shiftlight-table-viewport{overflow:auto}" in css
+    assert ".shiftlight-table-viewport{max-width:100%;overflow:auto}" in css
     assert "innerHTML" not in source
     assert "insertAdjacentHTML" not in source
     assert "document.write" not in source

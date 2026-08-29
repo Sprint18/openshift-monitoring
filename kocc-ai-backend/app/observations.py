@@ -1,7 +1,29 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ClusterOperatorFacts:
+    cluster_id: str | None
+    total: int
+    available_false_count: int
+    progressing_true_count: int
+    degraded_true_count: int
+    unavailable_names: tuple[str, ...] = ()
+    progressing_names: tuple[str, ...] = ()
+    degraded_names: tuple[str, ...] = ()
+
+    def public_facts(self) -> dict[str, int]:
+        return {
+            "resource_count": self.total,
+            "available_false_count": self.available_false_count,
+            "progressing_true_count": self.progressing_true_count,
+            "degraded_true_count": self.degraded_true_count,
+        }
 
 
 def _json_objects(value: Any) -> list[dict[str, Any]]:
@@ -44,25 +66,160 @@ def _resource_kind(arguments: dict[str, Any], payload: dict[str, Any]) -> str | 
     return None
 
 
-def _condition_true(item: dict[str, Any], condition_type: str, expected: str) -> bool:
+def _structured_operator_record(
+    item: Any,
+) -> tuple[str, bool, bool, bool] | None:
+    if not isinstance(item, dict):
+        return None
+    if item.get("apiVersion") != "config.openshift.io/v1":
+        return None
+    if item.get("kind") != "ClusterOperator":
+        return None
+    metadata = item.get("metadata")
+    name = metadata.get("name") if isinstance(metadata, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    states: dict[str, bool] = {}
     status = item.get("status")
     conditions = status.get("conditions") if isinstance(status, dict) else None
     if not isinstance(conditions, list):
-        return False
-    return any(
-        isinstance(condition, dict)
-        and condition.get("type") == condition_type
-        and str(condition.get("status", "")).lower() == expected.lower()
-        for condition in conditions
+        return None
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            continue
+        condition_type = condition.get("type")
+        condition_status = condition.get("status")
+        if condition_type in {"Available", "Progressing", "Degraded"}:
+            if condition_status not in {"True", "False"}:
+                return None
+            states[condition_type] = condition_status == "True"
+    if set(states) != {"Available", "Progressing", "Degraded"}:
+        return None
+    return name.strip(), states["Available"], states["Progressing"], states["Degraded"]
+
+
+def _text_fragments(value: Any) -> list[str]:
+    fragments: list[str] = []
+    if isinstance(value, str):
+        fragments.append(value)
+        candidate = value.strip()
+        if candidate.startswith("data:"):
+            candidate = candidate.removeprefix("data:").strip()
+        if candidate.startswith(("{", "[")):
+            try:
+                _collect_text_fragments(json.loads(candidate), fragments)
+            except json.JSONDecodeError:
+                pass
+    else:
+        _collect_text_fragments(value, fragments)
+    return fragments
+
+
+def _collect_text_fragments(value: Any, fragments: list[str]) -> None:
+    if isinstance(value, dict):
+        for nested in value.values():
+            _collect_text_fragments(nested, fragments)
+    elif isinstance(value, list):
+        for nested in value:
+            _collect_text_fragments(nested, fragments)
+    elif isinstance(value, str):
+        fragments.append(value)
+        candidate = value.strip()
+        if candidate.startswith("data:"):
+            candidate = candidate.removeprefix("data:").strip()
+        if candidate.startswith(("{", "[")):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                return
+            _collect_text_fragments(parsed, fragments)
+
+
+_TABLE_OPERATOR = re.compile(
+    r"^config\.openshift\.io/v1\s+ClusterOperator\s+(\S+)\s+"
+    r".*?\s+(True|False)\s+(True|False)\s+(True|False)(?:\s|$)",
+    flags=re.IGNORECASE,
+)
+
+
+def _table_operator_records(result: dict[str, Any]) -> list[tuple[str, bool, bool, bool]]:
+    records: dict[str, tuple[str, bool, bool, bool]] = {}
+    fragments = _text_fragments(result)
+    index = 0
+    while index < len(fragments):
+        fragment = fragments[index]
+        index += 1
+        for raw_line in fragment.splitlines():
+            line = raw_line.strip().strip("`|").replace("|", " ")
+            if line.startswith("data:"):
+                line = line.removeprefix("data:").strip()
+                if line.startswith(("{", "[")):
+                    try:
+                        fragments.extend(_text_fragments(json.loads(line)))
+                    except json.JSONDecodeError:
+                        pass
+            match = _TABLE_OPERATOR.match(line)
+            if not match:
+                continue
+            name, available, progressing, degraded = match.groups()
+            records[name] = (
+                name,
+                available.lower() == "true",
+                progressing.lower() == "true",
+                degraded.lower() == "true",
+            )
+    return list(records.values())
+
+
+def cluster_operator_facts(
+    result: dict[str, Any], cluster_id: str | None = None
+) -> ClusterOperatorFacts | None:
+    records: list[tuple[str, bool, bool, bool]] = []
+    for payload in _json_objects(result):
+        items = payload.get("items")
+        if not isinstance(items, list):
+            continue
+        records = [
+            record for item in items
+            if (record := _structured_operator_record(item)) is not None
+        ]
+        if records:
+            break
+    if not records:
+        records = _table_operator_records(result)
+    if not records:
+        return None
+    unavailable = tuple(name for name, available, _p, _d in records if not available)
+    progressing = tuple(name for name, _a, value, _d in records if value)
+    degraded = tuple(name for name, _a, _p, value in records if value)
+    return ClusterOperatorFacts(
+        cluster_id=cluster_id,
+        total=len(records),
+        available_false_count=len(unavailable),
+        progressing_true_count=len(progressing),
+        degraded_true_count=len(degraded),
+        unavailable_names=unavailable,
+        progressing_names=progressing,
+        degraded_names=degraded,
     )
 
 
 def deterministic_observation(
-    tool_name: str, arguments: dict[str, Any], result: dict[str, Any]
+    tool_name: str, arguments: dict[str, Any], result: dict[str, Any],
+    cluster_id: str | None = None,
 ) -> dict[str, Any]:
     """Extract safe authoritative facts before the MCP result is truncated."""
     if tool_name not in {"resources_list", "pods_list", "namespaces_list"}:
         return {}
+    requested_kind = next((
+        arguments.get(key) for key in ("kind", "resource", "resourceType")
+        if isinstance(arguments.get(key), str)
+    ), None)
+    if requested_kind and requested_kind.removesuffix("List").lower() in {
+        "clusteroperator", "clusteroperators",
+    }:
+        facts = cluster_operator_facts(result, cluster_id)
+        return ({"kind": "ClusterOperator", **facts.public_facts()} if facts else {})
     payload = next(
         (
             candidate for candidate in _json_objects(result)
@@ -77,20 +234,4 @@ def deterministic_observation(
     kind = _resource_kind(arguments, payload)
     if kind:
         facts["kind"] = kind
-    if kind and kind.lower() in {"clusteroperator", "clusteroperators"}:
-        facts.update({
-            "kind": "ClusterOperator",
-            "degraded_true_count": sum(
-                _condition_true(item, "Degraded", "True")
-                for item in items if isinstance(item, dict)
-            ),
-            "available_false_count": sum(
-                _condition_true(item, "Available", "False")
-                for item in items if isinstance(item, dict)
-            ),
-            "progressing_true_count": sum(
-                _condition_true(item, "Progressing", "True")
-                for item in items if isinstance(item, dict)
-            ),
-        })
     return facts

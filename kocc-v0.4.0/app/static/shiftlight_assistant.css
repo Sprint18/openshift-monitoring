@@ -38,7 +38,6 @@
 .shiftlight-flight[data-state="resting"] { pointer-events:none; animation:shiftlight-compact .42s ease-in both; }
 .shiftlight-launcher:focus-visible,
 .shiftlight-drawer button:focus-visible,
-.shiftlight-drawer select:focus-visible,
 .shiftlight-drawer textarea:focus-visible {
     outline: 3px solid #67b7f7;
     outline-offset: 2px;
@@ -80,6 +79,7 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
     height: 100vh;
     height: 100dvh;
     min-height: 0;
+    overflow: hidden;
     width: min(460px,calc(100vw - 34px));
     color: #151515;
     background: #f7f9fb;
@@ -100,9 +100,7 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-readonly { padding:4px 7px; border:1px solid #9ebbd7; border-radius:11px; font-size:10px; }
 .shiftlight-header-actions button { width:30px; height:30px; color:#fff; background:transparent; border:0; border-radius:5px; font-size:24px; cursor:pointer; }
 .shiftlight-toolbar { display:flex; flex:0 0 auto; align-items:end; justify-content:space-between; gap:9px; padding:10px 12px; background:#fff; border-bottom:1px solid var(--shiftlight-border); }
-.shiftlight-toolbar label { display:grid; gap:4px; color:var(--shiftlight-muted); font-size:11px; font-weight:bold; }
-.shiftlight-toolbar select { min-width:142px; padding:7px 9px; background:#fff; border:1px solid #8a8d90; border-radius:6px; font:12px Arial,sans-serif; }
-.shiftlight-toolbar > div { display:flex; gap:6px; }
+.shiftlight-toolbar > div { display:flex; gap:6px; margin-left:auto; }
 .shiftlight-toolbar button { padding:7px 8px; color:var(--shiftlight-navy); background:#fff; border:1px solid #aebdcb; border-radius:6px; font-size:11px; font-weight:bold; cursor:pointer; }
 .shiftlight-history { flex:0 0 auto; max-height:min(300px,42dvh); overflow-y:auto; padding:8px 10px 10px; background:#fff; border-bottom:1px solid var(--shiftlight-border); box-shadow:0 8px 18px rgba(19,43,79,.08); }
 .shiftlight-history-title { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; color:var(--shiftlight-navy); font-size:12px; }
@@ -129,7 +127,7 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-answer p,.shiftlight-answer ul,.shiftlight-answer ol { margin:6px 0; }
 .shiftlight-answer code { padding:2px 4px; background:#e9eef3; border-radius:3px; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.92em; }
 .shiftlight-code { overflow:auto; margin:8px 0; padding:10px; color:#edf4fb; background:#142238; border-radius:7px; white-space:pre; }.shiftlight-code code{padding:0;color:inherit;background:transparent}
-.shiftlight-table { margin:9px 0; border:1px solid var(--shiftlight-border); border-radius:6px; background:#fff; }.shiftlight-table-actions{display:flex;justify-content:flex-end;padding:5px 7px;border-bottom:1px solid var(--shiftlight-border);background:#f7f9fb}.shiftlight-table-actions button{padding:4px 7px;color:#005a9c;background:#fff;border:1px solid #aebdcb;border-radius:5px;font-size:10px;font-weight:bold;cursor:pointer}.shiftlight-table-viewport{overflow:auto}.shiftlight-table table{width:100%;border-collapse:collapse}.shiftlight-table th,.shiftlight-table td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--shiftlight-border);white-space:nowrap}.shiftlight-table th{position:sticky;top:0;z-index:1;color:var(--shiftlight-navy);background:#eaf0f5}
+.shiftlight-table { max-width:100%; overflow:hidden; margin:9px 0; border:1px solid var(--shiftlight-border); border-radius:6px; background:#fff; }.shiftlight-table-actions{display:flex;justify-content:flex-end;padding:5px 7px;border-bottom:1px solid var(--shiftlight-border);background:#f7f9fb}.shiftlight-table-actions button{padding:4px 7px;color:#005a9c;background:#fff;border:1px solid #aebdcb;border-radius:5px;font-size:10px;font-weight:bold;cursor:pointer}.shiftlight-table-viewport{max-width:100%;overflow:auto}.shiftlight-table table{width:100%;border-collapse:collapse}.shiftlight-table th,.shiftlight-table td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--shiftlight-border);white-space:nowrap}.shiftlight-table th{position:sticky;top:0;z-index:1;color:var(--shiftlight-navy);background:#eaf0f5}
 .shiftlight-drawer.fullscreen .shiftlight-conversation{padding:24px 30px}.shiftlight-drawer.fullscreen .shiftlight-message{max-width:100%}.shiftlight-drawer.fullscreen .shiftlight-answer{padding-left:38px}.shiftlight-drawer.fullscreen .shiftlight-table-viewport{max-height:62dvh}.shiftlight-drawer.fullscreen .shiftlight-table th,.shiftlight-drawer.fullscreen .shiftlight-table td{padding:9px 12px;white-space:normal;overflow-wrap:anywhere}
 .shiftlight-answer a { color:#005ea8; }
 .shiftlight-message.error .shiftlight-answer { color:#8a150d; }
@@ -143,5 +141,5 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 @keyframes shiftlight-land { 0%{transform:translate3d(0,-10px,0) scale(1.04)} 65%{transform:translate3d(0,3px,0) scale(.98)} 100%{transform:translate3d(0,0,0) scale(1)} }
 @keyframes shiftlight-compact { from{opacity:1;transform:translate3d(0,0,0) scale(1)} to{opacity:0;transform:translate3d(38px,22px,0) scale(.52)} }
 @media (prefers-reduced-motion: reduce) { .shiftlight-nudge{transition:opacity .15s ease}.shiftlight-flight,.shiftlight-flight[data-state] { animation:none; opacity:1; transform:none; }.shiftlight-drawer { transition:none; }.shiftlight-conversation { scroll-behavior:auto; } }
-@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-flight{right:12px;bottom:70px;width:108px;height:108px}.shiftlight-flight[data-state="flight-ready"]{transform:translate3d(105px,80px,0) rotate(-8deg) scale(.9)}.shiftlight-flight[data-state="flying"]{animation-name:shiftlight-flight-mobile;animation-duration:1.3s}.shiftlight-nudge{right:102px;bottom:82px;width:min(235px,calc(100vw - 118px));padding:12px 28px 12px 13px;font-size:12px}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column}.shiftlight-toolbar label{grid-template-columns:auto 1fr;align-items:center}.shiftlight-toolbar select{width:100%} }
+@media (max-width: 620px) { .shiftlight-launcher{right:12px;bottom:12px}.shiftlight-launcher > span:last-child{display:none}.shiftlight-flight{right:12px;bottom:70px;width:108px;height:108px}.shiftlight-flight[data-state="flight-ready"]{transform:translate3d(105px,80px,0) rotate(-8deg) scale(.9)}.shiftlight-flight[data-state="flying"]{animation-name:shiftlight-flight-mobile;animation-duration:1.3s}.shiftlight-nudge{right:102px;bottom:82px;width:min(235px,calc(100vw - 118px));padding:12px 28px 12px 13px;font-size:12px}.shiftlight-drawer{width:100vw}.shiftlight-drawer.open.fullscreen{top:0;right:0;width:100vw;height:100dvh;border:0;border-radius:0;transform:none}.shiftlight-drawer.fullscreen .shiftlight-conversation{padding:16px 12px}.shiftlight-overlay{display:none}.shiftlight-toolbar{align-items:stretch;flex-direction:column} }
 @keyframes shiftlight-flight-mobile { 0%{opacity:0;transform:translate3d(95px,80px,0) rotate(10deg) scale(.8)} 45%{opacity:1;transform:translate3d(-28vw,-15vh,0) rotate(-7deg) scale(1.04)} 78%{transform:translate3d(-5vw,-5vh,0) rotate(3deg)} 100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1)} }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.agent import AgentLoop, SYSTEM_PROMPT, TRUNCATION_MARKER
-from app.observations import deterministic_observation
+from app.observations import cluster_operator_facts, deterministic_observation
 from tests.test_agent import FakeLLM, FakeMCP, configured, tool_call
 
 
@@ -47,6 +47,74 @@ def test_cluster_operator_summary_counts_conditions() -> None:
     )
     assert facts["resource_count"] == 34
     assert facts["degraded_true_count"] == 1
+
+
+def operator_table(count: int = 34) -> str:
+    header = (
+        "APIVERSION KIND NAME VERSION AVAILABLE PROGRESSING DEGRADED "
+        "SINCE MESSAGE LABELS"
+    )
+    rows = [
+        f"config.openshift.io/v1 ClusterOperator co-{index} 4.18.40 "
+        "True False False 1d ok -"
+        for index in range(count)
+    ]
+    return "\n".join([header, "", *rows])
+
+
+def test_cluster_operator_table_parser_excludes_header_blank_and_invalid_rows() -> None:
+    table = operator_table() + "\ninvalid row\nconfig.openshift.io/v1 ClusterOperator bad 4.18 Maybe False False"
+    facts = cluster_operator_facts({"content": [{"type": "text", "text": table}]}, "rmtest")
+    assert facts is not None
+    assert facts.cluster_id == "rmtest"
+    assert facts.total == 34
+    assert facts.available_false_count == 0
+    assert facts.progressing_true_count == 0
+    assert facts.degraded_true_count == 0
+
+
+def test_cluster_operator_table_parser_tolerates_sse_and_jsonrpc_wrappers() -> None:
+    envelope = json.dumps({
+        "jsonrpc": "2.0", "id": 7,
+        "result": {"content": [{"type": "text", "text": operator_table()}]},
+    })
+    wrapped = f"event: message\ndata: {envelope}\n\n"
+    facts = cluster_operator_facts({
+        "content": [{"type": "text", "text": wrapped}]
+    }, "rmtest")
+    assert facts is not None
+    assert facts.total == 34
+
+
+def test_cluster_operator_table_conditions_use_only_valid_records() -> None:
+    table = "\n".join([
+        operator_table(31),
+        "config.openshift.io/v1 ClusterOperator unavailable 4.18.40 False False False 1d msg -",
+        "config.openshift.io/v1 ClusterOperator progressing 4.18.40 True True False 1d msg -",
+        "config.openshift.io/v1 ClusterOperator degraded 4.18.40 True False True 1d msg -",
+        "config.openshift.io/v1 ClusterOperator invalid 4.18.40 Unknown True True 1d msg -",
+    ])
+    facts = cluster_operator_facts({"content": [{"text": table}]})
+    assert facts is not None
+    assert facts.total == 34
+    assert facts.available_false_count == 1
+    assert facts.progressing_true_count == 1
+    assert facts.degraded_true_count == 1
+    assert facts.unavailable_names == ("unavailable",)
+    assert facts.progressing_names == ("progressing",)
+    assert facts.degraded_names == ("degraded",)
+
+
+def test_cluster_operator_structured_parser_counts_only_valid_records() -> None:
+    items = [operator(f"valid-{index}") for index in range(34)]
+    items.extend([
+        {"kind": "ClusterOperator", "metadata": {"name": "header"}},
+        {"apiVersion": "config.openshift.io/v1", "kind": "Pod",
+         "metadata": {"name": "wrong-kind"}},
+    ])
+    facts = cluster_operator_facts({"items": items}, "kkbtest")
+    assert facts is not None
+    assert facts.total == 34
 
 
 def test_observation_reads_streamable_mcp_text_and_structured_content() -> None:

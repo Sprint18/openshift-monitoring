@@ -47,7 +47,8 @@ class ResolvedClusterRequest:
 
 ALL_CLUSTER_PHRASES = (
     "tüm clusterlara", "tüm clusterları", "bütün clusterlara",
-    "bütün clusterları", "hepsinin", "all clusters", "check all clusters",
+    "bütün clusterları", "tüm clusterlarda", "bütün clusterlarda",
+    "hepsinin", "all clusters", "check all clusters",
 )
 TURKISH_SUFFIXES = (
     "teki", "taki", "deki", "daki", "de", "da", "te", "ta", "e", "a",

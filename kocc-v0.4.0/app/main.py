@@ -138,6 +138,7 @@ ai_backend_client = AIBackendClient(
 
 class AIChatRequest(BaseModel):
     message: str
+    context_cluster_id: str | None = None
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -1278,10 +1279,13 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
             status_code=400,
         )
     try:
-        # The AI backend's deterministic resolver is the sole routing authority.
-        # kkbtest remains only the backward-compatible API fallback when the
-        # message contains no explicit cluster reference.
-        return JSONResponse(ai_backend_client.chat("kkbtest", payload.message))
+        context_cluster_id = (
+            payload.context_cluster_id
+            if payload.context_cluster_id in AI_SUPPORTED_CLUSTER_IDS else None
+        )
+        return JSONResponse(ai_backend_client.chat(
+            "kkbtest", payload.message, context_cluster_id=context_cluster_id
+        ))
     except AIBackendError as exc:
         return ai_error_response(exc)
 

@@ -181,7 +181,8 @@ def test_chat_missing_token_and_cluster_routing() -> None:
     unknown = client.post("/api/v1/chat", json={
         "cluster": "unknown", "message": "test",
     })
-    assert unknown.status_code == 404
+    assert unknown.status_code == 503
+    assert unknown.json() == {"error": "llm_unavailable"}
 
 
 @patch("app.main.MCPClient")
@@ -269,6 +270,65 @@ def test_explicit_cluster_text_routes_only_to_registry_owned_mcp(
     mcp_class.assert_called_once_with(expected_url, 2)
     agent_class.return_value.run.assert_called_once_with("node CPU durumuna bak")
     assert agent_class.call_args.args[3] == expected_cluster
+
+
+@pytest.mark.parametrize(("context", "message", "expected_cluster", "source"), [
+    ("rmtest", "cluster sağlık durumunu kontrol et", "rmtest", "context"),
+    ("rmtest", "KKBTEST clusterını kontrol et", "kkbtest", "explicit"),
+    ("kkbtest", "RMTEST clusterını kontrol et", "rmtest", "explicit"),
+    ("unknown", "cluster durumuna bak", "kkbtest", "default"),
+    (None, "pod durumuna bak", "kkbtest", "default"),
+])
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_context_hint_routing_precedence_and_validation(
+    mcp_class: Mock, agent_class: Mock, caplog,
+    context: str | None, message: str, expected_cluster: str, source: str,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult("Grounded", [])
+    payload = {"message": message}
+    if context is not None:
+        payload["context_cluster_id"] = context
+    with caplog.at_level("INFO", logger="kocc_ai"):
+        response = TestClient(create_app(settings(token="token"))).post(
+            "/api/v1/chat", json=payload,
+        )
+    assert response.status_code == 200
+    assert response.json()["cluster"] == expected_cluster
+    expected_url = (
+        "https://rm-mcp.example/mcp" if expected_cluster == "rmtest"
+        else "http://mcp.example/mcp"
+    )
+    mcp_class.assert_called_once_with(expected_url, 2)
+    assert (
+        f"ai_chat_route scope=single target_cluster={expected_cluster} "
+        f"source={source}"
+    ) in caplog.text
+    assert "private" not in caplog.text
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_all_cluster_intent_overrides_context_hint(
+    mcp_class: Mock, agent_class: Mock, caplog,
+) -> None:
+    agent_class.return_value.run.side_effect = [
+        AgentResult("KKB", []), AgentResult("RM", []),
+    ]
+    with caplog.at_level("INFO", logger="kocc_ai"):
+        response = TestClient(create_app(settings(token="token"))).post(
+            "/api/v1/chat", json={
+                "context_cluster_id": "rmtest",
+                "message": "tüm clusterlarda degraded ClusterOperator var mı?",
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["cluster"] == "all"
+    assert len(mcp_class.call_args_list) == 2
+    assert (
+        "ai_chat_route scope=all target_clusters=kkbtest,rmtest source=explicit"
+        in caplog.text
+    )
 
 
 @patch("app.main.AgentLoop")

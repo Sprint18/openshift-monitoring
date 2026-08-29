@@ -152,6 +152,26 @@ def _direct_resource_identity(message: str) -> ResourceIdentity | None:
     return None
 
 
+def _general_health_intent(message: str) -> bool:
+    normalized = " ".join(message.casefold().split())
+    return (
+        "sağlık" in normalized or "sağlı" in normalized or "health" in normalized
+        or ("cluster" in normalized and any(
+            term in normalized for term in ("kontrol", "durum")
+        ))
+    )
+
+
+def _node_metrics_intent(message: str) -> bool:
+    normalized = " ".join(message.casefold().split())
+    return (
+        re.search(r"\b(?:node|nodes|düğüm)\b", normalized) is not None
+        and any(term in normalized for term in (
+            "cpu", "memory", "bellek", "ram", "kullanım", "metric",
+        ))
+    )
+
+
 def _direct_cluster_operator_answer(
     facts: dict[str, Any], cluster_name: str | None = None
 ) -> str:
@@ -322,6 +342,8 @@ class AgentLoop:
 
     def run(self, message: str) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
+        general_health = direct_identity is None and _general_health_intent(message)
+        node_metrics = direct_identity is None and _node_metrics_intent(message)
         available_tools = openai_tools(self.mcp.list_tools())
         if direct_identity is not None:
             available_tools = [
@@ -336,18 +358,8 @@ class AgentLoop:
             item["function"]["name"] for item in available_tools
         }
         if direct_identity == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]:
-            call = {
-                "id": "backend-clusteroperator",
-                "function": {
-                    "name": "resources_list",
-                    "arguments": json.dumps({
-                        "apiVersion": "config.openshift.io/v1",
-                        "kind": "ClusterOperator",
-                    }),
-                },
-            }
-            _tool_message, summary, facts = self._execute_call(
-                call, available_names, tool_schemas, set(), direct_identity,
+            summary, facts = self._fetch_cluster_operators(
+                available_names, tool_schemas
             )
             evidence: list[dict[str, Any]] = []
             if summary["status"] == "success":
@@ -384,6 +396,54 @@ class AgentLoop:
         audit: list[dict[str, str]] = []
         evidence_audit: list[dict[str, Any]] = []
         failed_calls: set[tuple[str, str]] = set()
+        health_facts: dict[str, Any] | None = None
+        if general_health:
+            summary, facts = self._fetch_cluster_operators(
+                available_names, tool_schemas
+            )
+            audit.append(summary)
+            if summary["status"] == "success" and all(
+                key in facts for key in PUBLIC_FACT_KEYS
+            ):
+                health_facts = {
+                    key: facts[key] for key in PUBLIC_FACT_KEYS
+                }
+                evidence_audit.append({
+                    "tool": "resources_list", "status": "success",
+                    "facts": health_facts,
+                })
+                messages[0]["content"] += (
+                    "\nAUTHORITATIVE CLUSTEROPERATOR FACTS: "
+                    + json.dumps(health_facts, separators=(",", ":"))
+                )
+
+        if node_metrics:
+            call = {
+                "id": "backend-node-metrics",
+                "type": "function",
+                "function": {"name": "nodes_top", "arguments": "{}"},
+            }
+            tool_message, summary, _facts = self._execute_call(
+                call, available_names, tool_schemas, failed_calls, None,
+            )
+            if summary["status"] != "success":
+                return AgentResult(
+                    "Node CPU ve memory metrikleri bu sorguda doğrulanamadı.",
+                    [summary], [], 0,
+                )
+            messages.extend([{
+                "role": "assistant", "content": None, "tool_calls": [call],
+            }, tool_message])
+            assistant = self.llm.chat_completion(
+                messages, tools=[], tool_choice="none"
+            )
+            content = assistant.get("content")
+            if not isinstance(content, str) or assistant.get("tool_calls"):
+                raise LLMUnavailable("LLM returned an invalid response")
+            return AgentResult(
+                content, [summary], [{"tool": "nodes_top", "status": "success"}], 1
+            )
+
         total_calls = 0
         for iteration in range(1, self.settings.agent_max_iterations + 1):
             logger.info("agent_iteration iteration=%s", iteration)
@@ -395,6 +455,19 @@ class AgentLoop:
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
+                if general_health:
+                    verified = (
+                        _direct_cluster_operator_answer(
+                            health_facts, self.target_cluster_name
+                        ) if health_facts else (
+                            "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı."
+                        )
+                    )
+                    # Do not expose an LLM-authored ClusterOperator section beside
+                    # the canonical backend section.
+                    if "operator" not in content.casefold():
+                        verified += "\n\n## Ek Sağlık Değerlendirmesi\n\n" + content
+                    content = verified
                 return AgentResult(
                     _guard_cluster_operator_answer(content, evidence_audit),
                     audit, evidence_audit, iteration,
@@ -447,6 +520,26 @@ class AgentLoop:
                     )
 
         raise AgentLimitReached("iteration_limit")
+
+    def _fetch_cluster_operators(
+        self, available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]],
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        call = {
+            "id": "backend-clusteroperator",
+            "function": {
+                "name": "resources_list",
+                "arguments": json.dumps({
+                    "apiVersion": "config.openshift.io/v1",
+                    "kind": "ClusterOperator",
+                }),
+            },
+        }
+        _tool_message, summary, facts = self._execute_call(
+            call, available_names, tool_schemas, set(),
+            KNOWN_RESOURCE_IDENTITIES["clusteroperator"],
+        )
+        return summary, facts
 
     def _execute_call(
         self, call: Any, available_names: set[str],
@@ -501,7 +594,9 @@ class AgentLoop:
         try:
             result = self.mcp.call_tool(name, arguments)
             if not result.get("isError"):
-                facts = deterministic_observation(name, arguments, result)
+                facts = deterministic_observation(
+                    name, arguments, result, self.target_cluster_id
+                )
                 content = _tool_context(
                     result, facts, self.settings.agent_max_tool_result_chars
                 )
@@ -512,10 +607,15 @@ class AgentLoop:
         except MCPUnavailable:
             failed_calls.add(signature)
             content = "Tool execution failed: unavailable or timeout."
+        resource = (
+            " resource=ClusterOperator"
+            if direct_identity == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
+            else ""
+        )
         logger.info(
-            "tool_execution cluster_id=%s tool=%s success=%s duration_ms=%s",
-            self.target_cluster_id or "unspecified", name,
-            summary["status"] == "success",
+            "ai_tool_complete cluster_id=%s tool=%s%s success=%s duration_ms=%s",
+            self.target_cluster_id or "unspecified", name, resource,
+            str(summary["status"] == "success").lower(),
             round((time.perf_counter() - started) * 1000),
         )
         return _tool_error(call_id, content), summary, facts

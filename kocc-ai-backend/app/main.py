@@ -20,10 +20,12 @@ from app.mcp_client import MCPClient, MCPUnavailable
 
 
 logger = logging.getLogger("kocc_ai")
+logger.setLevel(logging.INFO)
 
 
 class ChatRequest(BaseModel):
     cluster: str = "kkbtest"
+    context_cluster_id: str | None = None
     message: str = Field(min_length=1)
 
 
@@ -130,27 +132,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload.message, application.state.clusters
         )
         if resolved is None:
-            try:
-                selected_cluster(application.state.clusters, payload.cluster)
-            except UnknownClusterError:
-                return JSONResponse({"error": "unknown_cluster"}, status_code=404)
-            scope = ClusterScope("single", (payload.cluster,))
-            operational_message = payload.message
+            context_cluster = application.state.clusters.get(
+                payload.context_cluster_id or ""
+            )
+            if context_cluster is not None and context_cluster.enabled:
+                scope = ClusterScope("single", (context_cluster.id,))
+                route_source = "context"
+                operational_message = payload.message
+            else:
+                try:
+                    fallback = selected_cluster(
+                        application.state.clusters, payload.cluster
+                    )
+                except UnknownClusterError:
+                    fallback = selected_cluster(
+                        application.state.clusters, "kkbtest"
+                    )
+                scope = ClusterScope("single", (fallback.id,))
+                route_source = "default"
+                operational_message = payload.message
         else:
             scope = resolved.scope
+            route_source = "explicit"
             operational_message = resolved.operational_message or payload.message
         if not application.state.llm_client.is_configured():
             return JSONResponse({"error": "llm_unavailable"}, status_code=503)
 
         if scope.kind == "single":
             logger.info(
-                "ai_chat_route scope=single target_cluster=%s",
-                scope.cluster_ids[0],
+                "ai_chat_route scope=single target_cluster=%s source=%s",
+                scope.cluster_ids[0], route_source,
             )
         else:
             logger.info(
-                "ai_chat_route scope=%s clusters=%s",
-                scope.kind, ",".join(scope.cluster_ids),
+                "ai_chat_route scope=%s target_clusters=%s source=%s",
+                scope.kind, ",".join(scope.cluster_ids), route_source,
             )
 
         def execute(cluster_id: str) -> dict:

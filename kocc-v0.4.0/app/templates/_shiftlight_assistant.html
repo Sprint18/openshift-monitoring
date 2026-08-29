@@ -1,6 +1,6 @@
 <link rel="icon" href="/static/kkb-turuncu-lacivert-logo.png">
 <link rel="stylesheet" href="/static/shiftlight_assistant.css">
-<div id="shiftlight-root" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
+<div id="shiftlight-root" data-context-cluster="{{ selected_cluster }}" data-open-on-load="{{ 'true' if page == 'ai-assistant' else 'false' }}">
     <div id="shiftlight-nudge" class="shiftlight-nudge" hidden role="status">
         <button id="shiftlight-nudge-close" type="button" aria-label="ShiftLight karşılama mesajını kapat">×</button>
         <strong>Merhaba 👋</strong><span>Ben KKB ShiftLight AI.<br>Size nasıl yardımcı olabilirim?</span>

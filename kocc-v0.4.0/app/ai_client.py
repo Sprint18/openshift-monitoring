@@ -131,9 +131,15 @@ class AIBackendClient:
             result.append({"id": cluster_id, "name": name, "enabled": enabled})
         return result
 
-    def chat(self, cluster: str, message: str) -> dict[str, Any]:
+    def chat(
+        self, cluster: str, message: str,
+        context_cluster_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {"cluster": cluster, "message": message}
+        if context_cluster_id in {"kkbtest", "rmtest"}:
+            payload["context_cluster_id"] = context_cluster_id
         response = self._request(
-            "POST", "/api/v1/chat", {"cluster": cluster, "message": message}
+            "POST", "/api/v1/chat", payload
         )
         answer = response.get("answer")
         response_cluster = response.get("cluster", cluster)
