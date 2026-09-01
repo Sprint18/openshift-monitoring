@@ -14,6 +14,10 @@ data:
   AI_AGENT_MAX_TOOL_CALLS: "10"
   AI_AGENT_MAX_TOOL_RESULT_CHARS: "40000"
   AI_AGENT_MAX_USER_CHARS: "8000"
+  AI_K8S_TIMEOUT_SECONDS: "5"
+  AI_K8S_PAGE_LIMIT: "100"
+  AI_K8S_MAX_PAGES: "20"
+  AI_K8S_MAX_ITEMS: "5000"
 ---
 apiVersion: image.openshift.io/v1
 kind: ImageStream
@@ -67,6 +71,7 @@ spec:
       annotations:
         dynatrace.com/inject: "false"
     spec:
+      serviceAccountName: kocc-ai-reader
       securityContext:
         seccompProfile:
           type: RuntimeDefault

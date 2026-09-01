@@ -19,7 +19,9 @@ from app.clusters import (
 )
 from app.config import Settings, load_settings
 from app.llm_client import LLMClient, LLMUnavailable
+from app.k8s_client import KubernetesAPIAdapter
 from app.mcp_client import MCPClient, MCPUnavailable
+from app.namespace_inventory import execute_namespace_query, parse_namespace_query
 
 
 logger = logging.getLogger("kocc_ai")
@@ -225,6 +227,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if (
             not application.state.llm_client.is_configured()
             and not can_run_without_llm(operational_message)
+            and not (
+                parse_namespace_query(operational_message) is not None
+                and any(
+                    application.state.clusters[cluster_id].kubernetes_api.enabled
+                    for cluster_id in scope.cluster_ids
+                )
+            )
         ):
             logger.warning(
                 "ai_chat_failure target_clusters=%s reason=llm_unavailable duration_ms=%s",
@@ -237,13 +246,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }, status_code=503)
 
         def execute(cluster_id: str) -> dict:
-            selected, mcp_client = mcp_for(cluster_id)
+            selected = selected_cluster(application.state.clusters, cluster_id)
             started = time.perf_counter()
             try:
-                result = AgentLoop(
-                    configuration, application.state.llm_client, mcp_client,
-                    selected.id, selected.name,
-                ).run(operational_message)
+                namespace_query = parse_namespace_query(operational_message)
+                if namespace_query is not None and selected.kubernetes_api.enabled:
+                    result = execute_namespace_query(
+                        KubernetesAPIAdapter(
+                            cluster_id=selected.id,
+                            timeout_seconds=configuration.k8s_timeout_seconds,
+                            page_limit=configuration.k8s_page_limit,
+                            max_pages=configuration.k8s_max_pages,
+                            max_items=configuration.k8s_max_items,
+                        ),
+                        selected.id,
+                        namespace_query,
+                    )
+                else:
+                    _, mcp_client = mcp_for(cluster_id)
+                    result = AgentLoop(
+                        configuration, application.state.llm_client, mcp_client,
+                        selected.id, selected.name,
+                    ).run(operational_message)
                 evidence = [
                     {"cluster": selected.id, **item}
                     for item in result.evidence

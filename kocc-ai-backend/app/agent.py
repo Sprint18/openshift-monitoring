@@ -500,6 +500,7 @@ class AgentLoop:
                             "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı."
                         )
                     )
+                    verified = "ClusterOperator sinyallerine göre:\n\n" + verified
                     # Do not expose an LLM-authored ClusterOperator section beside
                     # the canonical backend section.
                     if "operator" not in content.casefold():

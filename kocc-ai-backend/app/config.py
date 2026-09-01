@@ -56,6 +56,10 @@ class Settings:
     agent_max_tool_calls: int = 10
     agent_max_tool_result_chars: int = 40000
     agent_max_user_chars: int = 8000
+    k8s_timeout_seconds: float = 5.0
+    k8s_page_limit: int = 100
+    k8s_max_pages: int = 20
+    k8s_max_items: int = 5000
 
 
 def load_settings() -> Settings:
@@ -79,4 +83,8 @@ def load_settings() -> Settings:
             "AI_AGENT_MAX_TOOL_RESULT_CHARS", 40000
         ),
         agent_max_user_chars=positive_int("AI_AGENT_MAX_USER_CHARS", 8000),
+        k8s_timeout_seconds=positive_float("AI_K8S_TIMEOUT_SECONDS", 5.0),
+        k8s_page_limit=bounded_int("AI_K8S_PAGE_LIMIT", 100, 1, 500),
+        k8s_max_pages=bounded_int("AI_K8S_MAX_PAGES", 20, 1, 100),
+        k8s_max_items=bounded_int("AI_K8S_MAX_ITEMS", 5000, 1, 20000),
     )

@@ -154,6 +154,7 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
     ])
     result = AgentLoop(configured(), llm, mcp).run("Cluster genel sağlığını incele")
     assert len(mcp.calls) == 3
+    assert result.answer.startswith("ClusterOperator sinyallerine göre:")
     assert "Toplam ClusterOperator: **34**" in result.answer
     assert "Genel sağlık kanıtları incelendi." in result.answer
 

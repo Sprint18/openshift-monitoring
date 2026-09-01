@@ -8,12 +8,19 @@ from app.config import Settings
 
 
 @dataclass(frozen=True)
+class KubernetesAPICapability:
+    enabled: bool
+    transport: str | None = None
+
+
+@dataclass(frozen=True)
 class Cluster:
     id: str
     name: str
     enabled: bool
     mcp_url: str
     aliases: tuple[str, ...]
+    kubernetes_api: KubernetesAPICapability
 
     def public_dict(self) -> dict[str, str | bool]:
         return {"id": self.id, "name": self.name, "enabled": self.enabled}
@@ -25,11 +32,13 @@ def cluster_registry(settings: Settings) -> dict[str, Cluster]:
             id="kkbtest", name="KKB TEST", enabled=True,
             mcp_url=settings.mcp_kkbtest_url,
             aliases=("kkbtest", "kkb test"),
+            kubernetes_api=KubernetesAPICapability(True, "in_cluster"),
         ),
         "rmtest": Cluster(
             id="rmtest", name="RMTEST", enabled=True,
             mcp_url=settings.mcp_rmtest_url,
             aliases=("rmtest", "rm test", "rmocptest1"),
+            kubernetes_api=KubernetesAPICapability(False),
         ),
     }
 
