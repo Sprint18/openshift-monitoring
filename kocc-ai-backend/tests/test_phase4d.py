@@ -44,9 +44,19 @@ def test_ambiguous_operational_request_returns_choices_without_mcp(
         "cluster_choices": [
             {"id": "kkbtest", "name": "KKB TEST"},
             {"id": "rmtest", "name": "RMTEST"},
-        ],
-        "allow_all": True,
-    }
+            ],
+            "allow_all": True,
+            "conversation_context": {
+                "active_cluster_ids": [],
+                "last_resource_kind": None,
+                "last_namespace": None,
+                "last_query_operation": None,
+                "last_filter_type": None,
+                "last_filter_value": None,
+                "pending_suggestion_original": None,
+                "pending_suggestion_name": None,
+            },
+        }
     mcp_class.assert_not_called()
 
 

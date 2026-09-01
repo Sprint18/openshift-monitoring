@@ -623,8 +623,23 @@ def test_shiftlight_session_history_is_bounded_minimal_and_routing_free() -> Non
         source.index("const safeConversation"):source.index("const safeStore")
     ]
     assert "item.cluster" not in conversation_sanitizer
-    assert "createdAt, updatedAt, scope: safeScope(value.scope), messages" in source
+    assert "scope: safeScope(value.scope), context: safeChatContext(value.context), messages" in source
     assert 'id="shiftlight-history-list"' in partial
+
+
+def test_shiftlight_sends_bounded_safe_history_and_structured_context() -> None:
+    partial, source = shiftlight_partial(), shiftlight_source()
+    assert "const MAX_CONTEXT_TURNS = 10" in source
+    assert "const MAX_CONTEXT_CHARS = 12000" in source
+    assert "const recentTurns = (conversationItem)" in source
+    assert "recent_turns: history" in source
+    assert "conversation_context: safeChatContext(current.context)" in source
+    assert "current.context = safeChatContext(data.conversation_context)" in source
+    context_block = source[
+        source.index("const safeChatContext"):source.index("const emptyConversation")
+    ]
+    assert "evidence" not in context_block
+    assert "tool_calls" not in context_block
     assert "Sohbetler" in partial
     assert "raw MCP" not in source
     assert "kubeconfig" not in source

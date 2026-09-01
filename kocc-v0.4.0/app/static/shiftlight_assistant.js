@@ -10,6 +10,8 @@
     const MAX_CONVERSATIONS = 10;
     const MAX_MESSAGES = 100;
     const MAX_TEXT_LENGTH = 50000;
+    const MAX_CONTEXT_TURNS = 10;
+    const MAX_CONTEXT_CHARS = 12000;
     const FACT_KEYS = Object.freeze({
         resource_count: "Toplam kaynak",
         degraded_true_count: "Degraded",
@@ -61,7 +63,16 @@
     const conversationId = () => globalThis.crypto && typeof globalThis.crypto.randomUUID === "function" ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const nowIso = () => new Date().toISOString();
     const safeScope = (value) => ["auto", "kkbtest", "rmtest", "all"].includes(value) ? value : "auto";
-    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", messages: []}; };
+    const safeChatContext = (value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+        const result = {};
+        if (Array.isArray(value.active_cluster_ids)) result.active_cluster_ids = value.active_cluster_ids.filter((item) => ["kkbtest", "rmtest"].includes(item)).slice(0, 2);
+        ["last_resource_kind", "last_namespace", "last_query_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name"].forEach((key) => {
+            if (typeof value[key] === "string" && value[key].length <= 100) result[key] = value[key];
+        });
+        return result;
+    };
+    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", context: {}, messages: []}; };
     const emptyStore = () => ({version: STORE_VERSION, activeConversationId: null, conversations: []});
     const isSafeInteger = (value) => Number.isInteger(value) && value >= 0;
     const safeFacts = (facts) => {
@@ -108,7 +119,7 @@
         const messages = Array.isArray(value.messages) ? value.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES) : [];
         const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
         const updatedAt = typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
-        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, scope: safeScope(value.scope), messages};
+        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, scope: safeScope(value.scope), context: safeChatContext(value.context), messages};
     };
     const safeStore = (value) => {
         let conversations = [];
@@ -492,6 +503,15 @@
         const pending = current.messages.find((item) => item.role === "assistant" && item.clarificationId === binding.clarificationId);
         if (pending) { delete pending.pendingQuestion; delete pending.clarificationId; pending.clusterChoices = []; pending.allowAll = false; }
     };
+    const recentTurns = (conversationItem) => {
+        let remaining = MAX_CONTEXT_CHARS;
+        const result = [];
+        [...conversationItem.messages].reverse().filter((item) => item.status !== "pending" && item.status !== "error").slice(0, MAX_CONTEXT_TURNS).forEach((item) => {
+            const content = item.text.slice(0, Math.max(remaining, 0)); remaining -= content.length;
+            if (content.trim()) result.unshift({role: item.role, content});
+        });
+        return result;
+    };
 
     const sendQuestion = async (text, targetClusterIds = null, displayText = text, clarificationBinding = null) => {
         if (requestPending || !text.trim() || !displayText.trim()) return;
@@ -502,15 +522,17 @@
             if (selectedIds) return sendQuestion(pending.pendingQuestion, selectedIds, displayText, {conversationId: current.id, clarificationId: pending.clarificationId});
             if (pending) { expirePendingClarification(current); persistStore(); }
         }
+        const history = recentTurns(current);
         const turn = startTurn(displayText);
         messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
-        const body = {message: text};
+        const body = {message: text, recent_turns: history, conversation_context: safeChatContext(current.context)};
         const currentScope = safeScope((activeConversation() || {}).scope);
         if (currentScope !== "auto") body.conversation_scope = currentScope;
         if (Array.isArray(targetClusterIds)) body.target_cluster_ids = targetClusterIds;
         try {
             const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
+            current.context = safeChatContext(data.conversation_context);
             clearBoundClarification(clarificationBinding);
             settleTurn(turn, {
                 text: data.answer, evidence: safeEvidence(data.evidence), status: "success",

@@ -137,6 +137,8 @@ class AIBackendClient:
         context_cluster_id: str | None = None,
         target_cluster_ids: list[str] | None = None,
         conversation_scope: str = "auto",
+        recent_turns: list[dict[str, Any]] | None = None,
+        conversation_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = {"cluster": cluster, "message": message}
         if context_cluster_id in {"kkbtest", "rmtest"}:
@@ -151,6 +153,12 @@ class AIBackendClient:
             raise AIBackendError("invalid_cluster_scope")
         if conversation_scope != "auto":
             payload["conversation_scope"] = conversation_scope
+        if recent_turns:
+            payload["recent_turns"] = self._recent_turns(recent_turns)
+        if conversation_context:
+            payload["conversation_context"] = self._conversation_context(
+                conversation_context
+            )
         response = self._request(
             "POST", "/api/v1/chat", payload
         )
@@ -176,7 +184,7 @@ class AIBackendClient:
                 if cluster_id not in {"kkbtest", "rmtest"} or not isinstance(name, str):
                     raise AIBackendError("invalid_response")
                 safe_choices.append({"id": cluster_id, "name": name[:100]})
-            return {
+            result = {
                 "answer": answer,
                 "needs_cluster_selection": True,
                 "clarification_id": clarification_id,
@@ -184,13 +192,23 @@ class AIBackendClient:
                 "allow_all": response.get("allow_all") is True,
                 "evidence": [],
             }
+            if isinstance(response.get("conversation_context"), dict):
+                result["conversation_context"] = self._conversation_context(
+                    response["conversation_context"]
+                )
+            return result
         if "cluster" not in response and response.get("clusters") == []:
             if not isinstance(answer, str) or not answer.strip():
                 raise AIBackendError("invalid_response")
-            return {
+            result = {
                 "answer": answer, "clusters": [],
                 "tool_calls": [], "evidence": [],
             }
+            if isinstance(response.get("conversation_context"), dict):
+                result["conversation_context"] = self._conversation_context(
+                    response["conversation_context"]
+                )
+            return result
         response_cluster = response.get("cluster", cluster)
         tool_calls = response.get("tool_calls", [])
         evidence = response.get("evidence", [])
@@ -212,13 +230,57 @@ class AIBackendClient:
             if cluster_id not in {"kkbtest", "rmtest"} or not isinstance(name, str):
                 raise AIBackendError("invalid_response")
             safe_clusters.append({"id": cluster_id, "name": name[:100]})
-        return {
+        result = {
             "cluster": response_cluster,
             "clusters": safe_clusters,
             "answer": answer,
             "tool_calls": self._tool_metadata(tool_calls, "name"),
             "evidence": self._evidence_metadata(evidence),
         }
+        if isinstance(response.get("conversation_context"), dict):
+            result["conversation_context"] = self._conversation_context(
+                response["conversation_context"]
+            )
+        return result
+
+    @staticmethod
+    def _conversation_context(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, Any] = {}
+        cluster_ids = value.get("active_cluster_ids")
+        if isinstance(cluster_ids, list):
+            result["active_cluster_ids"] = [
+                item for item in cluster_ids
+                if isinstance(item, str) and item in {"kkbtest", "rmtest"}
+            ][:2]
+        for key in (
+            "last_resource_kind", "last_namespace", "last_query_operation",
+            "last_filter_type", "last_filter_value",
+            "pending_suggestion_original", "pending_suggestion_name",
+        ):
+            item = value.get(key)
+            if isinstance(item, str) and len(item) <= 100:
+                result[key] = item
+        return result
+
+    @staticmethod
+    def _recent_turns(value: list[dict[str, Any]]) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
+        remaining = 12000
+        for item in reversed(value[-10:]):
+            if not isinstance(item, dict) or set(item) != {"role", "content"}:
+                continue
+            role, content = item.get("role"), item.get("content")
+            if role not in {"user", "assistant"} or not isinstance(content, str):
+                continue
+            clean = content.strip()[:2000]
+            if not clean or remaining <= 0:
+                continue
+            clean = clean[:remaining]
+            remaining -= len(clean)
+            result.append({"role": role, "content": clean})
+        return list(reversed(result))
 
     @staticmethod
     def _tool_metadata(items: list[Any], name_key: str) -> list[dict[str, str]]:

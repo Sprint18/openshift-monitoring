@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.ai_client import AIBackendClient, AIBackendError
 from app.cluster_loader import (
@@ -141,6 +141,8 @@ class AIChatRequest(BaseModel):
     context_cluster_id: str | None = None
     target_cluster_ids: list[str] | None = None
     conversation_scope: str = "auto"
+    recent_turns: list[dict[str, Any]] = Field(default_factory=list)
+    conversation_context: dict[str, Any] = Field(default_factory=dict)
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -1292,10 +1294,16 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
             return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
         if payload.conversation_scope not in {"auto", "kkbtest", "rmtest", "all"}:
             return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
+        context_kwargs: dict[str, Any] = {}
+        if payload.recent_turns:
+            context_kwargs["recent_turns"] = payload.recent_turns
+        if payload.conversation_context:
+            context_kwargs["conversation_context"] = payload.conversation_context
         return JSONResponse(ai_backend_client.chat(
             "kkbtest", payload.message,
             target_cluster_ids=target_cluster_ids,
             conversation_scope=payload.conversation_scope,
+            **context_kwargs,
         ))
     except AIBackendError as exc:
         return ai_error_response(exc)
