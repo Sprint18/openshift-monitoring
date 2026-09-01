@@ -51,6 +51,7 @@ def test_ambiguous_operational_request_returns_choices_without_mcp(
                 "last_resource_kind": None,
                 "last_namespace": None,
                 "last_query_operation": None,
+                "last_operation": None,
                 "last_filter_type": None,
                 "last_filter_value": None,
                 "pending_suggestion_original": None,

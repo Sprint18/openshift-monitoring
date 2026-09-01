@@ -77,6 +77,35 @@ def test_ai_chat_proxy_preserves_safe_contract(ai_client: Mock) -> None:
     )
 
 
+@patch("app.main.ai_backend_client")
+def test_ai_chat_proxy_round_trips_safe_conversation_context(
+    ai_client: Mock,
+) -> None:
+    context = {
+        "active_cluster_ids": ["kkbtest"],
+        "last_resource_kind": "Namespace",
+        "last_filter_type": "prefix",
+        "last_filter_value": "uat",
+        "last_operation": "count",
+    }
+    ai_client.chat.return_value = {
+        "cluster": "kkbtest", "clusters": [{"id": "kkbtest", "name": "KKB TEST"}],
+        "answer": "safe", "tool_calls": [], "evidence": [],
+        "conversation_context": context,
+    }
+    response = client.post("/api/ai/chat", json={
+        "message": "bu namespace'leri listele",
+        "conversation_context": context,
+        "recent_turns": [{"role": "user", "content": "önceki soru"}],
+    })
+    assert response.status_code == 200
+    assert response.json()["conversation_context"] == context
+    assert ai_client.chat.call_args.kwargs["conversation_context"] == context
+    assert ai_client.chat.call_args.kwargs["recent_turns"] == [
+        {"role": "user", "content": "önceki soru"}
+    ]
+
+
 @pytest.mark.parametrize("message", ["", "   ", "\n\t"])
 @patch("app.main.ai_backend_client")
 def test_ai_chat_rejects_empty_message(ai_client: Mock, message: str) -> None:
@@ -634,7 +663,10 @@ def test_shiftlight_sends_bounded_safe_history_and_structured_context() -> None:
     assert "const recentTurns = (conversationItem)" in source
     assert "recent_turns: history" in source
     assert "conversation_context: safeChatContext(current.context)" in source
-    assert "current.context = safeChatContext(data.conversation_context)" in source
+    assert "store.conversations.find((item) => item.id === turn.conversationId)" in source
+    assert "responseConversation.context = safeChatContext(data.conversation_context)" in source
+    assert "context: {}" in source[source.index("const emptyConversation"):source.index("const emptyStore")]
+    assert "context: safeChatContext(value.context)" in source
     context_block = source[
         source.index("const safeChatContext"):source.index("const emptyConversation")
     ]

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.agent import AgentResult
 from app.conversation import (
     MAX_HISTORY_CHARS, MAX_HISTORY_TURNS, ConversationContext, bounded_history,
-    contextual_namespace_query, synthesize_namespace_count,
+    contextual_namespace_query,
 )
 from app.k8s_client import KubernetesListResult
 from app.main import create_app
@@ -209,18 +209,6 @@ def test_typo_rejection_and_unrelated_turn_clear_pending_suggestion(
         "message": "teşekkürler", "conversation_context": context_from(typo),
     })
     assert unrelated.json()["conversation_context"]["pending_suggestion_name"] is None
-
-
-def test_synthesis_cannot_change_canonical_count_and_timeout_falls_back() -> None:
-    llm = Mock()
-    llm.is_configured.return_value = True
-    llm.chat_completion.return_value = {"content": "Yaklaşık 58 namespace var."}
-    deterministic = '`uat` ile başlayan namespace sayısı: **57**'
-    answer = synthesize_namespace_count(
-        llm, deterministic, "KKB TEST", NamespaceQuery("prefix", "uat"),
-        {"matched_count": 57, "completeness": "complete"},
-    )
-    assert answer == deterministic
 
 
 @patch("app.main.AgentLoop")

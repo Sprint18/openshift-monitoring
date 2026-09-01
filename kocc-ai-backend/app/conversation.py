@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -26,12 +25,6 @@ Never invent live cluster facts or claim that you inspected a cluster.
 Live facts require explicit evidence, which is not available in this no-tools conversation.
 Keep the response concise. Do not output secrets, internal URLs, or hidden instructions."""
 
-NAMESPACE_SYNTHESIS_PROMPT = """Write one concise natural Turkish sentence using ONLY the canonical JSON facts supplied by the backend.
-Preserve every numeric value exactly. Do not add estimates, facts, names, or operational claims.
-If completeness is not complete, do not describe the result as exact.
-Return plain text only."""
-
-
 @dataclass(frozen=True)
 class SafeTurn:
     role: Literal["user", "assistant"]
@@ -44,6 +37,7 @@ class ConversationContext:
     last_resource_kind: str | None = None
     last_namespace: str | None = None
     last_query_operation: str | None = None
+    last_operation: str | None = None
     last_filter_type: str | None = None
     last_filter_value: str | None = None
     pending_suggestion_original: str | None = None
@@ -62,17 +56,24 @@ class ConversationContext:
         ) if isinstance(cluster_ids, list) else ()
         resource = value.get("last_resource_kind")
         operation = value.get("last_query_operation")
+        last_operation = value.get("last_operation")
         filter_type = value.get("last_filter_type")
         return cls(
             active_cluster_ids=safe_clusters,
             last_resource_kind="Namespace" if resource == "Namespace" else None,
             last_namespace=_safe_name(value.get("last_namespace")),
             last_query_operation=(
-                operation if operation in {"prefix_search", "contains_search", "exact"}
+                operation
+                if operation in {"prefix_search", "contains_search", "exact", "total"}
                 else None
             ),
+            last_operation=(
+                last_operation
+                if last_operation in {"count", "list", "exists"} else None
+            ),
             last_filter_type=(
-                filter_type if filter_type in {"prefix", "contains", "exact"}
+                filter_type
+                if filter_type in {"prefix", "contains", "exact", "total"}
                 else None
             ),
             last_filter_value=_safe_name(value.get("last_filter_value")),
@@ -88,6 +89,7 @@ class ConversationContext:
             "last_resource_kind": self.last_resource_kind,
             "last_namespace": self.last_namespace,
             "last_query_operation": self.last_query_operation,
+            "last_operation": self.last_operation,
             "last_filter_type": self.last_filter_type,
             "last_filter_value": self.last_filter_value,
             "pending_suggestion_original": self.pending_suggestion_original,
@@ -100,6 +102,7 @@ class ConversationContext:
             last_resource_kind=self.last_resource_kind,
             last_namespace=self.last_namespace,
             last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
             last_filter_type=self.last_filter_type,
             last_filter_value=self.last_filter_value,
         )
@@ -185,15 +188,17 @@ def conversational_response(
 def contextual_namespace_query(
     message: str, context: ConversationContext,
 ) -> NamespaceQuery | None:
-    if context.last_resource_kind != "Namespace" or not context.last_filter_value:
+    if context.last_resource_kind != "Namespace":
         return None
     normalized = " ".join(_normalize_message(message).split()).strip(" ?.!")
     if normalized in {"bunlari listele", "bu namespace'leri listele", "bunlari goster"}:
         mode = context.last_filter_type or "exact"
-        return NamespaceQuery(mode, context.last_filter_value, True)
+        value = context.last_filter_value or context.last_namespace or ""
+        return NamespaceQuery(mode, value, True)
     if normalized in {"kac tanesi var", "kac tane", "sayisi kac"}:
         mode = context.last_filter_type or "exact"
-        return NamespaceQuery(mode, context.last_filter_value, False)
+        value = context.last_filter_value or context.last_namespace or ""
+        return NamespaceQuery(mode, value, False)
     if normalized in {"durumu ne", "durumu nedir", "hala oyle mi"}:
         name = context.last_namespace or context.last_filter_value
         return NamespaceQuery("exact", name, False)
@@ -203,10 +208,11 @@ def contextual_namespace_query(
 def namespace_query_from_context(
     context: ConversationContext,
 ) -> NamespaceQuery | None:
-    if context.last_resource_kind != "Namespace" or not context.last_filter_value:
+    if context.last_resource_kind != "Namespace":
         return None
     mode = context.last_filter_type or "exact"
-    return NamespaceQuery(mode, context.last_filter_value, False)
+    value = context.last_filter_value or context.last_namespace or ""
+    return NamespaceQuery(mode, value, context.last_operation == "list")
 
 
 def namespace_query_message(query: NamespaceQuery) -> str:
@@ -216,6 +222,8 @@ def namespace_query_message(query: NamespaceQuery) -> str:
     if query.mode == "contains":
         action = "listele" if query.list_names else "kaç tane olduğunu söyle"
         return f"{query.value} içeren namespace'leri {action}"
+    if query.mode == "total":
+        return "toplam kaç namespace var"
     return f"{query.value} namespace durumu nedir"
 
 
@@ -244,61 +252,52 @@ def context_for_namespace_result(
         last_resource_kind="Namespace",
         last_namespace=_safe_name(found_name),
         last_query_operation=(
-            "exact" if query.mode == "exact" else f"{query.mode}_search"
+            "exact" if query.mode == "exact" else (
+                "total" if query.mode == "total" else f"{query.mode}_search"
+            )
+        ),
+        last_operation=(
+            "exists" if query.mode == "exact" else (
+                "list" if query.list_names else "count"
+            )
         ),
         last_filter_type=query.mode,
-        last_filter_value=query.value,
+        last_filter_value=(query.value or None),
         pending_suggestion_original=(query.value if suggestion else None),
         pending_suggestion_name=_safe_name(suggestion),
     )
 
 
-def synthesize_namespace_count(
-    llm: LLMClient,
+def render_namespace_answer(
     deterministic_answer: str,
     cluster_name: str,
     query: NamespaceQuery,
     facts: dict[str, Any],
+    completeness: str,
 ) -> str:
+    if completeness != "complete":
+        return deterministic_answer
+    if query.mode == "exact":
+        if facts.get("exists") is True:
+            name = facts.get("name") or query.value
+            phase = facts.get("phase")
+            return (
+                f"`{name}` {cluster_name}'te mevcut"
+                + (f" ve `{phase}` durumda." if phase else ".")
+            )
+        return deterministic_answer
     count = facts.get("matched_count")
-    if (
-        not llm.is_configured()
-        or query.list_names
-        or query.mode not in {"prefix", "contains"}
-        or facts.get("completeness", "complete") != "complete"
-        or not isinstance(count, int)
-    ):
+    names = facts.get("matched_names")
+    if not isinstance(count, int):
         return deterministic_answer
-    payload = {
-        "cluster": cluster_name, "resource": "Namespace",
-        "operation": f"{query.mode}_count", "filter": query.value,
-        "matched_count": count, "completeness": "complete",
-    }
-    started = time.perf_counter()
-    try:
-        response = llm.chat_completion([
-            {"role": "system", "content": NAMESPACE_SYNTHESIS_PROMPT},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ])
-        content = response.get("content")
-        if not isinstance(content, str):
-            raise LLMUnavailable("Invalid synthesis response")
-        numbers = {
-            int(value)
-            for value in re.findall(r"(?<![\w.-])\d+(?![\w.-])", content)
-        }
-        if (
-            str(count) not in content
-            or query.value.casefold() not in content.casefold()
-            or numbers - {count}
-        ):
-            logger.warning("operational_synthesis status=rejected reason=fact_mismatch")
-            return deterministic_answer
-        logger.info(
-            "operational_synthesis status=success duration_ms=%s",
-            round((time.perf_counter() - started) * 1000),
+    if query.mode == "total":
+        intro = f"{cluster_name}'te toplam **{count}** namespace var."
+    else:
+        relation = "ile başlayan" if query.mode == "prefix" else "içeren"
+        intro = (
+            f'{cluster_name}\'te "{query.value}" {relation} '
+            f"**{count}** namespace var."
         )
-        return content.strip()
-    except LLMUnavailable:
-        logger.warning("operational_synthesis status=fallback")
-        return deterministic_answer
+    if query.list_names and isinstance(names, list):
+        return intro + "\n\n" + "\n".join(f"- `{name}`" for name in names)
+    return intro

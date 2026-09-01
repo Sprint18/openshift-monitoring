@@ -256,7 +256,7 @@ class AIBackendClient:
             ][:2]
         for key in (
             "last_resource_kind", "last_namespace", "last_query_operation",
-            "last_filter_type", "last_filter_value",
+            "last_operation", "last_filter_type", "last_filter_value",
             "pending_suggestion_original", "pending_suggestion_name",
         ):
             item = value.get(key)

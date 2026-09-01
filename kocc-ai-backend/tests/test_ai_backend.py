@@ -250,6 +250,7 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
                 "last_resource_kind": None,
                 "last_namespace": None,
                 "last_query_operation": None,
+                "last_operation": None,
                 "last_filter_type": None,
                 "last_filter_value": None,
                 "pending_suggestion_original": None,

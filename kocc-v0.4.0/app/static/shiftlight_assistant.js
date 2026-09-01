@@ -67,7 +67,7 @@
         if (!value || typeof value !== "object" || Array.isArray(value)) return {};
         const result = {};
         if (Array.isArray(value.active_cluster_ids)) result.active_cluster_ids = value.active_cluster_ids.filter((item) => ["kkbtest", "rmtest"].includes(item)).slice(0, 2);
-        ["last_resource_kind", "last_namespace", "last_query_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name"].forEach((key) => {
+        ["last_resource_kind", "last_namespace", "last_query_operation", "last_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name"].forEach((key) => {
             if (typeof value[key] === "string" && value[key].length <= 100) result[key] = value[key];
         });
         return result;
@@ -532,7 +532,8 @@
         try {
             const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
-            current.context = safeChatContext(data.conversation_context);
+            const responseConversation = store.conversations.find((item) => item.id === turn.conversationId);
+            if (responseConversation) responseConversation.context = safeChatContext(data.conversation_context);
             clearBoundClarification(clarificationBinding);
             settleTurn(turn, {
                 text: data.answer, evidence: safeEvidence(data.evidence), status: "success",

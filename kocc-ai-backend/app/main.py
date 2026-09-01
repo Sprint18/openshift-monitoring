@@ -24,7 +24,7 @@ from app.conversation import (
     ConversationContext, bounded_history, confirmation_value,
     context_for_namespace_result, contextual_namespace_query,
     conversational_response, namespace_query_from_context, namespace_query_message,
-    synthesize_namespace_count,
+    render_namespace_answer,
 )
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
@@ -184,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         forced_namespace_query = contextual_namespace_query(
             payload.message, conversation_context
         )
+        interpreted_namespace_query = parse_namespace_query(payload.message)
         accepted_suggestion = False
         confirmation = confirmation_value(payload.message)
         if conversation_context.pending_suggestion_name and confirmation is not None:
@@ -203,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     last_resource_kind=conversation_context.last_resource_kind,
                     last_namespace=conversation_context.last_namespace,
                     last_query_operation=conversation_context.last_query_operation,
+                    last_operation=conversation_context.last_operation,
                     last_filter_type=conversation_context.last_filter_type,
                     last_filter_value=conversation_context.last_filter_value,
                 )
@@ -278,6 +280,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         else:
             logger.info("ai_chat_scope scope=clarification")
+            pending_context = (
+                context_for_namespace_result(
+                    conversation_context, (), interpreted_namespace_query, {},
+                ) if interpreted_namespace_query is not None
+                else conversation_context
+            )
+            if interpreted_namespace_query is not None:
+                logger.info(
+                    "context_state action=pending resource=Namespace query_type=%s operation=%s",
+                    interpreted_namespace_query.mode,
+                    "list" if interpreted_namespace_query.list_names else "count",
+                )
             return JSONResponse({
                 "answer": "Bu sorguyu hangi cluster veya clusterlar için çalıştırayım?",
                 "needs_cluster_selection": True,
@@ -288,7 +302,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if cluster.enabled
                 ],
                 "allow_all": True,
-                "conversation_context": conversation_context.public_dict(),
+                "conversation_context": pending_context.public_dict(),
             })
         if scope.kind == "single":
             logger.info(
@@ -301,12 +315,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "multi" if scope.kind == "multiple" else scope.kind,
                 ",".join(scope.cluster_ids), route_source,
             )
+        resolved_namespace_query = (
+            forced_namespace_query
+            or parse_namespace_query(operational_message)
+            or interpreted_namespace_query
+        )
         if (
             not application.state.llm_client.is_configured()
             and not can_run_without_llm(operational_message)
             and not (
-                (forced_namespace_query or parse_namespace_query(operational_message))
-                is not None
+                resolved_namespace_query is not None
                 and any(
                     application.state.clusters[cluster_id].kubernetes_api.enabled
                     for cluster_id in scope.cluster_ids
@@ -327,10 +345,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             selected = selected_cluster(application.state.clusters, cluster_id)
             started = time.perf_counter()
             try:
-                namespace_query = (
-                    forced_namespace_query
-                    or parse_namespace_query(operational_message)
-                )
+                namespace_query = resolved_namespace_query
                 if namespace_query is not None and selected.kubernetes_api.enabled:
                     result = execute_namespace_query(
                         KubernetesAPIAdapter(
@@ -347,16 +362,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         result.evidence_items[0].facts
                         if result.evidence_items else {}
                     )
-                    synthesized_answer = synthesize_namespace_count(
-                        application.state.llm_client, result.answer,
-                        selected.name, namespace_query,
-                        {**facts, "completeness": (
-                            result.evidence_items[0].completeness
-                            if result.evidence_items else "unavailable"
-                        )},
+                    completeness = (
+                        result.evidence_items[0].completeness
+                        if result.evidence_items else "unavailable"
                     )
+                    canonical_answer = render_namespace_answer(
+                        result.answer, selected.name, namespace_query,
+                        facts, completeness,
+                    )
+                    synthesized_answer = canonical_answer
                     next_context = context_for_namespace_result(
                         conversation_context, (selected.id,), namespace_query, facts
+                    )
+                    logger.info(
+                        "context_state action=updated cluster_id=%s resource=Namespace query_type=%s operation=%s",
+                        selected.id, namespace_query.mode,
+                        next_context.last_operation,
                     )
                     if accepted_suggestion and facts.get("exists") is True:
                         synthesized_answer = (

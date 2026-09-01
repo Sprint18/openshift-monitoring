@@ -267,7 +267,7 @@ def test_kkbtest_namespace_query_prefers_direct_api_without_mcp(
         json={"message": "KKBTEST'te uat ile başlayan kaç namespace var"},
     )
     assert response.status_code == 200
-    assert "namespace sayısı: **2**" in response.json()["answer"]
+    assert '"uat" ile başlayan **2** namespace var' in response.json()["answer"]
     assert response.json()["cluster"] == "kkbtest"
     mcp_class.assert_not_called()
 

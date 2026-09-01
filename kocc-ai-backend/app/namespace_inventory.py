@@ -11,9 +11,12 @@ from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.k8s_client import KubernetesAPIAdapter, KubernetesListResult
 
 
-NamespaceQueryMode = Literal["prefix", "contains", "exact"]
+NamespaceQueryMode = Literal["prefix", "contains", "exact", "total"]
 RESERVED_EXACT_VALUES = frozenset({
-    "durum", "health", "liste", "listesi", "status", "var",
+    "adet", "baslayan", "bu", "bunlar", "bunlari", "bunu", "durum",
+    "goster", "hangi", "health", "iceren", "kac", "liste", "listesi",
+    "namespace", "namespaceler", "ne", "nedir", "onlar", "onlari",
+    "proje", "projeler", "status", "su", "sunlar", "tane", "var",
 })
 
 
@@ -35,7 +38,10 @@ def _normalize_text(value: str) -> str:
 
 def parse_namespace_query(message: str) -> NamespaceQuery | None:
     normalized = " ".join(_normalize_text(message).split())
-    resource = r"(?:namespace|namespaces|ns|proje|project)[a-z']*"
+    resource = (
+        r"(?:namespace(?:'?(?:i|in|ler|leri))?|namespaces?|ns|"
+        r"proje(?:si(?:nde|nin)?|ler)?|projects?)"
+    )
     name = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
 
     prefix = re.search(
@@ -50,11 +56,19 @@ def parse_namespace_query(message: str) -> NamespaceQuery | None:
         rf"\b(?P<value>{name})\s+iceren\b.*?\b{resource}\b", normalized
     )
     if contains:
-        return NamespaceQuery("contains", contains.group("value"), True)
+        list_names = any(term in normalized for term in ("listele", "goster"))
+        return NamespaceQuery("contains", contains.group("value"), list_names)
+
+    total_patterns = (
+        rf"\b(?:toplam\s+)?kac\s+(?:tane\s+|adet\s+)?{resource}\s+var\b",
+        rf"\b{resource}\s+sayisi\s+(?:kac|nedir)\b",
+    )
+    if any(re.search(pattern, normalized) for pattern in total_patterns):
+        return NamespaceQuery("total", "", "listele" in normalized)
 
     exact_patterns = (
-        rf"\b(?P<value>{name})\s+{resource}\b",
-        rf"\b{resource}\s+(?P<value>{name})\b",
+        rf"\b(?P<value>{name})\s+{resource}\s+(?:var|mevcut|durumu?|status|health|saglik|her\s+sey)\b",
+        rf"\b{resource}\s+(?P<value>{name})\s+(?:var|mevcut|durumu?|status|health|saglik)\b",
         rf"^(?P<value>{name})\s+var\s+mi[?]?$",
     )
     for pattern in exact_patterns:
@@ -140,6 +154,21 @@ def execute_namespace_query(
         lines = [f'`{query.value}` {relation} namespace sayısı: **{len(matched)}**']
         if query.list_names:
             lines.extend(["", "Namespace'ler:", *[f"- `{name}`" for name in matched]])
+        return AgentResult(
+            "\n".join(lines), [{"name": "k8s_list", "status": "success"}],
+            [_envelope(cluster_id, result, facts)], 0,
+        )
+
+    if query.mode == "total":
+        facts = {
+            **base_facts,
+            "match_type": "total",
+            "matched_count": len(names),
+            "matched_names": names,
+        }
+        lines = [f"Toplam namespace sayısı: **{len(names)}**"]
+        if query.list_names:
+            lines.extend(["", "Namespace'ler:", *[f"- `{name}`" for name in names]])
         return AgentResult(
             "\n".join(lines), [{"name": "k8s_list", "status": "success"}],
             [_envelope(cluster_id, result, facts)], 0,
