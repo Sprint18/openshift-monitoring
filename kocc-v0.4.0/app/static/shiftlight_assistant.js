@@ -10,8 +10,8 @@
     const MAX_CONVERSATIONS = 10;
     const MAX_MESSAGES = 100;
     const MAX_TEXT_LENGTH = 50000;
-    const MAX_CONTEXT_TURNS = 10;
-    const MAX_CONTEXT_CHARS = 12000;
+    const MAX_CONTEXT_TURNS = 24;
+    const MAX_CONTEXT_CHARS = 16000;
     const FACT_KEYS = Object.freeze({
         resource_count: "Toplam kaynak",
         degraded_true_count: "Degraded",
@@ -67,12 +67,12 @@
         if (!value || typeof value !== "object" || Array.isArray(value)) return {};
         const result = {};
         if (Array.isArray(value.active_cluster_ids)) result.active_cluster_ids = value.active_cluster_ids.filter((item) => ["kkbtest", "rmtest"].includes(item)).slice(0, 2);
-        ["last_resource_kind", "last_namespace", "last_query_operation", "last_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name"].forEach((key) => {
+        ["last_resource_kind", "last_namespace", "last_query_operation", "last_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name", "active_entity_kind", "active_entity_name"].forEach((key) => {
             if (typeof value[key] === "string" && value[key].length <= 100) result[key] = value[key];
         });
         return result;
     };
-    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", context: {}, messages: []}; };
+    const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", context: {}, summary: "", messages: []}; };
     const emptyStore = () => ({version: STORE_VERSION, activeConversationId: null, conversations: []});
     const isSafeInteger = (value) => Number.isInteger(value) && value >= 0;
     const safeFacts = (facts) => {
@@ -119,7 +119,8 @@
         const messages = Array.isArray(value.messages) ? value.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES) : [];
         const createdAt = typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
         const updatedAt = typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
-        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, scope: safeScope(value.scope), context: safeChatContext(value.context), messages};
+        const summary = typeof value.summary === "string" ? value.summary.slice(0, 1200) : "";
+        return {id: typeof value.id === "string" && value.id ? value.id.slice(0, 100) : conversationId(), createdAt, updatedAt, scope: safeScope(value.scope), context: safeChatContext(value.context), summary, messages};
     };
     const safeStore = (value) => {
         let conversations = [];
@@ -512,6 +513,16 @@
         });
         return result;
     };
+    const buildConversationSummary = (conversationItem) => {
+        const context = safeChatContext(conversationItem.context);
+        const parts = [];
+        if (context.active_cluster_ids && context.active_cluster_ids.length) parts.push(`Aktif cluster: ${context.active_cluster_ids.join(", ")}.`);
+        if (context.last_resource_kind && context.last_filter_type) parts.push(`Son sorgu: ${context.last_resource_kind} ${context.last_filter_type}${context.last_filter_value ? ` ${context.last_filter_value}` : ""}.`);
+        if (context.active_entity_kind && context.active_entity_name) parts.push(`Aktif kaynak: ${context.active_entity_kind} ${context.active_entity_name}.`);
+        const introduction = [...conversationItem.messages].reverse().map((item) => item.role === "user" ? item.text.match(/\b(?:benim adım|ben)\s+([A-Za-zÇĞİÖŞÜçğıöşü-]{2,40})\b/i) : null).find(Boolean);
+        if (introduction) parts.push(`Kullanıcının bu sohbette verdiği ad: ${introduction[1]}.`);
+        return parts.join(" ").slice(0, 1200);
+    };
 
     const sendQuestion = async (text, targetClusterIds = null, displayText = text, clarificationBinding = null) => {
         if (requestPending || !text.trim() || !displayText.trim()) return;
@@ -523,9 +534,10 @@
             if (pending) { expirePendingClarification(current); persistStore(); }
         }
         const history = recentTurns(current);
+        current.summary = buildConversationSummary(current);
         const turn = startTurn(displayText);
         messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
-        const body = {message: text, recent_turns: history, conversation_context: safeChatContext(current.context)};
+        const body = {message: text, recent_turns: history, conversation_context: safeChatContext(current.context), conversation_summary: current.summary};
         const currentScope = safeScope((activeConversation() || {}).scope);
         if (currentScope !== "auto") body.conversation_scope = currentScope;
         if (Array.isArray(targetClusterIds)) body.target_cluster_ids = targetClusterIds;

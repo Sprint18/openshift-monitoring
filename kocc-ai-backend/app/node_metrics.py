@@ -177,3 +177,27 @@ def render_node_metrics(facts: NodeMetricsFacts) -> str:
             f"{node.memory_raw} | {memory_percent} |"
         )
     return "\n".join(rows)
+
+
+def render_node_summary(facts: NodeMetricsFacts, metric: str) -> str:
+    values = [
+        (node.memory_percent if metric == "memory" else node.cpu_percent, node)
+        for node in facts.nodes
+    ]
+    observed = [(value, node) for value, node in values if value is not None]
+    label = "memory" if metric == "memory" else "CPU"
+    if not observed:
+        return (
+            f"{facts.node_count} node için {label} yüzdesi doğrulanamadı; "
+            "detaylı ham değerler istenirse listelenebilir."
+        )
+    observed.sort(key=lambda item: item[0])
+    minimum, maximum = observed[0][0], observed[-1][0]
+    top = list(reversed(observed[-3:]))
+    leaders = ", ".join(
+        f"`{node.node_name}` %{value:g}" for value, node in top
+    )
+    return (
+        f"{facts.node_count} node içinde doğrulanabilen {label} kullanımı "
+        f"%{minimum:g}-%{maximum:g} aralığında. En yüksek değerler: {leaders}."
+    )

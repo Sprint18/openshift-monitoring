@@ -143,6 +143,7 @@ class AIChatRequest(BaseModel):
     conversation_scope: str = "auto"
     recent_turns: list[dict[str, Any]] = Field(default_factory=list)
     conversation_context: dict[str, Any] = Field(default_factory=dict)
+    conversation_summary: str = ""
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -1299,6 +1300,8 @@ def api_ai_chat(payload: AIChatRequest) -> JSONResponse:
             context_kwargs["recent_turns"] = payload.recent_turns
         if payload.conversation_context:
             context_kwargs["conversation_context"] = payload.conversation_context
+        if payload.conversation_summary:
+            context_kwargs["conversation_summary"] = payload.conversation_summary
         return JSONResponse(ai_backend_client.chat(
             "kkbtest", payload.message,
             target_cluster_ids=target_cluster_ids,

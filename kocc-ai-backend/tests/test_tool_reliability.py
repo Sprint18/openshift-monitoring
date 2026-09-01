@@ -141,22 +141,26 @@ def test_failed_direct_query_stops_without_indirect_tool_safari() -> None:
 
 
 def test_generic_health_question_can_still_use_multiple_tools() -> None:
-    llm = FakeLLM([
-        {"content": None, "tool_calls": [
-            tool_call("resources_list", '{"apiVersion":"v1","kind":"Node"}', "one"),
-            tool_call("events_list", "{}", "two"),
-        ]},
-        {"content": "Genel sağlık kanıtları incelendi.", "tool_calls": None},
-    ])
+    llm = FakeLLM([{"content": "Genel görünüm stabil; kısmi sinyaller ayrıca belirtilmiştir."}])
     mcp = mcp_with([
         {"items": [operator(f"co-{index}") for index in range(34)]},
-        {"items": []}, {"content": []},
+        {"nodes": [{"name": "worker-1", "cpu": "100m", "cpuPercent": "5%",
+                    "memory": "1Gi", "memoryPercent": "20%"}]},
+        {"items": []}, {"items": []},
     ])
+    mcp.list_tools = lambda: [
+        *RESOURCE_TOOLS,
+        *[{
+            "name": name,
+            "inputSchema": {"type": "object", "properties": {}},
+        } for name in ("nodes_top", "pods_list", "events_list")],
+    ]
     result = AgentLoop(configured(), llm, mcp).run("Cluster genel sağlığını incele")
-    assert len(mcp.calls) == 3
-    assert result.answer.startswith("ClusterOperator sinyallerine göre:")
-    assert "Toplam ClusterOperator: **34**" in result.answer
-    assert "Genel sağlık kanıtları incelendi." in result.answer
+    assert len(mcp.calls) == 4
+    assert result.answer.startswith("## Cluster Genel Sağlık")
+    assert "toplam 34" in result.answer
+    assert "kısmi" in result.answer
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.parametrize(("cluster_id", "cluster_name"), [
@@ -173,7 +177,7 @@ def test_general_health_uses_canonical_cluster_operator_facts(
         configured(), llm, mcp, cluster_id, cluster_name
     ).run("cluster sağlık durumunu kontrol et")
     assert f"## {cluster_name}" in result.answer
-    assert "Toplam ClusterOperator: **34**" in result.answer
+    assert "toplam 34" in result.answer
     assert "35" not in result.answer
     assert result.evidence[0]["facts"]["resource_count"] == 34
 
@@ -201,6 +205,22 @@ def test_direct_node_metrics_intent_forces_nodes_top_only() -> None:
     assert mcp.calls == [("nodes_top", {})]
     assert result.evidence == [{"tool": "nodes_top", "status": "success"}]
     assert "| worker-1 | N/A | 120m | 6% | 1Gi | 25% |" in result.answer
+    assert llm.calls == []
+
+
+def test_concise_node_metrics_request_returns_summary_not_table() -> None:
+    llm = FakeLLM([])
+    mcp = node_metrics_mcp([{"nodes": [
+        {"name": "worker-1", "cpu": "100m", "cpuPercent": "5%",
+         "memory": "1Gi", "memoryPercent": "20%"},
+        {"name": "worker-2", "cpu": "300m", "cpuPercent": "15%",
+         "memory": "2Gi", "memoryPercent": "40%"},
+    ]}])
+    result = AgentLoop(configured(), llm, mcp, "rmtest", "RMTEST").run(
+        "node'ların memory kullanımları nasıl, sadece sorumu cevapla"
+    )
+    assert "memory kullanımı %20-%40 aralığında" in result.answer
+    assert "| Node |" not in result.answer
     assert llm.calls == []
 
 

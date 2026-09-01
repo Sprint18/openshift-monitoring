@@ -69,7 +69,8 @@ def parse_namespace_query(message: str) -> NamespaceQuery | None:
     exact_patterns = (
         rf"\b(?P<value>{name})\s+{resource}\s+(?:var|mevcut|durumu?|status|health|saglik|her\s+sey)\b",
         rf"\b{resource}\s+(?P<value>{name})\s+(?:var|mevcut|durumu?|status|health|saglik)\b",
-        rf"^(?P<value>{name})\s+var\s+mi[?]?$",
+        rf"^(?P<value>{name})\s+var\s+mi(?:\s+bunlarin\s+icinde)?[?.!]*$",
+        rf"^(?P<value>{name})\s+(?:namespace\s+)?tarafina\s+bakalim[?.!]*$",
     )
     for pattern in exact_patterns:
         match = re.search(pattern, normalized)

@@ -13,9 +13,10 @@ from app.namespace_inventory import NamespaceQuery
 
 
 logger = logging.getLogger("kocc_ai.conversation")
-MAX_HISTORY_TURNS = 10
-MAX_HISTORY_CHARS = 12000
+MAX_HISTORY_TURNS = 24
+MAX_HISTORY_CHARS = 16000
 MAX_TURN_CHARS = 2000
+MAX_SUMMARY_CHARS = 1200
 ALLOWED_CLUSTERS = frozenset({"kkbtest", "rmtest"})
 
 CONVERSATION_SYSTEM_PROMPT = """You are KKB ShiftLight AI, an OpenShift operations assistant.
@@ -42,6 +43,8 @@ class ConversationContext:
     last_filter_value: str | None = None
     pending_suggestion_original: str | None = None
     pending_suggestion_name: str | None = None
+    active_entity_kind: str | None = None
+    active_entity_name: str | None = None
 
     @classmethod
     def from_payload(cls, value: Any) -> "ConversationContext":
@@ -81,6 +84,11 @@ class ConversationContext:
                 value.get("pending_suggestion_original")
             ),
             pending_suggestion_name=_safe_name(value.get("pending_suggestion_name")),
+            active_entity_kind=(
+                "Namespace" if value.get("active_entity_kind") == "Namespace"
+                else None
+            ),
+            active_entity_name=_safe_name(value.get("active_entity_name")),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -94,6 +102,8 @@ class ConversationContext:
             "last_filter_value": self.last_filter_value,
             "pending_suggestion_original": self.pending_suggestion_original,
             "pending_suggestion_name": self.pending_suggestion_name,
+            "active_entity_kind": self.active_entity_kind,
+            "active_entity_name": self.active_entity_name,
         }
 
     def without_pending_suggestion(self) -> "ConversationContext":
@@ -105,6 +115,23 @@ class ConversationContext:
             last_operation=self.last_operation,
             last_filter_type=self.last_filter_type,
             last_filter_value=self.last_filter_value,
+            active_entity_kind=self.active_entity_kind,
+            active_entity_name=self.active_entity_name,
+        )
+
+    def with_active_clusters(self, cluster_ids: tuple[str, ...]) -> "ConversationContext":
+        return ConversationContext(
+            active_cluster_ids=cluster_ids,
+            last_resource_kind=self.last_resource_kind,
+            last_namespace=self.last_namespace,
+            last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
+            last_filter_type=self.last_filter_type,
+            last_filter_value=self.last_filter_value,
+            pending_suggestion_original=self.pending_suggestion_original,
+            pending_suggestion_name=self.pending_suggestion_name,
+            active_entity_kind=self.active_entity_kind,
+            active_entity_name=self.active_entity_name,
         )
 
 
@@ -152,17 +179,27 @@ def bounded_history(value: Any) -> list[SafeTurn]:
     return list(reversed(accepted))
 
 
+def safe_conversation_summary(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:MAX_SUMMARY_CHARS]
+
+
 def conversational_response(
     llm: LLMClient,
     classification: ConversationClassification,
     message: str,
     history: list[SafeTurn],
+    summary: str = "",
 ) -> str:
     fallback = conversational_answer(classification) or "Nasıl yardımcı olabilirim?"
     if not llm.is_configured():
         return fallback
     messages: list[dict[str, str]] = [
         {"role": "system", "content": CONVERSATION_SYSTEM_PROMPT},
+        *([{"role": "system", "content": (
+            "Safe conversation memory (not live cluster evidence): " + summary
+        )}] if summary else []),
         *[{"role": item.role, "content": item.content} for item in history],
         {"role": "user", "content": message},
     ]
@@ -200,8 +237,32 @@ def contextual_namespace_query(
         value = context.last_filter_value or context.last_namespace or ""
         return NamespaceQuery(mode, value, False)
     if normalized in {"durumu ne", "durumu nedir", "hala oyle mi"}:
-        name = context.last_namespace or context.last_filter_value
+        name = (
+            context.active_entity_name
+            if context.active_entity_kind == "Namespace" else None
+        ) or context.last_namespace or context.last_filter_value
         return NamespaceQuery("exact", name, False)
+    return None
+
+
+def contextual_entity_message(
+    message: str, context: ConversationContext,
+) -> str | None:
+    if context.active_entity_kind != "Namespace" or not context.active_entity_name:
+        return None
+    normalized = " ".join(_normalize_message(message).split())
+    has_reference = any(term in normalized for term in (
+        "bunun", "buna", "bu namespace", "bu proje", "onun", "orada",
+        "burada", "podlari", "eventleri", "loglarina",
+    ))
+    if not has_reference:
+        return None
+    if "pod" in normalized:
+        return f"{context.active_entity_name} namespace podları nasıl"
+    if "event" in normalized:
+        return f"{context.active_entity_name} namespace eventlerini göster"
+    if "log" in normalized:
+        return f"{context.active_entity_name} namespace pod loglarına bak"
     return None
 
 
@@ -247,24 +308,39 @@ def context_for_namespace_result(
         suggestions[0] if isinstance(suggestions, list) and suggestions else None
     )
     found_name = facts.get("name") if facts.get("exists") is True else None
+    preserve_query = (
+        query.mode == "exact"
+        and found_name is not None
+        and previous.last_resource_kind == "Namespace"
+        and previous.last_filter_type in {"prefix", "contains", "total"}
+    )
     return ConversationContext(
         active_cluster_ids=cluster_ids,
         last_resource_kind="Namespace",
         last_namespace=_safe_name(found_name),
-        last_query_operation=(
+        last_query_operation=(previous.last_query_operation if preserve_query else (
             "exact" if query.mode == "exact" else (
                 "total" if query.mode == "total" else f"{query.mode}_search"
             )
-        ),
+        )),
         last_operation=(
             "exists" if query.mode == "exact" else (
                 "list" if query.list_names else "count"
             )
         ),
-        last_filter_type=query.mode,
-        last_filter_value=(query.value or None),
+        last_filter_type=(previous.last_filter_type if preserve_query else query.mode),
+        last_filter_value=(
+            previous.last_filter_value if preserve_query else (query.value or None)
+        ),
         pending_suggestion_original=(query.value if suggestion else None),
         pending_suggestion_name=_safe_name(suggestion),
+        active_entity_kind=(
+            "Namespace" if found_name is not None else previous.active_entity_kind
+        ),
+        active_entity_name=(
+            _safe_name(found_name) if found_name is not None
+            else previous.active_entity_name
+        ),
     )
 
 

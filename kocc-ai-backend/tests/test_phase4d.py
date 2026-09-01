@@ -56,6 +56,8 @@ def test_ambiguous_operational_request_returns_choices_without_mcp(
                 "last_filter_value": None,
                 "pending_suggestion_original": None,
                 "pending_suggestion_name": None,
+                "active_entity_kind": None,
+                "active_entity_name": None,
             },
         }
     mcp_class.assert_not_called()

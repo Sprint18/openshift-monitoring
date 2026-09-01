@@ -4,7 +4,6 @@ import logging
 import sys
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any
 
@@ -23,8 +22,9 @@ from app.config import Settings, load_settings
 from app.conversation import (
     ConversationContext, bounded_history, confirmation_value,
     context_for_namespace_result, contextual_namespace_query,
-    conversational_response, namespace_query_from_context, namespace_query_message,
-    render_namespace_answer,
+    contextual_entity_message, conversational_response,
+    namespace_query_from_context, namespace_query_message,
+    render_namespace_answer, safe_conversation_summary,
 )
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
@@ -52,6 +52,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     recent_turns: list[dict[str, Any]] = Field(default_factory=list)
     conversation_context: dict[str, Any] = Field(default_factory=dict)
+    conversation_summary: str = ""
 
 
 def _attributed_answer(answer: str, cluster_name: str) -> str:
@@ -96,29 +97,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/ready")
     def ready() -> dict:
-        def check_mcp() -> str:
-            try:
-                _, client = mcp_for("kkbtest")
-                client.list_tools()
-                return "available"
-            except (MCPUnavailable, UnknownClusterError):
-                return "unavailable"
-
-        def check_llm() -> str:
-            try:
-                application.state.llm_client.check()
-                return "available"
-            except LLMUnavailable:
-                return "unavailable"
-
-        # Dependency checks run concurrently so readiness is bounded by the
-        # longest configured network timeout rather than their sum.
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            mcp_check = executor.submit(check_mcp)
-            llm_check = executor.submit(check_llm)
-            dependencies = {"mcp": mcp_check.result(), "llm": llm_check.result()}
+        # Readiness is intentionally local and side-effect free. Remote MCP/LLM
+        # availability remains request-time controlled and explicit diagnostics
+        # are available under /api/v1/mcp/status.
+        dependencies = {
+            "mcp": "configured" if all(
+                cluster.mcp_url for cluster in application.state.clusters.values()
+                if cluster.enabled
+            ) else "unconfigured",
+            "llm": (
+                "configured" if application.state.llm_client.is_configured()
+                else "unconfigured"
+            ),
+        }
         status = "ready" if all(
-            value == "available" for value in dependencies.values()
+            value == "configured" for value in dependencies.values()
         ) else "degraded"
         return {"status": status, "dependencies": dependencies}
 
@@ -178,10 +171,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }:
             return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
         history = bounded_history(payload.recent_turns)
+        conversation_summary = safe_conversation_summary(
+            payload.conversation_summary
+        )
+        if conversation_summary:
+            logger.info("conversation_summary action=received bounded=true")
         conversation_context = ConversationContext.from_payload(
             payload.conversation_context
         )
         forced_namespace_query = contextual_namespace_query(
+            payload.message, conversation_context
+        )
+        forced_entity_message = contextual_entity_message(
             payload.message, conversation_context
         )
         interpreted_namespace_query = parse_namespace_query(payload.message)
@@ -199,15 +200,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if conversation_context.active_cluster_ids else "unknown",
                 )
             else:
-                cleared = ConversationContext(
-                    active_cluster_ids=conversation_context.active_cluster_ids,
-                    last_resource_kind=conversation_context.last_resource_kind,
-                    last_namespace=conversation_context.last_namespace,
-                    last_query_operation=conversation_context.last_query_operation,
-                    last_operation=conversation_context.last_operation,
-                    last_filter_type=conversation_context.last_filter_type,
-                    last_filter_value=conversation_context.last_filter_value,
-                )
+                cleared = conversation_context.without_pending_suggestion()
                 logger.info("suggestion_resolution type=namespace accepted=false")
                 return JSONResponse({
                     "answer": "Tamam, öneriyi kullanmayacağım.", "clusters": [],
@@ -223,6 +216,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if (
             classification.conversation_class == "conversational"
             and forced_namespace_query is None
+            and forced_entity_message is None
+            and interpreted_namespace_query is None
             and resolved is None
         ):
             logger.info(
@@ -233,6 +228,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "answer": conversational_response(
                     application.state.llm_client, classification,
                     payload.message, history,
+                    conversation_summary,
                 ), "clusters": [],
                 "tool_calls": [], "evidence": [],
                 "conversation_context": conversation_context.public_dict(),
@@ -266,14 +262,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             scope = conversation_decision.scope
             route_source = conversation_decision.source
             operational_message = payload.message
-        elif forced_namespace_query is not None and conversation_context.active_cluster_ids:
+        elif (
+            (forced_namespace_query is not None or forced_entity_message is not None
+             or interpreted_namespace_query is not None)
+            and conversation_context.active_cluster_ids
+        ):
             scope = ClusterScope(
                 "single" if len(conversation_context.active_cluster_ids) == 1
                 else "multiple",
                 conversation_context.active_cluster_ids,
             )
             route_source = "conversation_context"
-            operational_message = payload.message
+            operational_message = forced_entity_message or payload.message
             logger.info(
                 "context_followup resolved=true resource=Namespace cluster_id=%s",
                 ",".join(scope.cluster_ids),
@@ -379,6 +379,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         selected.id, namespace_query.mode,
                         next_context.last_operation,
                     )
+                    if next_context.active_entity_name != conversation_context.active_entity_name:
+                        logger.info(
+                            "active_entity action=set kind=Namespace cluster_id=%s",
+                            selected.id,
+                        )
                     if accepted_suggestion and facts.get("exists") is True:
                         synthesized_answer = (
                             f"Tamam, `{namespace_query.value}` namespace'ini "
@@ -398,9 +403,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         context_for_namespace_result(
                             conversation_context, (selected.id,),
                             namespace_query, {},
-                        ) if namespace_query is not None else ConversationContext(
-                            active_cluster_ids=(selected.id,)
-                        )
+                        ) if namespace_query is not None
+                        else conversation_context.with_active_clusters((selected.id,))
                     )
                 evidence = [
                     {"cluster": selected.id, **item}

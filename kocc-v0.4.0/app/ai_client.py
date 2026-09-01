@@ -139,6 +139,7 @@ class AIBackendClient:
         conversation_scope: str = "auto",
         recent_turns: list[dict[str, Any]] | None = None,
         conversation_context: dict[str, Any] | None = None,
+        conversation_summary: str = "",
     ) -> dict[str, Any]:
         payload = {"cluster": cluster, "message": message}
         if context_cluster_id in {"kkbtest", "rmtest"}:
@@ -159,6 +160,10 @@ class AIBackendClient:
             payload["conversation_context"] = self._conversation_context(
                 conversation_context
             )
+        if conversation_summary:
+            payload["conversation_summary"] = " ".join(
+                conversation_summary.split()
+            )[:1200]
         response = self._request(
             "POST", "/api/v1/chat", payload
         )
@@ -258,6 +263,7 @@ class AIBackendClient:
             "last_resource_kind", "last_namespace", "last_query_operation",
             "last_operation", "last_filter_type", "last_filter_value",
             "pending_suggestion_original", "pending_suggestion_name",
+            "active_entity_kind", "active_entity_name",
         ):
             item = value.get(key)
             if isinstance(item, str) and len(item) <= 100:

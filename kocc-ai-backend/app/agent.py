@@ -16,7 +16,9 @@ from app.egressip import (
 from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.llm_client import LLMClient, LLMUnavailable
 from app.mcp_client import MCPClient, MCPUnavailable
-from app.node_metrics import parse_node_metrics, render_node_metrics
+from app.node_metrics import (
+    parse_node_metrics, render_node_metrics, render_node_summary,
+)
 from app.observations import deterministic_observation
 from app.tool_contracts import (
     KNOWN_RESOURCE_IDENTITIES,
@@ -199,6 +201,42 @@ def _node_metrics_intent(message: str) -> bool:
             "cpu", "memory", "bellek", "ram", "kullanım", "metric",
         ))
     )
+
+
+def _response_mode(message: str) -> str:
+    normalized = " ".join(message.casefold().split())
+    if any(term in normalized for term in ("listele", "tablo", "detay", "hepsini")):
+        return "detailed"
+    if any(term in normalized for term in (
+        "kısaca", "özet", "sadece sorumu", "nasıl",
+    )):
+        return "concise"
+    return "detailed"
+
+
+def _health_items(result: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if result is None:
+        return None
+    items = resource_items(result)
+    return items if isinstance(items, list) else None
+
+
+def _pod_problem(item: dict[str, Any]) -> bool:
+    status = item.get("status") if isinstance(item.get("status"), dict) else {}
+    phase = str(status.get("phase") or "")
+    if phase == "Succeeded":
+        return False
+    if phase in {"Pending", "Failed", "Unknown"}:
+        return True
+    statuses = status.get("containerStatuses")
+    return isinstance(statuses, list) and any(
+        isinstance(container, dict) and not container.get("ready", False)
+        for container in statuses
+    )
+
+
+def _warning_event(item: dict[str, Any]) -> bool:
+    return str(item.get("type") or "").casefold() == "warning"
 
 
 def can_run_without_llm(message: str) -> bool:
@@ -429,6 +467,9 @@ class AgentLoop:
                 [summary], evidence, 0,
             )
 
+        if general_health:
+            return self._cluster_health_snapshot(available_names, tool_schemas)
+
         trusted_cluster = (
             f"\nTRUSTED BACKEND TARGET CLUSTER: {self.target_cluster_name} "
             f"(canonical id: {self.target_cluster_id}). The target is routing "
@@ -442,26 +483,6 @@ class AgentLoop:
         audit: list[dict[str, str]] = []
         evidence_audit: list[dict[str, Any]] = []
         failed_calls: set[tuple[str, str]] = set()
-        health_facts: dict[str, Any] | None = None
-        if general_health:
-            summary, facts = self._fetch_cluster_operators(
-                available_names, tool_schemas
-            )
-            audit.append(summary)
-            if summary["status"] == "success" and all(
-                key in facts for key in PUBLIC_FACT_KEYS
-            ):
-                health_facts = {
-                    key: facts[key] for key in PUBLIC_FACT_KEYS
-                }
-                evidence_audit.append({
-                    "tool": "resources_list", "status": "success",
-                    "facts": health_facts,
-                })
-                messages[0]["content"] += (
-                    "\nAUTHORITATIVE CLUSTEROPERATOR FACTS: "
-                    + json.dumps(health_facts, separators=(",", ":"))
-                )
 
         if node_metrics:
             metrics_result, summary = self._call_backend_tool(
@@ -476,8 +497,14 @@ class AgentLoop:
                     "Node CPU ve memory metrikleri bu sorguda doğrulanamadı.",
                     [summary], [], 0,
                 )
+            mode = _response_mode(message)
+            metric = "memory" if any(term in message.casefold() for term in (
+                "memory", "bellek", "ram",
+            )) else "cpu"
+            logger.info("response_mode mode=%s", mode)
             return AgentResult(
-                render_node_metrics(facts), [summary],
+                render_node_summary(facts, metric)
+                if mode == "concise" else render_node_metrics(facts), [summary],
                 [self._node_metrics_evidence(facts)], 0,
             )
 
@@ -492,20 +519,6 @@ class AgentLoop:
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
-                if general_health:
-                    verified = (
-                        _direct_cluster_operator_answer(
-                            health_facts, self.target_cluster_name
-                        ) if health_facts else (
-                            "ClusterOperator durumu bu sorguda doğrudan doğrulanamadı."
-                        )
-                    )
-                    verified = "ClusterOperator sinyallerine göre:\n\n" + verified
-                    # Do not expose an LLM-authored ClusterOperator section beside
-                    # the canonical backend section.
-                    if "operator" not in content.casefold():
-                        verified += "\n\n## Ek Sağlık Değerlendirmesi\n\n" + content
-                    content = verified
                 return AgentResult(
                     _guard_cluster_operator_answer(content, evidence_audit),
                     audit, evidence_audit, iteration,
@@ -558,6 +571,114 @@ class AgentLoop:
                     )
 
         raise AgentLimitReached("iteration_limit")
+
+    def _cluster_health_snapshot(
+        self, available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]],
+    ) -> AgentResult:
+        audit: list[dict[str, str]] = []
+        evidence: list[dict[str, Any] | EvidenceEnvelope] = []
+        observations: list[str] = []
+        caveats: list[str] = []
+        summary, operator_facts = self._fetch_cluster_operators(
+            available_names, tool_schemas
+        )
+        audit.append(summary)
+        if summary["status"] == "success" and all(
+            key in operator_facts for key in PUBLIC_FACT_KEYS
+        ):
+            facts = {key: operator_facts[key] for key in PUBLIC_FACT_KEYS}
+            observations.append(
+                "Operatorler: "
+                f"toplam {facts['resource_count']}, "
+                f"Degraded {facts['degraded_true_count']}, "
+                f"Progressing {facts['progressing_true_count']}, "
+                f"Available olmayan {facts['available_false_count']}."
+            )
+            evidence.append(self._cluster_operator_evidence(facts))
+            operator_state = "complete"
+        else:
+            caveats.append("ClusterOperator durumu doğrulanamadı.")
+            operator_state = "unavailable"
+
+        nodes_result, nodes_audit = self._call_backend_tool(
+            "nodes_top", {}, available_names, tool_schemas
+        )
+        audit.append(nodes_audit)
+        node_facts = (
+            parse_node_metrics(nodes_result, self.target_cluster_id)
+            if nodes_result is not None else None
+        )
+        if node_facts is not None:
+            observations.append(render_node_summary(node_facts, "cpu"))
+            evidence.append(self._node_metrics_evidence(node_facts))
+            node_state = "complete"
+        else:
+            caveats.append("Node metrikleri kullanılamıyor.")
+            node_state = "unavailable"
+
+        pods_result, pods_audit = self._call_backend_tool(
+            "pods_list", {}, available_names, tool_schemas
+        )
+        audit.append(pods_audit)
+        pods = _health_items(pods_result)
+        if pods is not None:
+            problems = sum(_pod_problem(item) for item in pods)
+            observations.append(
+                f"İncelenen workload örneğinde {problems} problemli pod görüldü."
+            )
+            caveats.append("Pod kapsamı kısmi olabilir; sayı cluster geneli değildir.")
+            workload_state = "partial"
+        else:
+            caveats.append("Workload sinyali kullanılamıyor.")
+            workload_state = "unavailable"
+
+        events_result, events_audit = self._call_backend_tool(
+            "events_list", {}, available_names, tool_schemas
+        )
+        audit.append(events_audit)
+        events = _health_items(events_result)
+        if events is not None:
+            warnings = sum(_warning_event(item) for item in events)
+            observations.append(
+                f"İncelenen event örneğinde {warnings} Warning olayı görüldü."
+            )
+            caveats.append("Event kapsamı kısmi olabilir; sayı cluster geneli değildir.")
+            event_state = "partial"
+        else:
+            caveats.append("Event sinyali kullanılamıyor.")
+            event_state = "unavailable"
+
+        logger.info(
+            "health_snapshot cluster_id=%s operators=%s nodes=%s workloads=%s events=%s",
+            self.target_cluster_id, operator_state, node_state,
+            workload_state, event_state,
+        )
+        heading = self.target_cluster_name or self.target_cluster_id or "Cluster"
+        deterministic = (
+            f"## {heading} Genel Sağlık\n\n"
+            + "\n".join(f"- {item}" for item in observations)
+            + ("\n\n**Kapsam notu:** " + " ".join(caveats) if caveats else "")
+        )
+        # One bounded synthesis attempt; canonical observations remain visible and
+        # authoritative even if the model is unavailable or overly specific.
+        try:
+            synthesis = self.llm.chat_completion([{
+                "role": "system",
+                "content": (
+                    "Aşağıdaki doğrulanmış/kapsamı belirtilmiş sağlık sinyallerini "
+                    "doğal Türkçeyle tek kısa değerlendirme halinde özetle. Yeni sayı, "
+                    "kök neden veya kesinlik ekleme."
+                ),
+            }, {"role": "user", "content": deterministic}])
+            content = synthesis.get("content")
+            if isinstance(content, str) and content.strip() and not re.search(
+                r"\d", content
+            ):
+                deterministic += "\n\n**Değerlendirme:** " + content.strip()
+        except LLMUnavailable:
+            pass
+        return AgentResult(deterministic, audit, evidence, 1)
 
     def _cluster_operator_evidence(
         self, facts: dict[str, Any]

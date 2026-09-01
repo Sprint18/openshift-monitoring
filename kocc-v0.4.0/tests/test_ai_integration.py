@@ -652,20 +652,23 @@ def test_shiftlight_session_history_is_bounded_minimal_and_routing_free() -> Non
         source.index("const safeConversation"):source.index("const safeStore")
     ]
     assert "item.cluster" not in conversation_sanitizer
-    assert "scope: safeScope(value.scope), context: safeChatContext(value.context), messages" in source
+    assert "scope: safeScope(value.scope), context: safeChatContext(value.context), summary, messages" in source
     assert 'id="shiftlight-history-list"' in partial
 
 
 def test_shiftlight_sends_bounded_safe_history_and_structured_context() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
-    assert "const MAX_CONTEXT_TURNS = 10" in source
-    assert "const MAX_CONTEXT_CHARS = 12000" in source
+    assert "const MAX_CONTEXT_TURNS = 24" in source
+    assert "const MAX_CONTEXT_CHARS = 16000" in source
     assert "const recentTurns = (conversationItem)" in source
     assert "recent_turns: history" in source
+    assert "conversation_summary: current.summary" in source
+    assert "const buildConversationSummary = (conversationItem)" in source
     assert "conversation_context: safeChatContext(current.context)" in source
     assert "store.conversations.find((item) => item.id === turn.conversationId)" in source
     assert "responseConversation.context = safeChatContext(data.conversation_context)" in source
     assert "context: {}" in source[source.index("const emptyConversation"):source.index("const emptyStore")]
+    assert 'summary: ""' in source[source.index("const emptyConversation"):source.index("const emptyStore")]
     assert "context: safeChatContext(value.context)" in source
     context_block = source[
         source.index("const safeChatContext"):source.index("const emptyConversation")

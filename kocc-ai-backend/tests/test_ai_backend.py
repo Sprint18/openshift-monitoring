@@ -151,17 +151,19 @@ def test_unknown_and_conflicting_alias_resolution_is_conservative() -> None:
 
 
 @patch("app.main.MCPClient")
-def test_readiness_reports_degraded_without_crashing(mcp_class: Mock) -> None:
-    mcp_class.return_value.list_tools.side_effect = MCPUnavailable("down")
+def test_readiness_is_local_and_performs_no_remote_calls(mcp_class: Mock) -> None:
     application = create_app(settings())
     application.state.llm_client = Mock()
-    application.state.llm_client.check.side_effect = LLMUnavailable("down")
-    response = TestClient(application).get("/ready")
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "degraded",
-        "dependencies": {"mcp": "unavailable", "llm": "unavailable"},
+    application.state.llm_client.is_configured.return_value = True
+    client = TestClient(application)
+    assert client.get("/ready").json() == {
+        "status": "ready",
+        "dependencies": {"mcp": "configured", "llm": "configured"},
     }
+    assert client.get("/ready").status_code == 200
+    mcp_class.assert_not_called()
+    application.state.llm_client.check.assert_not_called()
+    application.state.llm_client.chat_completion.assert_not_called()
 
 
 @patch("app.main.MCPClient")
@@ -255,6 +257,8 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
                 "last_filter_value": None,
                 "pending_suggestion_original": None,
                 "pending_suggestion_name": None,
+                "active_entity_kind": None,
+                "active_entity_name": None,
             },
         }
 
