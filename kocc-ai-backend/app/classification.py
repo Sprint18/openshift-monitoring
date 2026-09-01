@@ -7,7 +7,22 @@ from typing import Literal
 
 
 ConversationClass = Literal["conversational", "operational"]
-ConversationSubtype = Literal["greeting", "identity", "help", "operational"]
+ConversationSubtype = Literal[
+    "greeting", "identity", "help", "smalltalk", "operational"
+]
+
+
+OPERATIONAL_TOKEN_PREFIXES = (
+    "namespace", "proje", "project", "pod", "deploy", "service", "servis",
+    "route", "node", "clusteroperator", "operator", "event", "log", "cpu",
+    "memory", "bellek", "pvc", "storageclass", "storage", "egressip",
+    "resource", "kaynak", "cluster", "degraded", "available",
+    "progressing",
+)
+OPERATIONAL_ASSESSMENT_PREFIXES = (
+    "saglik", "health", "status", "durum", "sorun", "problem", "kontrol",
+    "incele", "goster", "liste", "kac",
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +50,10 @@ def classify_conversation(message: str) -> ConversationClassification:
     token_set = set(tokens)
     if not tokens:
         return ConversationClassification("operational", "operational")
+    has_operational_signal = any(
+        token.startswith(OPERATIONAL_TOKEN_PREFIXES + OPERATIONAL_ASSESSMENT_PREFIXES)
+        for token in tokens
+    ) or "co" in token_set
 
     identity_families = (
         {"sen", "kimsin"},
@@ -57,13 +76,13 @@ def classify_conversation(message: str) -> ConversationClassification:
     greeting_tokens = {
         "merhaba", "selam", "hello", "hi", "nasilsin", "tesekkurler",
     }
-    operational_tokens = {
-        "cluster", "node", "nodes", "pod", "pods", "operator", "degraded",
-        "cpu", "memory", "bellek", "egressip", "namespace", "deployment",
-        "route", "pvc",
-    }
-    if token_set & greeting_tokens and not token_set & operational_tokens:
+    if token_set & greeting_tokens and not has_operational_signal:
         return ConversationClassification("conversational", "greeting")
+
+    # Short messages without an operational resource/action/diagnostic signal
+    # are safe conversational turns. Longer or uncertain input remains operational.
+    if not has_operational_signal and len(tokens) <= 8:
+        return ConversationClassification("conversational", "smalltalk")
 
     return ConversationClassification("operational", "operational")
 
@@ -82,4 +101,6 @@ def conversational_answer(classification: ConversationClassification) -> str | N
             "operasyon asistanıyım. Multi-cluster kaynaklarını seçtiğiniz kapsamda "
             "incelemeye yardımcı olabilirim; erişim KOCC backend tarafından yönetilir."
         )
+    if classification.subtype == "smalltalk":
+        return "Memnun oldum. OpenShift operasyonları hakkında nasıl yardımcı olabilirim?"
     return "Merhaba, OpenShift operasyonları hakkında nasıl yardımcı olabilirim?"

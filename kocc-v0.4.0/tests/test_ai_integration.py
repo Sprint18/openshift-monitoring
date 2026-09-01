@@ -454,7 +454,7 @@ def test_ai_template_has_safe_markdown_and_non_blank_fallback() -> None:
 def test_ai_template_loading_and_http_200_blank_regression() -> None:
     source = shiftlight_source()
     assert "ShiftLight düşünüyor" in source
-    assert 'role: "assistant", text: data.answer' in source
+    assert 'text: data.answer, evidence: safeEvidence(data.evidence), status: "success"' in source
     assert '!data.answer.trim()' in source
     assert "renderer produced no content" in source
 
@@ -649,11 +649,11 @@ def test_shiftlight_clarification_selection_is_a_bound_history_turn() -> None:
     source = shiftlight_source()
     assert "result.clarificationId" in source
     assert "!item.clarificationId" in source
-    assert 'addCurrentMessage({role: "user", text: label' in source
+    assert "clarificationId: item.clarificationId" in source
     assert 'select(choice.name, [choice.id])' in source
     assert 'select("HEPSİ"' in source
-    assert "sendQuestion(pendingQuestion, ids, false)" in source
-    assert "addCurrentMessage({role: \"user\", text: pendingQuestion" not in source
+    assert "sendQuestion(item.pendingQuestion, ids, label" in source
+    assert "clearBoundClarification(clarificationBinding)" in source
     assert "mcp_url" not in source.lower()
 
 
@@ -725,14 +725,51 @@ def test_shiftlight_fullscreen_reuses_drawer_and_preserves_ui_state() -> None:
     assert "body.shiftlight-fullscreen-open" in css
 
 
-def test_shiftlight_historical_conversation_remains_read_only_in_fullscreen() -> None:
+def test_shiftlight_reopened_conversation_remains_continuable_in_fullscreen() -> None:
     source = shiftlight_source()
-    assert "const isHistoricalConversation" in source
-    assert "form.hidden = isHistoricalConversation()" in source
-    assert "requestPending || isHistoricalConversation()" in source
+    assert "isHistoricalConversation" not in source
+    assert "form.hidden = false" in source
+    assert "expirePendingClarification(item); store.activeConversationId = item.id" in source
+    assert "messageInput.focus()" in source
     fullscreen_block = source[source.index("const setFullscreen"):source.index("const closeDrawer")]
     assert "activeConversationId" not in fullscreen_block
     assert "form.hidden" not in fullscreen_block
+
+
+def test_typed_clarification_selection_reuses_exact_pending_question() -> None:
+    source = shiftlight_source()
+    assert '"kkbtest": "kkbtest"' in source
+    assert '"kkb test": "kkbtest"' in source
+    assert '"rm test": "rmtest"' in source
+    assert '["hepsi", "tumu", "all"]' in source
+    assert "pending.pendingQuestion, selectedIds, displayText" in source
+    assert "conversationId: current.id, clarificationId: pending.clarificationId" in source
+    assert "if (pending) { expirePendingClarification(current); persistStore(); }" in source
+
+
+def test_shiftlight_turn_errors_persist_and_are_updated_by_turn_id() -> None:
+    source = shiftlight_source()
+    assert "const turnId = conversationId()" in source
+    assert 'status: "pending"' in source
+    assert "item.turnId === turn.turnId" in source
+    assert 'settleTurn(turn, {text: message, evidence: [], status: "error"})' in source
+    assert "current.messages.push(" in source
+    assert "conversation.appendChild(shell.article)" not in source[source.index("} catch (error)"):source.index("} finally")]
+    assert 'message.status === "pending"' in source
+    assert "message.status = \"error\"" in source
+
+
+def test_error_turns_and_composer_survive_history_drawer_and_fullscreen() -> None:
+    source = shiftlight_source()
+    partial = shiftlight_partial()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    assert "safeMessage({...assistantMessage" in source
+    assert '["pending", "success", "error"].includes(item.status)' in source
+    assert 'if (item.status === "error") shell.article.classList.add("error")' in source
+    assert "form.hidden = false" in source
+    assert '<form id="shiftlight-form" class="shiftlight-composer">' in partial
+    assert ".shiftlight-drawer.open.fullscreen" in css
+    assert ".shiftlight-composer { position:relative; bottom:auto; flex:0 0 auto" in css
 
 
 def test_shiftlight_tables_have_independent_safe_csv_exports() -> None:

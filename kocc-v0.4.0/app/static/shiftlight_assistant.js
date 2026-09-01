@@ -93,6 +93,8 @@
         const text = item.text.slice(0, MAX_TEXT_LENGTH);
         if (!text.trim()) return null;
         const result = {role: item.role, text, evidence: item.role === "assistant" ? safeEvidence(item.evidence) : []};
+        if (typeof item.turnId === "string" && item.turnId) result.turnId = item.turnId.slice(0, 100);
+        if (item.role === "assistant" && ["pending", "success", "error"].includes(item.status)) result.status = item.status;
         if (item.role === "assistant" && typeof item.pendingQuestion === "string") {
             result.pendingQuestion = item.pendingQuestion.slice(0, 8000);
             result.clarificationId = typeof item.clarificationId === "string" ? item.clarificationId.slice(0, 100) : "";
@@ -122,7 +124,15 @@
         return {version: STORE_VERSION, activeConversationId, conversations};
     };
     const loadStore = () => {
-        try { return safeStore(JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null")); }
+        try {
+            const loaded = safeStore(JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"));
+            loaded.conversations.forEach((item) => item.messages.forEach((message) => {
+                if (message.role === "assistant" && message.status === "pending") {
+                    message.status = "error"; message.text = MESSAGES.unavailable;
+                }
+            }));
+            return loaded;
+        }
         catch (_error) { return emptyStore(); }
     };
     let store = loadStore();
@@ -131,7 +141,6 @@
         sessionStorage.setItem(SESSION_KEY, JSON.stringify(store));
     };
     const activeConversation = () => store.conversations.find((item) => item.id === store.activeConversationId) || null;
-    const isHistoricalConversation = () => Boolean(store.conversations.length && store.activeConversationId !== store.conversations[store.conversations.length - 1].id);
     const createConversation = () => {
         const item = emptyConversation();
         store.conversations.push(item);
@@ -279,14 +288,13 @@
         article.appendChild(details);
     };
     const appendClusterChoices = (article, item) => {
-        if (!item.pendingQuestion || !item.clarificationId || !item.clusterChoices.length || isHistoricalConversation()) return;
+        if (!item.pendingQuestion || !item.clarificationId || !item.clusterChoices.length) return;
         const actions = document.createElement("div"); actions.className = "shiftlight-cluster-choices";
         const select = (label, ids) => {
-            const pendingQuestion = item.pendingQuestion;
-            item.clusterChoices = []; item.allowAll = false;
-            persistStore(); renderConversation(true);
-            addCurrentMessage({role: "user", text: label, evidence: []}, true);
-            sendQuestion(pendingQuestion, ids, false);
+            sendQuestion(item.pendingQuestion, ids, label, {
+                conversationId: (activeConversation() || {}).id,
+                clarificationId: item.clarificationId
+            });
         };
         item.clusterChoices.forEach((choice) => {
             const button = addText(actions, "button", "", choice.name); button.type = "button";
@@ -317,7 +325,7 @@
         const empty = document.createElement("div"); empty.className = "shiftlight-empty";
         const content = document.createElement("div"); const mascot = document.createElement("img"); mascot.className = "shiftlight-empty-mascot"; mascot.src = "/static/shiftlight-mascot.png"; mascot.alt = "KKB ShiftLight AI maskotu"; content.appendChild(mascot); addText(content, "h2", "", "KKB ShiftLight AI"); addText(content, "p", "", "OpenShift cluster'ınız hakkında nasıl yardımcı olabilirim?");
         const choices = document.createElement("div"); choices.className = "shiftlight-suggestions";
-        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.disabled = isHistoricalConversation(); button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
+        suggestions.forEach((text) => { const button = addText(choices, "button", "", text); button.type = "button"; button.addEventListener("click", () => { messageInput.value = text; messageInput.focus(); resizeComposer(); }); });
         content.appendChild(choices); empty.appendChild(content); conversation.appendChild(empty);
     };
     const conversationTitle = (item) => {
@@ -332,7 +340,7 @@
             const button = document.createElement("button"); button.type = "button"; button.className = `shiftlight-history-item${item.id === store.activeConversationId ? " active" : ""}`;
             const time = addText(button, "time", "", new Date(item.updatedAt).toLocaleTimeString("tr-TR", {hour: "2-digit", minute: "2-digit"})); time.dateTime = item.updatedAt;
             addText(button, "strong", "", conversationTitle(item));
-            button.addEventListener("click", () => { store.activeConversationId = item.id; persistStore(); closeHistory(); renderConversation(true); });
+            button.addEventListener("click", () => { expirePendingClarification(item); store.activeConversationId = item.id; persistStore(); closeHistory(); renderConversation(true); messageInput.focus(); });
             historyList.appendChild(button);
         });
     };
@@ -345,13 +353,13 @@
         conversation.replaceChildren();
         const selected = activeConversation();
         scopeSelect.value = selected ? safeScope(selected.scope) : "auto";
-        scopeSelect.disabled = isHistoricalConversation() || requestPending;
+        scopeSelect.disabled = requestPending;
         if (!selected || !selected.messages.length) renderEmpty();
         else selected.messages.forEach((item) => {
             if (item.role === "user") addText(conversation, "article", "shiftlight-message user", item.text);
-            else { const shell = assistantShell(); renderAnswer(shell.answer, item.text); addDetailedViewAction(shell); appendEvidence(shell.article, item.evidence); appendClusterChoices(shell.article, item); conversation.appendChild(shell.article); }
+            else { const shell = assistantShell(); if (item.status === "error") shell.article.classList.add("error"); renderAnswer(shell.answer, item.text); addDetailedViewAction(shell); appendEvidence(shell.article, item.evidence); appendClusterChoices(shell.article, item); conversation.appendChild(shell.article); }
         });
-        form.hidden = isHistoricalConversation();
+        form.hidden = false;
         renderHistory();
         requestAnimationFrame(() => {
             conversation.scrollTop = followBottom ? conversation.scrollHeight : previousScrollTop;
@@ -436,14 +444,65 @@
     const resizeComposer = () => { messageInput.style.height = "auto"; messageInput.style.height = `${Math.min(messageInput.scrollHeight, 125)}px`; };
     const setPending = (pending) => {
         requestPending = pending; messageInput.disabled = pending; newButton.disabled = pending; sendButton.disabled = pending;
-        scopeSelect.disabled = pending || isHistoricalConversation();
+        scopeSelect.disabled = pending;
     };
-    const addCurrentMessage = (message, forceBottom = false) => { const followBottom = forceBottom || nearConversationBottom(); const current = activeConversation() || createConversation(); current.messages.push(safeMessage(message)); current.messages = current.messages.filter(Boolean).slice(-MAX_MESSAGES); current.updatedAt = nowIso(); persistStore(); renderConversation(followBottom); };
     const startNew = () => { createConversation(); closeHistory(); renderConversation(true); };
 
-    const sendQuestion = async (text, targetClusterIds = null, addUser = true) => {
-        if (requestPending || isHistoricalConversation() || !text.trim()) return;
-        if (addUser) addCurrentMessage({role: "user", text, evidence: []}, true);
+    const expirePendingClarification = (conversationItem) => {
+        if (!conversationItem) return;
+        conversationItem.messages.forEach((item) => {
+            if (item.role !== "assistant" || !item.pendingQuestion) return;
+            delete item.pendingQuestion; delete item.clarificationId;
+            item.clusterChoices = []; item.allowAll = false;
+        });
+    };
+    const pendingClarification = (conversationItem) => [...(conversationItem ? conversationItem.messages : [])].reverse().find((item) => item.role === "assistant" && item.pendingQuestion && item.clarificationId && item.clusterChoices.length) || null;
+    const clarificationSelection = (text, item) => {
+        if (!item) return null;
+        const normalized = text.toLocaleLowerCase("tr-TR").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ı/g, "i").replace(/\s+/g, " ").trim();
+        if (["hepsi", "tumu", "all"].includes(normalized) && item.allowAll) return item.clusterChoices.map((choice) => choice.id);
+        const aliases = {"kkbtest": "kkbtest", "kkb test": "kkbtest", "rmtest": "rmtest", "rm test": "rmtest"};
+        const selected = aliases[normalized];
+        return selected && item.clusterChoices.some((choice) => choice.id === selected) ? [selected] : null;
+    };
+    const startTurn = (displayText) => {
+        const current = activeConversation() || createConversation();
+        const turnId = conversationId();
+        current.messages.push(
+            {role: "user", text: displayText, evidence: [], turnId},
+            {role: "assistant", text: "ShiftLight düşünüyor…", evidence: [], turnId, status: "pending"}
+        );
+        current.messages = current.messages.map(safeMessage).filter(Boolean).slice(-MAX_MESSAGES);
+        current.updatedAt = nowIso(); persistStore(); renderConversation(true);
+        return {conversationId: current.id, turnId};
+    };
+    const settleTurn = (turn, assistantMessage) => {
+        const current = store.conversations.find((item) => item.id === turn.conversationId);
+        if (!current) return;
+        const target = current.messages.find((item) => item.role === "assistant" && item.turnId === turn.turnId);
+        if (!target) return;
+        Object.assign(target, safeMessage({...assistantMessage, role: "assistant", turnId: turn.turnId}));
+        current.updatedAt = nowIso(); persistStore();
+        if (store.activeConversationId === current.id) renderConversation(true);
+    };
+    const clearBoundClarification = (binding) => {
+        if (!binding) return;
+        const current = store.conversations.find((item) => item.id === binding.conversationId);
+        if (!current) return;
+        const pending = current.messages.find((item) => item.role === "assistant" && item.clarificationId === binding.clarificationId);
+        if (pending) { delete pending.pendingQuestion; delete pending.clarificationId; pending.clusterChoices = []; pending.allowAll = false; }
+    };
+
+    const sendQuestion = async (text, targetClusterIds = null, displayText = text, clarificationBinding = null) => {
+        if (requestPending || !text.trim() || !displayText.trim()) return;
+        const current = activeConversation() || createConversation();
+        if (!clarificationBinding) {
+            const pending = pendingClarification(current);
+            const selectedIds = clarificationSelection(displayText, pending);
+            if (selectedIds) return sendQuestion(pending.pendingQuestion, selectedIds, displayText, {conversationId: current.id, clarificationId: pending.clarificationId});
+            if (pending) { expirePendingClarification(current); persistStore(); }
+        }
+        const turn = startTurn(displayText);
         messageInput.value = ""; resizeComposer(); setPending(true); statusText.textContent = "ShiftLight düşünüyor…"; statusText.classList.remove("error");
         const body = {message: text};
         const currentScope = safeScope((activeConversation() || {}).scope);
@@ -452,8 +511,9 @@
         try {
             const data = await fetchJson("/api/ai/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
             if (typeof data.answer !== "string" || !data.answer.trim() || !Array.isArray(data.evidence)) throw new ShiftLightUIError("generic");
-            addCurrentMessage({
-                role: "assistant", text: data.answer, evidence: safeEvidence(data.evidence),
+            clearBoundClarification(clarificationBinding);
+            settleTurn(turn, {
+                text: data.answer, evidence: safeEvidence(data.evidence), status: "success",
                 pendingQuestion: data.needs_cluster_selection === true ? text : undefined,
                 clarificationId: data.clarification_id,
                 clusterChoices: data.cluster_choices, allowAll: data.allow_all === true
@@ -461,12 +521,12 @@
             statusText.textContent = "";
         } catch (error) {
             const message = safeError(error); statusText.textContent = message; statusText.classList.add("error");
-            const shell = assistantShell(); shell.article.classList.add("error"); addText(shell.answer, "p", "", message); conversation.appendChild(shell.article); conversation.scrollTop = conversation.scrollHeight;
+            settleTurn(turn, {text: message, evidence: [], status: "error"});
         } finally { setPending(false); messageInput.focus(); }
     };
 
     form.addEventListener("submit", async (event) => {
-        event.preventDefault(); if (requestPending || isHistoricalConversation()) return;
+        event.preventDefault(); if (requestPending) return;
         const text = messageInput.value; if (!text.trim()) return;
         await sendQuestion(text);
     });

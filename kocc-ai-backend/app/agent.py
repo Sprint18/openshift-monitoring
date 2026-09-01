@@ -160,6 +160,12 @@ def _direct_resource_identity(message: str) -> ResourceIdentity | None:
             return KNOWN_RESOURCE_IDENTITIES[key]
     if re.search(r"\bco\b", normalized):
         return KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
+    if (
+        re.search(r"\boperator(?:ler|s)?\b", normalized)
+        and any(term in normalized for term in ("degraded", "progressing", "available"))
+        and not _explicit_non_clusteroperator_resource(normalized)
+    ):
+        return KNOWN_RESOURCE_IDENTITIES["clusteroperator"]
     return None
 
 
@@ -171,6 +177,18 @@ def _general_health_intent(message: str) -> bool:
             term in normalized for term in ("kontrol", "durum")
         ))
     )
+
+
+def _explicit_non_clusteroperator_resource(message: str) -> bool:
+    normalized = " ".join(message.casefold().split())
+    return any(re.search(pattern, normalized) for pattern in (
+        r"\bpod(?:s|lar|ler)?\b", r"\bdeployment(?:s|lar|ler)?\b",
+        r"\bnamespace(?:s|lar|ler)?\b", r"\bproject(?:s|ler)?\b",
+        r"\bservice(?:s|ler)?\b", r"\broute(?:s|lar|ler)?\b",
+        r"\bnode(?:s|lar|ler)?\b", r"\bpvc(?:s|lar|ler)?\b",
+        r"\bstorageclass(?:es|lar|ler)?\b",
+        r"\begress\s*ip\b",
+    ))
 
 
 def _node_metrics_intent(message: str) -> bool:
@@ -363,7 +381,11 @@ class AgentLoop:
     def run(self, message: str) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
         egress_intent = direct_identity is None and is_egressip_intent(message)
-        general_health = direct_identity is None and _general_health_intent(message)
+        general_health = (
+            direct_identity is None
+            and not _explicit_non_clusteroperator_resource(message)
+            and _general_health_intent(message)
+        )
         node_metrics = direct_identity is None and _node_metrics_intent(message)
         available_tools = openai_tools(self.mcp.list_tools())
         if direct_identity is not None:

@@ -150,6 +150,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         chat_started = time.perf_counter()
         if len(payload.message) > configuration.agent_max_user_chars:
             return JSONResponse({"error": "message_too_large"}, status_code=400)
+        if payload.target_cluster_ids is not None and (
+            not payload.target_cluster_ids
+            or any(
+                cluster_id not in application.state.clusters
+                or not application.state.clusters[cluster_id].enabled
+                for cluster_id in payload.target_cluster_ids
+            )
+        ):
+            return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
+        if payload.conversation_scope not in {
+            "auto", "all", *application.state.clusters.keys()
+        }:
+            return JSONResponse({"error": "invalid_cluster_scope"}, status_code=400)
         classification = classify_conversation(payload.message)
         conversational = conversational_answer(classification)
         if conversational is not None:
