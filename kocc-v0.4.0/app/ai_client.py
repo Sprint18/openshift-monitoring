@@ -273,8 +273,8 @@ class AIBackendClient:
     @staticmethod
     def _recent_turns(value: list[dict[str, Any]]) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
-        remaining = 12000
-        for item in reversed(value[-10:]):
+        remaining = 16000
+        for item in reversed(value[-24:]):
             if not isinstance(item, dict) or set(item) != {"role", "content"}:
                 continue
             role, content = item.get("role"), item.get("content")

@@ -87,6 +87,8 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
         "last_filter_type": "prefix",
         "last_filter_value": "uat",
         "last_operation": "count",
+        "active_entity_kind": "Namespace",
+        "active_entity_name": "uat-zauh",
     }
     ai_client.chat.return_value = {
         "cluster": "kkbtest", "clusters": [{"id": "kkbtest", "name": "KKB TEST"}],
@@ -104,6 +106,16 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
     assert ai_client.chat.call_args.kwargs["recent_turns"] == [
         {"role": "user", "content": "önceki soru"}
     ]
+
+
+def test_ai_proxy_preserves_phase5b3_bounded_recent_turn_window() -> None:
+    turns = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": str(index)}
+        for index in range(30)
+    ]
+    result = AIBackendClient._recent_turns(turns)
+    assert len(result) == 24
+    assert result[0]["content"] == "6"
 
 
 @pytest.mark.parametrize("message", ["", "   ", "\n\t"])

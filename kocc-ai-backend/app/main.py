@@ -28,6 +28,10 @@ from app.conversation import (
 )
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
+from app.intent import (
+    StructuredIntent, has_operational_reference, interpret_intent,
+    natural_namespace_intent,
+)
 from app.mcp_client import MCPClient, MCPUnavailable
 from app.namespace_inventory import (
     NamespaceQuery, execute_namespace_query, parse_namespace_query,
@@ -185,7 +189,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         forced_entity_message = contextual_entity_message(
             payload.message, conversation_context
         )
-        interpreted_namespace_query = parse_namespace_query(payload.message)
+        deterministic_intent = natural_namespace_intent(
+            payload.message, conversation_context
+        )
+        interpreted_namespace_query = (
+            parse_namespace_query(payload.message)
+            or (deterministic_intent.namespace_query(conversation_context)
+                if deterministic_intent is not None else None)
+        )
+        grounding_required = has_operational_reference(
+            payload.message, conversation_context
+        )
+        classification = classify_conversation(payload.message)
+        nlu_intent: StructuredIntent | None = None
+        if (
+            interpreted_namespace_query is None
+            and forced_namespace_query is None
+            and forced_entity_message is None
+            and grounding_required
+            and classification.conversation_class == "conversational"
+        ):
+            nlu_intent = interpret_intent(
+                application.state.llm_client, payload.message,
+                conversation_context,
+            )
+            if nlu_intent is not None:
+                interpreted_namespace_query = nlu_intent.namespace_query(
+                    conversation_context
+                )
+                if (
+                    nlu_intent.reference == "active_entity"
+                    and nlu_intent.resource_kind in {"Pod", "Namespace"}
+                    and conversation_context.active_entity_kind == "Namespace"
+                    and conversation_context.active_entity_name
+                ):
+                    if nlu_intent.resource_kind == "Pod":
+                        forced_entity_message = (
+                            f"{conversation_context.active_entity_name} namespace "
+                            "podlarını incele"
+                        )
+                    elif interpreted_namespace_query is None:
+                        interpreted_namespace_query = NamespaceQuery(
+                            "exact", conversation_context.active_entity_name
+                        )
+        if deterministic_intent is not None:
+            logger.info(
+                "intent_resolution source=deterministic mode=%s confidence=high",
+                deterministic_intent.mode,
+            )
         accepted_suggestion = False
         confirmation = confirmation_value(payload.message)
         if conversation_context.pending_suggestion_name and confirmation is not None:
@@ -212,12 +263,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
-        classification = classify_conversation(payload.message)
         if (
             classification.conversation_class == "conversational"
             and forced_namespace_query is None
             and forced_entity_message is None
             and interpreted_namespace_query is None
+            and not grounding_required
             and resolved is None
         ):
             logger.info(
@@ -278,6 +329,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "context_followup resolved=true resource=Namespace cluster_id=%s",
                 ",".join(scope.cluster_ids),
             )
+        elif grounding_required and conversation_context.active_cluster_ids:
+            logger.info(
+                "grounding_firewall conversational_blocked=true reason=operational_reference"
+            )
+            entity = conversation_context.active_entity_name
+            return JSONResponse({
+                "answer": (
+                    f"Burada `{entity}` namespace'ini mi kastediyorsun?"
+                    if entity else "Hangi kaynağı kastettiğini netleştirir misin?"
+                ),
+                "clusters": [], "tool_calls": [], "evidence": [],
+                "conversation_context": conversation_context.public_dict(),
+            })
         else:
             logger.info("ai_chat_scope scope=clarification")
             pending_context = (
@@ -371,6 +435,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         facts, completeness,
                     )
                     synthesized_answer = canonical_answer
+                    if (
+                        "bunların içinde" in payload.message.casefold()
+                        and namespace_query.mode == "exact"
+                        and conversation_context.last_filter_type in {"prefix", "contains"}
+                        and facts.get("exists") is True
+                    ):
+                        filter_value = conversation_context.last_filter_value or ""
+                        belongs = (
+                            namespace_query.value.startswith(filter_value)
+                            if conversation_context.last_filter_type == "prefix"
+                            else filter_value in namespace_query.value
+                        )
+                        synthesized_answer = (
+                            f"Evet, `{namespace_query.value}` bu grupta yer alıyor."
+                            if belongs else
+                            f"`{namespace_query.value}` mevcut, ancak önceki grupta yer almıyor."
+                        )
                     next_context = context_for_namespace_result(
                         conversation_context, (selected.id,), namespace_query, facts
                     )

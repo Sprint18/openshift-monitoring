@@ -240,8 +240,8 @@ def contextual_namespace_query(
         name = (
             context.active_entity_name
             if context.active_entity_kind == "Namespace" else None
-        ) or context.last_namespace or context.last_filter_value
-        return NamespaceQuery("exact", name, False)
+        ) or context.last_namespace
+        return NamespaceQuery("exact", name, False) if name else None
     return None
 
 
@@ -310,7 +310,6 @@ def context_for_namespace_result(
     found_name = facts.get("name") if facts.get("exists") is True else None
     preserve_query = (
         query.mode == "exact"
-        and found_name is not None
         and previous.last_resource_kind == "Namespace"
         and previous.last_filter_type in {"prefix", "contains", "total"}
     )
