@@ -20,12 +20,13 @@ from app.clusters import (
 )
 from app.config import Settings, load_settings
 from app.conversation import (
-    ConversationContext, bounded_history, confirmation_value,
+    ActiveInspection, ConversationContext, bounded_history, confirmation_value,
     context_for_namespace_result, contextual_namespace_query,
     contextual_entity_message, conversational_response,
     namespace_query_from_context, namespace_query_message,
-    render_namespace_answer, safe_conversation_summary,
+    render_active_inspection, render_namespace_answer, safe_conversation_summary,
 )
+from app.evidence import EvidenceEnvelope
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
 from app.intent import (
@@ -234,8 +235,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
         if deterministic_intent is not None:
             logger.info(
-                "intent_resolution source=deterministic mode=%s confidence=high",
-                deterministic_intent.mode,
+                "intent_resolution source=deterministic mode=%s scope_level=%s confidence=high",
+                deterministic_intent.mode, deterministic_intent.scope_level,
             )
         accepted_suggestion = False
         confirmation = confirmation_value(payload.message)
@@ -263,6 +264,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
+        if (
+            deterministic_intent is not None
+            and deterministic_intent.scope_level == "previous_result"
+            and conversation_context.active_inspection is not None
+            and conversation_context.active_inspection.cluster_id
+            in conversation_context.active_cluster_ids
+        ):
+            inspection = conversation_context.active_inspection
+            logger.info(
+                "context_resolution source=active_inspection cluster_id=%s inspection_type=%s",
+                inspection.cluster_id, inspection.inspection_type,
+            )
+            return JSONResponse({
+                "cluster": inspection.cluster_id,
+                "clusters": [{
+                    "id": inspection.cluster_id,
+                    "name": application.state.clusters[inspection.cluster_id].name,
+                }],
+                "answer": render_active_inspection(inspection),
+                "tool_calls": [], "evidence": [],
+                "conversation_context": conversation_context.public_dict(),
+            })
         if (
             classification.conversation_class == "conversational"
             and forced_namespace_query is None
@@ -315,7 +338,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             operational_message = payload.message
         elif (
             (forced_namespace_query is not None or forced_entity_message is not None
-             or interpreted_namespace_query is not None)
+             or interpreted_namespace_query is not None
+             or (deterministic_intent is not None
+                 and deterministic_intent.scope_level in {"cluster", "node", "workload"}))
             and conversation_context.active_cluster_ids
         ):
             scope = ClusterScope(
@@ -326,8 +351,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             route_source = "conversation_context"
             operational_message = forced_entity_message or payload.message
             logger.info(
-                "context_followup resolved=true resource=Namespace cluster_id=%s",
+                "context_resolution source=current_message cluster_id=%s scope_level=%s",
                 ",".join(scope.cluster_ids),
+                deterministic_intent.scope_level if deterministic_intent else "namespace",
             )
         elif grounding_required and conversation_context.active_cluster_ids:
             logger.info(
@@ -487,6 +513,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ) if namespace_query is not None
                         else conversation_context.with_active_clusters((selected.id,))
                     )
+                    for item in result.evidence_items:
+                        if (
+                            isinstance(item, EvidenceEnvelope)
+                            and item.resource.kind == "Pod"
+                            and item.completeness != "unavailable"
+                        ):
+                            safe_facts = item.facts
+                            next_context = next_context.with_active_inspection(
+                                ActiveInspection(
+                                    inspection_type="pod_health",
+                                    resource_kind="Pod",
+                                    cluster_id=selected.id,
+                                    namespace=(
+                                        item.resource.namespace
+                                        or conversation_context.active_entity_name
+                                    ),
+                                    pod_count=safe_facts.get("pod_count"),
+                                    ready_count=safe_facts.get("ready_count"),
+                                    non_ready_count=safe_facts.get("non_ready_count"),
+                                    total_restarts=safe_facts.get("total_restarts"),
+                                    max_restart_count=safe_facts.get("max_restart_count"),
+                                    problematic_pod_names=tuple(
+                                        safe_facts.get("problematic_pod_names", [])[:10]
+                                    ),
+                                    observed_at=item.observed_at,
+                                )
+                            )
+                            logger.info(
+                                "active_inspection action=set cluster_id=%s inspection_type=pod_health",
+                                selected.id,
+                            )
+                            break
                 evidence = [
                     {"cluster": selected.id, **item}
                     for item in result.evidence

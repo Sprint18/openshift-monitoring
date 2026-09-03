@@ -33,6 +33,74 @@ class SafeTurn:
 
 
 @dataclass(frozen=True)
+class ActiveInspection:
+    inspection_type: Literal["pod_health", "node_summary", "cluster_health"]
+    resource_kind: Literal["Pod", "Node", "Cluster"]
+    cluster_id: str
+    namespace: str | None = None
+    pod_count: int | None = None
+    ready_count: int | None = None
+    non_ready_count: int | None = None
+    total_restarts: int | None = None
+    max_restart_count: int | None = None
+    problematic_pod_names: tuple[str, ...] = ()
+    observed_at: str = ""
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "ActiveInspection | None":
+        if not isinstance(value, dict):
+            return None
+        inspection_type = value.get("inspection_type")
+        resource_kind = value.get("resource_kind")
+        cluster_id = value.get("cluster_id")
+        allowed = {
+            "pod_health": "Pod", "node_summary": "Node", "cluster_health": "Cluster",
+        }
+        if (
+            inspection_type not in allowed
+            or allowed[inspection_type] != resource_kind
+            or cluster_id not in ALLOWED_CLUSTERS
+        ):
+            return None
+        names = value.get("problematic_pod_names")
+        safe_names = tuple(
+            name for item in names[:10]
+            if (name := _safe_name(item)) is not None
+        ) if isinstance(names, list) else ()
+        return cls(
+            inspection_type=inspection_type,
+            resource_kind=resource_kind,
+            cluster_id=cluster_id,
+            namespace=_safe_name(value.get("namespace")),
+            pod_count=_safe_count(value.get("pod_count")),
+            ready_count=_safe_count(value.get("ready_count")),
+            non_ready_count=_safe_count(value.get("non_ready_count")),
+            total_restarts=_safe_count(value.get("total_restarts")),
+            max_restart_count=_safe_count(value.get("max_restart_count")),
+            problematic_pod_names=safe_names,
+            observed_at=(
+                value["observed_at"][:40]
+                if isinstance(value.get("observed_at"), str) else ""
+            ),
+        )
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "inspection_type": self.inspection_type,
+            "resource_kind": self.resource_kind,
+            "cluster_id": self.cluster_id,
+            "namespace": self.namespace,
+            "pod_count": self.pod_count,
+            "ready_count": self.ready_count,
+            "non_ready_count": self.non_ready_count,
+            "total_restarts": self.total_restarts,
+            "max_restart_count": self.max_restart_count,
+            "problematic_pod_names": list(self.problematic_pod_names),
+            "observed_at": self.observed_at,
+        }
+
+
+@dataclass(frozen=True)
 class ConversationContext:
     active_cluster_ids: tuple[str, ...] = ()
     last_resource_kind: str | None = None
@@ -45,6 +113,7 @@ class ConversationContext:
     pending_suggestion_name: str | None = None
     active_entity_kind: str | None = None
     active_entity_name: str | None = None
+    active_inspection: ActiveInspection | None = None
 
     @classmethod
     def from_payload(cls, value: Any) -> "ConversationContext":
@@ -89,6 +158,9 @@ class ConversationContext:
                 else None
             ),
             active_entity_name=_safe_name(value.get("active_entity_name")),
+            active_inspection=ActiveInspection.from_payload(
+                value.get("active_inspection")
+            ),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -104,6 +176,9 @@ class ConversationContext:
             "pending_suggestion_name": self.pending_suggestion_name,
             "active_entity_kind": self.active_entity_kind,
             "active_entity_name": self.active_entity_name,
+            "active_inspection": (
+                self.active_inspection.public_dict() if self.active_inspection else None
+            ),
         }
 
     def without_pending_suggestion(self) -> "ConversationContext":
@@ -117,6 +192,7 @@ class ConversationContext:
             last_filter_value=self.last_filter_value,
             active_entity_kind=self.active_entity_kind,
             active_entity_name=self.active_entity_name,
+            active_inspection=self.active_inspection,
         )
 
     def with_active_clusters(self, cluster_ids: tuple[str, ...]) -> "ConversationContext":
@@ -132,6 +208,30 @@ class ConversationContext:
             pending_suggestion_name=self.pending_suggestion_name,
             active_entity_kind=self.active_entity_kind,
             active_entity_name=self.active_entity_name,
+            active_inspection=(
+                self.active_inspection
+                if self.active_inspection is not None
+                and self.active_inspection.cluster_id in cluster_ids
+                else None
+            ),
+        )
+
+    def with_active_inspection(
+        self, inspection: ActiveInspection,
+    ) -> "ConversationContext":
+        return ConversationContext(
+            active_cluster_ids=self.active_cluster_ids,
+            last_resource_kind=self.last_resource_kind,
+            last_namespace=self.last_namespace,
+            last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
+            last_filter_type=self.last_filter_type,
+            last_filter_value=self.last_filter_value,
+            pending_suggestion_original=self.pending_suggestion_original,
+            pending_suggestion_name=self.pending_suggestion_name,
+            active_entity_kind=self.active_entity_kind,
+            active_entity_name=self.active_entity_name,
+            active_inspection=inspection,
         )
 
 
@@ -144,6 +244,10 @@ def _safe_name(value: Any) -> str | None:
         if re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", candidate)
         else None
     )
+
+
+def _safe_count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _normalize_message(value: str) -> str:
@@ -183,6 +287,36 @@ def safe_conversation_summary(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())[:MAX_SUMMARY_CHARS]
+
+
+def render_active_inspection(inspection: ActiveInspection) -> str:
+    if inspection.inspection_type != "pod_health":
+        return "Önceki inceleme bu soruyu güvenle yanıtlamak için yeterli değil."
+    pod_count = inspection.pod_count
+    non_ready = inspection.non_ready_count
+    if pod_count is None or non_ready is None:
+        return "Önceki pod incelemesinin kapsamı bu soruyu yanıtlamak için yeterli değil."
+    namespace = (
+        f"`{inspection.namespace}` namespace'inde " if inspection.namespace else ""
+    )
+    if non_ready == 0 and (inspection.max_restart_count or 0) == 0:
+        return (
+            f"{namespace}incelenen {pod_count} podun tamamı Ready ve restart "
+            "görünmüyor."
+        )
+    findings: list[str] = []
+    if non_ready:
+        findings.append(f"{non_ready}/{pod_count} pod tam Ready değil")
+    if inspection.total_restarts:
+        findings.append(
+            f"toplam {inspection.total_restarts} restart var; en yüksek pod değeri "
+            f"{inspection.max_restart_count}"
+        )
+    answer = f"Evet. {namespace}" + "; ".join(findings) + "."
+    return answer + (
+        "\n\n**Öneri:** Container durumlarını, readiness probe'larını, eventleri "
+        "ve logları inceleyin; mevcut veri tek başına kök nedeni göstermiyor."
+    )
 
 
 def conversational_response(

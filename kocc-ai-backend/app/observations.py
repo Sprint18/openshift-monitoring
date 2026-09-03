@@ -209,7 +209,9 @@ def deterministic_observation(
     cluster_id: str | None = None,
 ) -> dict[str, Any]:
     """Extract safe authoritative facts before the MCP result is truncated."""
-    if tool_name not in {"resources_list", "pods_list", "namespaces_list"}:
+    if tool_name not in {
+        "resources_list", "pods_list", "pods_list_in_namespace", "namespaces_list",
+    }:
         return {}
     requested_kind = next((
         arguments.get(key) for key in ("kind", "resource", "resourceType")
@@ -234,4 +236,48 @@ def deterministic_observation(
     kind = _resource_kind(arguments, payload)
     if kind:
         facts["kind"] = kind
+    if tool_name in {"pods_list", "pods_list_in_namespace"}:
+        ready_count = 0
+        total_restarts = 0
+        max_restart_count = 0
+        problematic_names: list[str] = []
+        phase_counts: dict[str, int] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata")
+            status = item.get("status")
+            if not isinstance(status, dict):
+                status = {}
+            phase = str(status.get("phase") or "Unknown")
+            phase_counts[phase] = phase_counts.get(phase, 0) + 1
+            containers = status.get("containerStatuses")
+            container_rows = containers if isinstance(containers, list) else []
+            fully_ready = bool(container_rows) and all(
+                isinstance(container, dict) and container.get("ready") is True
+                for container in container_rows
+            )
+            if fully_ready:
+                ready_count += 1
+            else:
+                name = metadata.get("name") if isinstance(metadata, dict) else None
+                if isinstance(name, str) and name and len(problematic_names) < 10:
+                    problematic_names.append(name)
+            pod_restarts = sum(
+                value for container in container_rows
+                if isinstance(container, dict)
+                and isinstance((value := container.get("restartCount")), int)
+                and not isinstance(value, bool) and value >= 0
+            )
+            total_restarts += pod_restarts
+            max_restart_count = max(max_restart_count, pod_restarts)
+        facts.update({
+            "pod_count": len(items),
+            "ready_count": ready_count,
+            "non_ready_count": max(0, len(items) - ready_count),
+            "total_restarts": total_restarts,
+            "max_restart_count": max_restart_count,
+            "problematic_pod_names": problematic_names,
+            "phase_counts": phase_counts,
+        })
     return facts

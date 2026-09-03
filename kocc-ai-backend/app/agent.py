@@ -176,7 +176,9 @@ def _general_health_intent(message: str) -> bool:
     return (
         "sağlık" in normalized or "sağlı" in normalized or "health" in normalized
         or ("cluster" in normalized and any(
-            term in normalized for term in ("kontrol", "durum")
+            term in normalized for term in (
+                "kontrol", "durum", "genel", "nasıl", "ne alemde", "sorun",
+            )
         ))
     )
 
@@ -239,6 +241,17 @@ def _warning_event(item: dict[str, Any]) -> bool:
     return str(item.get("type") or "").casefold() == "warning"
 
 
+def _namespace_from_arguments(call: Any) -> str | None:
+    function = call.get("function") if isinstance(call, dict) else None
+    raw = function.get("arguments") if isinstance(function, dict) else None
+    try:
+        arguments = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        return None
+    namespace = arguments.get("namespace") if isinstance(arguments, dict) else None
+    return namespace if isinstance(namespace, str) else None
+
+
 def can_run_without_llm(message: str) -> bool:
     return (
         _direct_resource_identity(message)
@@ -278,12 +291,13 @@ def _deterministic_cluster_operator_summary(facts: dict[str, int]) -> str:
 
 
 def _guard_cluster_operator_answer(
-    answer: str, evidence: list[dict[str, Any]]
+    answer: str, evidence: list[dict[str, Any] | EvidenceEnvelope]
 ) -> str:
     """Replace only obvious numeric contradictions for authoritative CO facts."""
     facts = next((
         item.get("facts") for item in evidence
-        if item.get("tool") == "resources_list"
+        if isinstance(item, dict)
+        and item.get("tool") == "resources_list"
         and isinstance(item.get("facts"), dict)
         and all(key in item["facts"] for key in PUBLIC_FACT_KEYS)
     ), None)
@@ -481,7 +495,7 @@ class AgentLoop:
             {"role": "user", "content": message},
         ]
         audit: list[dict[str, str]] = []
-        evidence_audit: list[dict[str, Any]] = []
+        evidence_audit: list[dict[str, Any] | EvidenceEnvelope] = []
         failed_calls: set[tuple[str, str]] = set()
 
         if node_metrics:
@@ -540,7 +554,9 @@ class AgentLoop:
                 messages.append(tool_message)
                 audit.append(summary)
                 if summary["status"] == "success":
-                    evidence = {"tool": summary["name"], "status": "success"}
+                    evidence: dict[str, Any] | EvidenceEnvelope = {
+                        "tool": summary["name"], "status": "success"
+                    }
                     if facts:
                         public_facts = {
                             key: value for key, value in facts.items()
@@ -548,6 +564,20 @@ class AgentLoop:
                         }
                         if public_facts:
                             evidence["facts"] = public_facts
+                        if summary["name"] in {
+                            "pods_list", "pods_list_in_namespace"
+                        } and "pod_count" in facts:
+                            evidence = EvidenceEnvelope.create(
+                                cluster_id=self.target_cluster_id or "unspecified",
+                                operation="inspect",
+                                resource=EvidenceResource(
+                                    api_version="v1", kind="Pod",
+                                    namespace=_namespace_from_arguments(call),
+                                ),
+                                completeness="partial",
+                                facts=facts,
+                                provenance={"tool": summary["name"]},
+                            )
                     evidence_audit.append(evidence)
                     if (
                         direct_identity == KNOWN_RESOURCE_IDENTITIES["clusteroperator"]

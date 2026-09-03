@@ -259,6 +259,7 @@ def test_chat_response_keeps_contract_and_adds_success_evidence(
                 "pending_suggestion_name": None,
                 "active_entity_kind": None,
                 "active_entity_name": None,
+                "active_inspection": None,
             },
         }
 

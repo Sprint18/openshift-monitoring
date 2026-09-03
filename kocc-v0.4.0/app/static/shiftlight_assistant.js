@@ -70,6 +70,18 @@
         ["last_resource_kind", "last_namespace", "last_query_operation", "last_operation", "last_filter_type", "last_filter_value", "pending_suggestion_original", "pending_suggestion_name", "active_entity_kind", "active_entity_name"].forEach((key) => {
             if (typeof value[key] === "string" && value[key].length <= 100) result[key] = value[key];
         });
+        const inspection = value.active_inspection;
+        if (inspection && typeof inspection === "object" && !Array.isArray(inspection)) {
+            const safeInspection = {};
+            ["inspection_type", "resource_kind", "cluster_id", "namespace", "observed_at"].forEach((key) => {
+                if (typeof inspection[key] === "string" && inspection[key].length <= 100) safeInspection[key] = inspection[key];
+            });
+            ["pod_count", "ready_count", "non_ready_count", "total_restarts", "max_restart_count"].forEach((key) => {
+                if (Number.isInteger(inspection[key]) && inspection[key] >= 0) safeInspection[key] = inspection[key];
+            });
+            if (Array.isArray(inspection.problematic_pod_names)) safeInspection.problematic_pod_names = inspection.problematic_pod_names.filter((item) => typeof item === "string").slice(0, 10);
+            if (Object.keys(safeInspection).length) result.active_inspection = safeInspection;
+        }
         return result;
     };
     const emptyConversation = () => { const timestamp = nowIso(); return {id: conversationId(), createdAt: timestamp, updatedAt: timestamp, scope: "auto", context: {}, summary: "", messages: []}; };

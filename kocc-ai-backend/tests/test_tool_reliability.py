@@ -155,7 +155,7 @@ def test_generic_health_question_can_still_use_multiple_tools() -> None:
             "inputSchema": {"type": "object", "properties": {}},
         } for name in ("nodes_top", "pods_list", "events_list")],
     ]
-    result = AgentLoop(configured(), llm, mcp).run("Cluster genel sağlığını incele")
+    result = AgentLoop(configured(), llm, mcp).run("cluster genel olarak nasıl")
     assert len(mcp.calls) == 4
     assert result.answer.startswith("## Cluster Genel Sağlık")
     assert "toplam 34" in result.answer

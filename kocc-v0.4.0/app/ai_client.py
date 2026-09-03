@@ -268,6 +268,31 @@ class AIBackendClient:
             item = value.get(key)
             if isinstance(item, str) and len(item) <= 100:
                 result[key] = item
+        inspection = value.get("active_inspection")
+        if isinstance(inspection, dict):
+            safe_inspection: dict[str, Any] = {}
+            for key in (
+                "inspection_type", "resource_kind", "cluster_id", "namespace",
+                "observed_at",
+            ):
+                item = inspection.get(key)
+                if isinstance(item, str) and len(item) <= 100:
+                    safe_inspection[key] = item
+            for key in (
+                "pod_count", "ready_count", "non_ready_count", "total_restarts",
+                "max_restart_count",
+            ):
+                item = inspection.get(key)
+                if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+                    safe_inspection[key] = item
+            names = inspection.get("problematic_pod_names")
+            if isinstance(names, list):
+                safe_inspection["problematic_pod_names"] = [
+                    item[:253] for item in names[:10]
+                    if isinstance(item, str)
+                ]
+            if safe_inspection:
+                result["active_inspection"] = safe_inspection
         return result
 
     @staticmethod

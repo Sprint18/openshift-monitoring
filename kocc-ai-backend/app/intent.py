@@ -23,6 +23,9 @@ ResourceKind = Literal[
 Operation = Literal["list", "count", "exists", "status", "health", "metrics", "inspect"]
 Reference = Literal["active_entity", "previous_query", "none"]
 ResponseMode = Literal["concise", "normal", "detailed", "table"]
+ScopeLevel = Literal[
+    "cluster", "namespace", "workload", "node", "previous_result", "unknown"
+]
 
 ALLOWED_MODES = frozenset({"conversational", "operational", "followup", "clarification_response"})
 ALLOWED_RESOURCES = frozenset({"Namespace", "Pod", "Node", "ClusterOperator", "Cluster"})
@@ -31,6 +34,9 @@ ALLOWED_QUERY_TYPES = frozenset({"exact", "prefix", "contains", "total"})
 ALLOWED_REFERENCES = frozenset({"active_entity", "previous_query", "none"})
 ALLOWED_CLUSTERS = frozenset({"kkbtest", "rmtest", "all"})
 ALLOWED_RESPONSE_MODES = frozenset({"concise", "normal", "detailed", "table"})
+ALLOWED_SCOPE_LEVELS = frozenset({
+    "cluster", "namespace", "workload", "node", "previous_result", "unknown",
+})
 NAME_PATTERN = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 
 NLU_SYSTEM_PROMPT = """Classify one Turkish operations message. Return one JSON object only.
@@ -45,6 +51,7 @@ query_value=DNS-like text|null;
 reference=active_entity|previous_query|none;
 cluster_ref=kkbtest|rmtest|all|null;
 response_mode=concise|normal|detailed|table|null.
+scope_level=cluster|namespace|workload|node|previous_result|unknown.
 Never invent a name or cluster. Use active_entity only when the message is anaphoric."""
 
 
@@ -59,6 +66,7 @@ class StructuredIntent:
     reference: Reference = "none"
     cluster_ref: str | None = None
     response_mode: ResponseMode | None = None
+    scope_level: ScopeLevel = "unknown"
 
     def namespace_query(self, context: ConversationContext) -> NamespaceQuery | None:
         if self.resource_kind != "Namespace":
@@ -105,6 +113,28 @@ def natural_namespace_intent(
     """Resolve broad Namespace grammar without making factual decisions."""
     normalized = _normalize(message).strip(" ?.!")
     tokens = normalized.replace("'", " ").split()
+    if "cluster" in normalized:
+        return StructuredIntent(
+            "operational", "Cluster", "health", scope_level="cluster"
+        )
+    if any(token.startswith("node") for token in tokens):
+        return StructuredIntent(
+            "operational", "Node", "inspect", scope_level="node"
+        )
+    if (
+        context.active_inspection is not None
+        and context.active_inspection.resource_kind == "Pod"
+        and any(term in normalized for term in (
+            "bunda", "burada", "bunun", "onda", "bu sonuc",
+        ))
+        and any(term in normalized for term in (
+            "sorun", "problem", "sikinti", "normal", "nasil",
+        ))
+    ):
+        return StructuredIntent(
+            "followup", "Pod", "health", reference="active_entity",
+            scope_level="previous_result",
+        )
     active_reference = any(term in normalized for term in (
         "bunun", "bunda", "buna", "onun", "ona", "burada", "buradaki",
         "sunun", "suna", "bu namespace", "bu proje", "az onceki",
@@ -112,10 +142,16 @@ def natural_namespace_intent(
     ))
     if active_reference and context.active_entity_kind == "Namespace":
         if "pod" in normalized:
-            return StructuredIntent("followup", "Pod", "inspect", reference="active_entity")
+            return StructuredIntent(
+                "followup", "Pod", "inspect", reference="active_entity",
+                scope_level="workload",
+            )
         if "event" in normalized:
             return StructuredIntent("followup", "Namespace", "inspect", reference="active_entity")
-        return StructuredIntent("followup", "Namespace", "status", reference="active_entity")
+        return StructuredIntent(
+            "followup", "Namespace", "status", reference="active_entity",
+            scope_level="namespace",
+        )
 
     membership = re.search(
         r"\b([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\s+bunlarin\s+icinde\s+mi\b",
@@ -189,6 +225,7 @@ def _intent_from_dict(value: Any) -> StructuredIntent | None:
     reference = value.get("reference", "none")
     cluster = value.get("cluster_ref")
     response_mode = value.get("response_mode")
+    scope_level = value.get("scope_level", "unknown")
     if resource is not None and resource not in ALLOWED_RESOURCES:
         return None
     if operation is not None and operation not in ALLOWED_OPERATIONS:
@@ -201,11 +238,13 @@ def _intent_from_dict(value: Any) -> StructuredIntent | None:
         return None
     if response_mode is not None and response_mode not in ALLOWED_RESPONSE_MODES:
         return None
+    if scope_level not in ALLOWED_SCOPE_LEVELS:
+        return None
     entity = _safe_name(value.get("entity_text"))
     query_value = _safe_name(value.get("query_value"))
     return StructuredIntent(
         value["mode"], resource, operation, entity, query_type, query_value,
-        reference, cluster, response_mode,
+        reference, cluster, response_mode, scope_level,
     )
 
 

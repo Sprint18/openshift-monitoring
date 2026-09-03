@@ -89,6 +89,14 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
         "last_operation": "count",
         "active_entity_kind": "Namespace",
         "active_entity_name": "uat-zauh",
+        "active_inspection": {
+            "inspection_type": "pod_health", "resource_kind": "Pod",
+            "cluster_id": "kkbtest", "namespace": "uat-zauh",
+            "pod_count": 2, "ready_count": 0, "non_ready_count": 2,
+            "total_restarts": 252, "max_restart_count": 237,
+            "problematic_pod_names": ["pod-a", "pod-b"],
+            "observed_at": "2026-09-03T10:00:00+00:00",
+        },
     }
     ai_client.chat.return_value = {
         "cluster": "kkbtest", "clusters": [{"id": "kkbtest", "name": "KKB TEST"}],
@@ -679,6 +687,7 @@ def test_shiftlight_sends_bounded_safe_history_and_structured_context() -> None:
     assert "conversation_context: safeChatContext(current.context)" in source
     assert "store.conversations.find((item) => item.id === turn.conversationId)" in source
     assert "responseConversation.context = safeChatContext(data.conversation_context)" in source
+    assert "result.active_inspection = safeInspection" in source
     assert "context: {}" in source[source.index("const emptyConversation"):source.index("const emptyStore")]
     assert 'summary: ""' in source[source.index("const emptyConversation"):source.index("const emptyStore")]
     assert "context: safeChatContext(value.context)" in source
