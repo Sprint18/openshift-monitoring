@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import SessionStore, UserRepository
@@ -29,6 +30,32 @@ def test_bootstrap_password_change_survives_database_reopen(tmp_path: Path) -> N
     assert reopened.verify("admin", "new-secret") is True
     assert reopened.bootstrap("admin", "admin") is False
     assert reopened.verify("admin", "new-secret") is True
+
+
+def test_auth_env_added_after_auth_disabled_startup_bootstraps_user(tmp_path: Path) -> None:
+    database = Database(tmp_path / "existing-kocc.db")
+    database.initialize()  # Previous startup without auth configuration.
+    users = UserRepository(database)
+    assert main.auth_should_be_enabled(False, ("admin", "admin", "secret")) is True
+    assert users.bootstrap("admin", "admin") is True
+    assert users.verify("admin", "admin") is True
+
+
+def test_partial_auth_configuration_never_disables_auth() -> None:
+    assert main.auth_should_be_enabled(False, ("admin", "", "")) is True
+    assert main.auth_should_be_enabled(False, ("", "password", "")) is True
+    assert main.auth_should_be_enabled(False, ("", "", "session")) is True
+    assert main.auth_should_be_enabled(False, ("", "", "")) is False
+
+
+def test_partial_auth_configuration_fails_startup_closed(monkeypatch) -> None:
+    monkeypatch.setattr(main, "AUTH_ENABLED", True)
+    monkeypatch.setattr(main, "AUTH_CONFIGURATION_VALUES", ("admin", "", "session"))
+    monkeypatch.setattr(main, "AUTH_SESSION_SECRET", "session")
+    monkeypatch.setattr(main.snapshot_repository, "initialize", Mock())
+
+    with pytest.raises(RuntimeError, match="authentication secrets"):
+        main.initialize_persistence()
 
 
 def test_logout_invalidates_server_side_session() -> None:
@@ -59,6 +86,21 @@ def test_patch_client_uses_fixed_path_and_server_token(urlopen: Mock) -> None:
         assert exc.code == "invalid_resource"
     else:
         raise AssertionError("arbitrary resource must be rejected")
+
+
+@patch("app.patch_client.urllib.request.urlopen")
+def test_patch_client_without_token_is_configured_and_omits_auth(urlopen: Mock) -> None:
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = b'{"agent_status":"ONLINE"}'
+    urlopen.return_value = response
+    client = PatchBackendClient("http://patch-master:8090", 5, "")
+    assert client.configured is True
+    assert client.get("summary")["agent_status"] == "ONLINE"
+    assert urlopen.call_args.args[0].get_header("Authorization") is None
+    assert PatchBackendClient("", 5, "token").configured is False
+    assert PatchBackendClient("https://patch-master", 5, "token").configured is True
 
 
 @patch("app.patch_client.urllib.request.urlopen")
@@ -100,8 +142,13 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     assert client.get("/health").status_code == 200
     assert client.get("/ready").status_code == 200
     assert client.get("/api/ai/clusters").status_code == 401
+    assert client.get("/api/summary").status_code == 401
     assert client.get("/api/patch/summary").status_code == 401
     assert client.get("/", follow_redirects=False).status_code == 303
+    assert client.get("/?cluster=rmtest", follow_redirects=False).status_code == 303
+    assert client.get("/patch-monitoring", follow_redirects=False).status_code == 303
+    assert client.get("/ai-assistant", follow_redirects=False).status_code == 303
+    assert client.get("/static/kkb-turuncu-lacivert-logo.png").status_code == 200
 
     bad = client.post("/login", data={"username": "admin", "password": "bad"})
     assert bad.status_code == 401

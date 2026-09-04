@@ -159,6 +159,7 @@ def test_test_deployment_configures_auth_and_patch_backend_secrets() -> None:
     assert env["KOCC_ADMIN_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-auth"
     assert env["KOCC_SESSION_SECRET"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-auth"
     assert env["KOCC_PATCH_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-patch-api"
+    assert env["KOCC_PATCH_API_TOKEN"]["valueFrom"]["secretKeyRef"]["optional"] is True
 
 
 def test_test_route_allows_long_ai_requests() -> None:

@@ -17,9 +17,13 @@ does not trigger Kubernetes collection. Disable the module atomically with
 Required environment variables are `KOCC_AUTH_ENABLED`,
 `KOCC_ADMIN_USERNAME`, `KOCC_ADMIN_PASSWORD`, `KOCC_SESSION_SECRET`,
 `KOCC_AUTH_COOKIE_SECURE`, `KOCC_PATCH_ENABLED`, `KOCC_PATCH_BACKEND_URL`,
-`KOCC_PATCH_TIMEOUT_SECONDS`, and `KOCC_PATCH_API_TOKEN`. Credentials must be
-created from `openshift/kocc-auth-secret-template.yaml` without committing real
-values.
+`KOCC_PATCH_TIMEOUT_SECONDS`, and optional `KOCC_PATCH_API_TOKEN`. When the
+token is empty KOCC sends no Authorization header, allowing the current
+unauthenticated internal Patch Master. When Patch Master authentication is
+enabled, both services must receive the same token. Auth is enabled whenever
+any admin/session credential is supplied; partial configuration fails startup
+instead of exposing the portal anonymously. Credentials must be created from
+`openshift/kocc-auth-secret-template.yaml` without committing real values.
 
 ```bash
 oc project ocp-monitoring-portal-test

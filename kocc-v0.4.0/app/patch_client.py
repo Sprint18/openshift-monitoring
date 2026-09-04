@@ -35,7 +35,7 @@ class PatchBackendClient:
 
     @property
     def configured(self) -> bool:
-        return self.base_url.startswith(("http://", "https://")) and bool(self.api_token)
+        return self.base_url.startswith(("http://", "https://"))
 
     def get(self, resource: str) -> dict[str, Any]:
         try:
@@ -56,15 +56,17 @@ class PatchBackendClient:
         if not self.configured:
             raise PatchBackendError("unavailable")
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
         request = urllib.request.Request(
             self.base_url + path,
             data=body,
             method=method,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_token}",
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:

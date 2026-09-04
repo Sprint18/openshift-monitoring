@@ -194,6 +194,7 @@ spec:
                 secretKeyRef:
                   name: kocc-patch-api
                   key: api-token
+                  optional: true
             - name: KOCC_AI_BACKEND_URL
               value: http://kocc-ai-backend.test-openshift-ai-assistant.svc.cluster.local:8080
             - name: KOCC_AI_BACKEND_TIMEOUT_SECONDS

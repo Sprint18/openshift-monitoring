@@ -60,9 +60,22 @@ def boolean_env(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
-AUTH_ENABLED = boolean_env("KOCC_AUTH_ENABLED")
+def auth_should_be_enabled(explicit: bool, values: tuple[str, str, str]) -> bool:
+    return explicit or any(values)
+
+
+AUTH_CONFIGURATION_VALUES = (
+    os.getenv("KOCC_ADMIN_USERNAME", "").strip(),
+    os.getenv("KOCC_ADMIN_PASSWORD", ""),
+    os.getenv("KOCC_SESSION_SECRET", ""),
+)
+# Credentials are authoritative: supplying any auth credential must never leave
+# the portal anonymous merely because the feature flag was omitted.
+AUTH_ENABLED = auth_should_be_enabled(
+    boolean_env("KOCC_AUTH_ENABLED"), AUTH_CONFIGURATION_VALUES
+)
 AUTH_COOKIE_SECURE = boolean_env("KOCC_AUTH_COOKIE_SECURE", True)
-AUTH_SESSION_SECRET = os.getenv("KOCC_SESSION_SECRET", "")
+AUTH_SESSION_SECRET = AUTH_CONFIGURATION_VALUES[2]
 AUTH_COOKIE_NAME = "kocc_session"
 session_store = SessionStore()
 
@@ -71,11 +84,15 @@ def initialize_persistence() -> None:
     try:
         snapshot_repository.initialize()
         if AUTH_ENABLED:
-            username = os.getenv("KOCC_ADMIN_USERNAME", "").strip()
-            password = os.getenv("KOCC_ADMIN_PASSWORD", "")
+            username, password, _ = AUTH_CONFIGURATION_VALUES
             if not AUTH_SESSION_SECRET or not username or not password:
                 raise RuntimeError("KOCC authentication secrets are not configured")
-            user_repository.bootstrap(username, password)
+            created = user_repository.bootstrap(username, password)
+            logger.info(
+                "auth_bootstrap status=%s username=%s",
+                "user_created" if created else "skipped_existing_user",
+                username,
+            )
     except Exception as exc:
         logger.warning(
             "sqlite_init_failed exception_type=%s", type(exc).__name__
