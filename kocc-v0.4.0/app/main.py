@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 import csv
+import hashlib
+import hmac
 import io
 import math
 import threading
@@ -12,16 +15,18 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from kubernetes.client.exceptions import ApiException
 from pydantic import BaseModel, Field
 
 from app.ai_client import AIBackendClient, AIBackendError
+from app.auth import SessionStore, UserRepository
 from app.cluster_loader import (
     DEFAULT_CLUSTER,
     ClusterConfigurationError,
@@ -42,20 +47,41 @@ from app.performance import (
     set_perf_cluster,
     set_perf_path,
 )
+from app.patch_client import PatchBackendClient, PatchBackendError
 from app.resource_parser import format_cpu, format_memory
 
 logger = logging.getLogger("kocc")
 SQLITE_DATABASE_PATH = Path(os.getenv("KOCC_SQLITE_PATH", "/data/kocc.db"))
 snapshot_repository = SnapshotRepository(Database(SQLITE_DATABASE_PATH))
+user_repository = UserRepository(Database(SQLITE_DATABASE_PATH))
+
+
+def boolean_env(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+AUTH_ENABLED = boolean_env("KOCC_AUTH_ENABLED")
+AUTH_COOKIE_SECURE = boolean_env("KOCC_AUTH_COOKIE_SECURE", True)
+AUTH_SESSION_SECRET = os.getenv("KOCC_SESSION_SECRET", "")
+AUTH_COOKIE_NAME = "kocc_session"
+session_store = SessionStore()
 
 
 def initialize_persistence() -> None:
     try:
         snapshot_repository.initialize()
+        if AUTH_ENABLED:
+            username = os.getenv("KOCC_ADMIN_USERNAME", "").strip()
+            password = os.getenv("KOCC_ADMIN_PASSWORD", "")
+            if not AUTH_SESSION_SECRET or not username or not password:
+                raise RuntimeError("KOCC authentication secrets are not configured")
+            user_repository.bootstrap(username, password)
     except Exception as exc:
         logger.warning(
             "sqlite_init_failed exception_type=%s", type(exc).__name__
         )
+        if AUTH_ENABLED:
+            raise
 
 
 def persist_collected_snapshot(cluster_key: str, data: dict[str, Any]) -> None:
@@ -135,6 +161,16 @@ ai_backend_client = AIBackendClient(
     KOCC_AI_BACKEND_URL, KOCC_AI_BACKEND_TIMEOUT_SECONDS
 )
 
+KOCC_PATCH_ENABLED = boolean_env("KOCC_PATCH_ENABLED")
+KOCC_PATCH_BACKEND_URL = os.getenv("KOCC_PATCH_BACKEND_URL", "").strip()
+KOCC_PATCH_API_TOKEN = os.getenv("KOCC_PATCH_API_TOKEN", "")
+KOCC_PATCH_TIMEOUT_SECONDS = positive_env_seconds("KOCC_PATCH_TIMEOUT_SECONDS", 5)
+patch_backend_client = PatchBackendClient(
+    KOCC_PATCH_BACKEND_URL, KOCC_PATCH_TIMEOUT_SECONDS, KOCC_PATCH_API_TOKEN
+)
+templates.env.globals["patch_enabled"] = KOCC_PATCH_ENABLED
+templates.env.globals["auth_enabled"] = AUTH_ENABLED
+
 
 class AIChatRequest(BaseModel):
     message: str
@@ -144,6 +180,12 @@ class AIChatRequest(BaseModel):
     recent_turns: list[dict[str, Any]] = Field(default_factory=list)
     conversation_context: dict[str, Any] = Field(default_factory=dict)
     conversation_summary: str = ""
+
+
+class PatchStartRequest(BaseModel):
+    target_tag: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    process_id: str | None = Field(default=None, max_length=160)
+    duration_minutes: int = Field(default=60, ge=1, le=720)
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -159,6 +201,47 @@ _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
 _active_requests = 0
 _active_requests_lock = threading.Lock()
+
+
+def signed_session_cookie(token: str) -> str:
+    signature = hmac.new(
+        AUTH_SESSION_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{token}.{signature}"
+
+
+def session_username(request: Request) -> str | None:
+    value = request.cookies.get(AUTH_COOKIE_NAME, "")
+    token, separator, signature = value.rpartition(".")
+    if not separator or not token or not AUTH_SESSION_SECRET:
+        return None
+    expected = hmac.new(
+        AUTH_SESSION_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return session_store.username(token)
+
+
+def safe_local_path(value: str) -> str:
+    return value if value.startswith("/") and not value.startswith("//") else "/"
+
+
+AUTH_PUBLIC_PATHS = frozenset({"/health", "/ready", "/login", "/favicon.ico"})
+
+
+@app.middleware("http")
+async def authentication_middleware(request: Request, call_next: Any) -> Any:
+    if not AUTH_ENABLED or request.url.path in AUTH_PUBLIC_PATHS or request.url.path.startswith("/static/"):
+        return await call_next(request)
+    username = session_username(request)
+    if username:
+        request.state.username = username
+        return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": "authentication_required"}, status_code=401)
+    target = quote(str(request.url.path) + (f"?{request.url.query}" if request.url.query else ""), safe="/?=&")
+    return RedirectResponse(f"/login?next={target}", status_code=303)
 
 
 @app.middleware("http")
@@ -226,6 +309,75 @@ async def favicon() -> FileResponse:
     return FileResponse(
         Path(__file__).parent / "static/kkb-turuncu-lacivert-logo.png",
         media_type="image/png",
+    )
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = Query(default="/")) -> HTMLResponse:
+    if AUTH_ENABLED and session_username(request):
+        return RedirectResponse(safe_local_path(next), status_code=303)
+    return templates.TemplateResponse(
+        request=request, name="login.html",
+        context={"error": None, "next_path": safe_local_path(next)},
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request) -> HTMLResponse:
+    body = parse_qs((await request.body()).decode("utf-8"))
+    username = body.get("username", [""])[0].strip()
+    password = body.get("password", [""])[0]
+    next_path = body.get("next", ["/"])[0]
+    if not AUTH_ENABLED or not user_repository.verify(username, password):
+        await asyncio.sleep(0.25)
+        return templates.TemplateResponse(
+            request=request, name="login.html", status_code=401,
+            context={"error": "Kullanıcı adı veya parola hatalı.", "next_path": next_path},
+        )
+    token = session_store.create(username)
+    response = RedirectResponse(safe_local_path(next_path), status_code=303)
+    response.set_cookie(
+        AUTH_COOKIE_NAME, signed_session_cookie(token), httponly=True,
+        secure=AUTH_COOKIE_SECURE, samesite="strict", max_age=session_store.ttl_seconds,
+    )
+    return response
+
+
+@app.post("/logout")
+async def logout(request: Request) -> RedirectResponse:
+    value = request.cookies.get(AUTH_COOKIE_NAME, "")
+    token, _, _ = value.rpartition(".")
+    session_store.destroy(token)
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(AUTH_COOKIE_NAME)
+    return response
+
+
+@app.get("/change-password", response_class=HTMLResponse)
+async def change_password_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request, name="change_password.html",
+        context={"error": None, "success": None},
+    )
+
+
+@app.post("/change-password", response_class=HTMLResponse)
+async def change_password(request: Request) -> HTMLResponse:
+    body = parse_qs((await request.body()).decode("utf-8"))
+    current = body.get("current_password", [""])[0]
+    new = body.get("new_password", [""])[0]
+    confirm = body.get("confirm_password", [""])[0]
+    error = None
+    if not new:
+        error = "Yeni parola boş olamaz."
+    elif new != confirm:
+        error = "Yeni parola doğrulaması eşleşmiyor."
+    elif not user_repository.change_password(request.state.username, current, new):
+        error = "Mevcut parola hatalı."
+    return templates.TemplateResponse(
+        request=request, name="change_password.html",
+        status_code=400 if error else 200,
+        context={"error": error, "success": None if error else "Parolanız güncellendi."},
     )
 
 
@@ -1267,6 +1419,61 @@ def ai_error_response(exc: AIBackendError) -> JSONResponse:
     )
 
 
+def patch_error_response(exc: PatchBackendError) -> JSONResponse:
+    if exc.code == "timeout":
+        return JSONResponse({"error": "patch_timeout"}, status_code=504)
+    if exc.code.startswith("http_4"):
+        return JSONResponse({"error": "patch_request_rejected"}, status_code=400)
+    if exc.code in {"unavailable", "http_503"}:
+        return JSONResponse({"error": "patch_unavailable"}, status_code=503)
+    return JSONResponse({"error": "patch_invalid_response"}, status_code=502)
+
+
+def patch_enabled_or_response() -> JSONResponse | None:
+    if not KOCC_PATCH_ENABLED:
+        return JSONResponse({"error": "patch_disabled"}, status_code=503)
+    return None
+
+
+@app.get("/api/patch/{resource}")
+def api_patch_resource(resource: str) -> JSONResponse:
+    disabled = patch_enabled_or_response()
+    if disabled:
+        return disabled
+    try:
+        return JSONResponse(patch_backend_client.get(resource))
+    except PatchBackendError as exc:
+        return patch_error_response(exc)
+
+
+@app.post("/api/patch/start")
+def api_patch_start(payload: PatchStartRequest) -> JSONResponse:
+    disabled = patch_enabled_or_response()
+    if disabled:
+        return disabled
+    body: dict[str, Any] = {
+        "target_tag": payload.target_tag,
+        "duration_minutes": payload.duration_minutes,
+    }
+    if payload.process_id:
+        body["process_id"] = payload.process_id
+    try:
+        return JSONResponse(patch_backend_client.start(body))
+    except PatchBackendError as exc:
+        return patch_error_response(exc)
+
+
+@app.post("/api/patch/stop")
+def api_patch_stop() -> JSONResponse:
+    disabled = patch_enabled_or_response()
+    if disabled:
+        return disabled
+    try:
+        return JSONResponse(patch_backend_client.stop())
+    except PatchBackendError as exc:
+        return patch_error_response(exc)
+
+
 @app.get("/api/ai/clusters")
 def api_ai_clusters() -> JSONResponse:
     try:
@@ -1840,5 +2047,21 @@ def ai_assistant_page(
             "selected_cluster": cluster_key,
             "release": app.version,
             "page": "ai-assistant",
+        },
+    )
+
+
+@app.get("/patch-monitoring", response_class=HTMLResponse)
+def patch_monitoring_page(request: Request) -> HTMLResponse:
+    if not KOCC_PATCH_ENABLED:
+        raise HTTPException(status_code=404, detail="Patch monitoring disabled")
+    return templates.TemplateResponse(
+        request=request,
+        name="patch_monitoring.html",
+        context={
+            "selected_cluster": "kkbtest",
+            "selected_cluster_name": "KKBTEST1",
+            "release": app.version,
+            "page": "patch-monitoring",
         },
     )

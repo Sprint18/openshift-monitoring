@@ -132,14 +132,33 @@ def test_test_deployment_recreates_pod_for_read_write_once_pvc() -> None:
 def test_test_deployment_configures_internal_ai_backend() -> None:
     deployment = manifest_resources()["Deployment"]
     container = deployment["spec"]["template"]["spec"]["containers"][0]
-    env = {item["name"]: item["value"] for item in container["env"]}
-    assert env == {
+    env = {
+        item["name"]: item["value"]
+        for item in container["env"] if "value" in item
+    }
+    assert {key: env[key] for key in (
+        "KOCC_AI_BACKEND_URL", "KOCC_AI_BACKEND_TIMEOUT_SECONDS"
+    )} == {
         "KOCC_AI_BACKEND_URL": (
             "http://kocc-ai-backend.test-openshift-ai-assistant."
             "svc.cluster.local:8080"
         ),
         "KOCC_AI_BACKEND_TIMEOUT_SECONDS": "90",
     }
+
+
+def test_test_deployment_configures_auth_and_patch_backend_secrets() -> None:
+    deployment = manifest_resources()["Deployment"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    assert env["KOCC_AUTH_ENABLED"]["value"] == "true"
+    assert env["KOCC_PATCH_ENABLED"]["value"] == "true"
+    assert env["KOCC_PATCH_BACKEND_URL"]["value"].endswith(
+        ".ocp-patch-agent.svc.cluster.local:8090"
+    )
+    assert env["KOCC_ADMIN_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-auth"
+    assert env["KOCC_SESSION_SECRET"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-auth"
+    assert env["KOCC_PATCH_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-patch-api"
 
 
 def test_test_route_allows_long_ai_requests() -> None:

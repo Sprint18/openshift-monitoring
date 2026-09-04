@@ -1,5 +1,35 @@
 # OpenShift Clusters Monitoring Platform v0.4.0
 
+## Portal authentication and Patch Monitoring
+
+Test deployment enables server-side portal authentication and the isolated
+KKBTEST1 Patch Monitoring module. On first startup, when `portal_user` is empty,
+`KOCC_ADMIN_USERNAME` and `KOCC_ADMIN_PASSWORD` bootstrap the administrator.
+The password is stored only as PBKDF2-HMAC-SHA256 hash in SQLite; later pod
+restarts do not overwrite a password changed at `/change-password`.
+
+Patch Monitoring uses only the configured Patch Master Service DNS and fixed
+`/api/v1/*` paths. Browser credentials and the Patch Master bearer token never
+cross the server boundary. Five-second UI polling targets Patch Master only and
+does not trigger Kubernetes collection. Disable the module atomically with
+`KOCC_PATCH_ENABLED=false`.
+
+Required environment variables are `KOCC_AUTH_ENABLED`,
+`KOCC_ADMIN_USERNAME`, `KOCC_ADMIN_PASSWORD`, `KOCC_SESSION_SECRET`,
+`KOCC_AUTH_COOKIE_SECURE`, `KOCC_PATCH_ENABLED`, `KOCC_PATCH_BACKEND_URL`,
+`KOCC_PATCH_TIMEOUT_SECONDS`, and `KOCC_PATCH_API_TOKEN`. Credentials must be
+created from `openshift/kocc-auth-secret-template.yaml` without committing real
+values.
+
+```bash
+oc project ocp-monitoring-portal-test
+cp openshift/kocc-auth-secret-template.yaml /tmp/kocc-auth-secrets.yaml
+# Replace every REPLACE_WITH_* value outside the repository.
+oc apply -f /tmp/kocc-auth-secrets.yaml
+oc apply -f openshift/kocc-v0.4.0.yaml
+oc rollout status deployment/kocc
+```
+
 ## SQLite Persistence Phase-1 (test)
 
 Test deployment mevcut `kocc-data` PVC'sini `/data` altında mount eder ve

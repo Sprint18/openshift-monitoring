@@ -42,4 +42,14 @@ MIGRATIONS: Sequence[tuple[int, str]] = (
         CREATE INDEX IF NOT EXISTS idx_workload_image_cluster_time
             ON workload_image_snapshot(cluster, snapshot_time DESC);
     """),
+    (2, """
+        CREATE TABLE IF NOT EXISTS portal_user (
+            username TEXT PRIMARY KEY,
+            password_hash BLOB NOT NULL,
+            salt BLOB NOT NULL,
+            iterations INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+    """),
 )

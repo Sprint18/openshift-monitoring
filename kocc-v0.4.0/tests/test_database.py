@@ -45,13 +45,15 @@ def test_database_creation_wal_and_schema_migration(tmp_path) -> None:
         versions = connection.execute(
             "SELECT version FROM schema_version"
         ).fetchall()
-        assert [row[0] for row in versions] == [1]
+        assert [row[0] for row in versions] == [1, 2]
         tables = {
             row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert {"schema_version", "cluster_snapshot", "workload_image_snapshot"} <= tables
+    assert {
+        "schema_version", "cluster_snapshot", "workload_image_snapshot", "portal_user"
+    } <= tables
 
 
 def test_snapshot_insert_interval_and_image_repository(tmp_path) -> None:

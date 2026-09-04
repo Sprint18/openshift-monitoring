@@ -9,5 +9,9 @@
     ] %}
     <a href="{{ route }}?cluster={{ selected_cluster }}"{% if page == page_key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
     {% endfor %}
+    {% if patch_enabled %}
+    <a href="/patch-monitoring"{% if page == "patch-monitoring" %} class="active" aria-current="page"{% endif %}>Patch Monitoring</a>
+    {% endif %}
+    {% if auth_enabled %}<a href="/change-password">Hesap</a>{% endif %}
 </nav>
 {% include "_shiftlight_assistant.html" %}

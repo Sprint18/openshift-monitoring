@@ -164,6 +164,36 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            - name: KOCC_AUTH_ENABLED
+              value: "true"
+            - name: KOCC_AUTH_COOKIE_SECURE
+              value: "true"
+            - name: KOCC_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kocc-auth
+                  key: admin-username
+            - name: KOCC_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kocc-auth
+                  key: admin-password
+            - name: KOCC_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kocc-auth
+                  key: session-secret
+            - name: KOCC_PATCH_ENABLED
+              value: "true"
+            - name: KOCC_PATCH_BACKEND_URL
+              value: http://ocp-patch-master.ocp-patch-agent.svc.cluster.local:8090
+            - name: KOCC_PATCH_TIMEOUT_SECONDS
+              value: "5"
+            - name: KOCC_PATCH_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kocc-patch-api
+                  key: api-token
             - name: KOCC_AI_BACKEND_URL
               value: http://kocc-ai-backend.test-openshift-ai-assistant.svc.cluster.local:8080
             - name: KOCC_AI_BACKEND_TIMEOUT_SECONDS
