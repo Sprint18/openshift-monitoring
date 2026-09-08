@@ -197,7 +197,6 @@ patch_backend_client = PatchBackendClient(
     KOCC_PATCH_BACKEND_URL, KOCC_PATCH_TIMEOUT_SECONDS, KOCC_PATCH_API_TOKEN
 )
 templates.env.globals["patch_enabled"] = KOCC_PATCH_ENABLED
-templates.env.globals["auth_enabled"] = AUTH_ENABLED
 
 
 class AIChatRequest(BaseModel):
@@ -1941,7 +1940,6 @@ def diagnostics_template_context(
         },
         "selected_cluster": cluster_key,
         "selected_cluster_name": definitions[cluster_key].name,
-        "release": app.version,
         "page": "diagnostics",
         "namespace": namespace,
         "pod_name": pod_name,
@@ -2038,7 +2036,6 @@ def render_dashboard_page(
                 ],
                 "data": data,
                 "error": None,
-                "release": app.version,
                 "page": page,
                 "missing_options": missing_options or {},
                 "missing_fallback": missing_fallback,
@@ -2062,7 +2059,6 @@ def render_dashboard_page(
                 "selected_cluster_name": selected_name,
                 "data": None,
                 "error": dashboard_error_message(exc),
-                "release": app.version,
                 "page": page,
                 "missing_options": missing_options or {},
                 "missing_fallback": missing_fallback,
@@ -2157,7 +2153,6 @@ def ai_assistant_page(
         name="ai_assistant.html",
         context={
             "selected_cluster": cluster_key,
-            "release": app.version,
             "page": "ai-assistant",
         },
     )
@@ -2173,7 +2168,6 @@ def patch_monitoring_page(request: Request) -> HTMLResponse:
         context={
             "selected_cluster": "kkbtest",
             "selected_cluster_name": "KKBTEST1",
-            "release": app.version,
             "page": "patch-monitoring",
         },
     )

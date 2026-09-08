@@ -837,7 +837,7 @@ def test_template_contains_p3_p4_contracts(
         response = client.get(f"{route}?cluster=kkbtest")
         assert response.status_code == 200
         assert expected in response.text
-        assert "dashboardTheme" in response.text
+        assert "/static/portal_theme.js" in response.text
         assert "Compare Clusters" not in response.text
         assert "compare-clusters" not in response.text
 
@@ -1121,6 +1121,54 @@ def test_cache_defaults_and_request_observability_contract() -> None:
     assert "active_requests=" in source
     assert "unhandled_exception path=" in source
     assert 'request.url.path not in {"/health", "/ready"}' in source
+
+
+def test_authenticated_user_menu_overlay_and_logout_contract() -> None:
+    project = Path(__file__).parents[1]
+    navigation = (project / "app/templates/_navigation.html").read_text()
+    theme_css = (project / "app/static/portal_theme.css").read_text()
+    theme_js = (project / "app/static/portal_theme.js").read_text()
+    assert ">Hesap<" not in navigation
+    assert "request.state.username" in navigation
+    assert 'class="account-avatar"' in navigation
+    assert "Parola Değiştir" in navigation
+    assert '<form method="post" action="/logout">' in navigation
+    assert "position:fixed" in theme_css
+    assert "z-index:1250" in theme_css
+    assert "getBoundingClientRect" in theme_js
+    assert "!menu.contains(event.target)" in theme_js
+    logout_route = next(route for route in app.routes if route.path == "/logout")
+    assert logout_route.methods == {"POST"}
+
+
+def test_shared_dark_theme_covers_tables_inputs_and_user_menu() -> None:
+    css = (Path(__file__).parents[1] / "app/static/portal_theme.css").read_text()
+    for token in (
+        "--page-bg", "--panel-bg", "--text-primary", "--text-secondary",
+        "--table-row", "--table-row-alt", "--table-hover", "--input-bg",
+        "--dropdown-bg",
+    ):
+        assert token in css
+    assert '[data-theme="dark"] table tbody tr:nth-child(even)' in css
+    assert '[data-theme="dark"] table tbody tr:hover' in css
+    assert '[data-theme="dark"] input' in css
+    assert '[data-theme="dark"] .account-dropdown' in css
+    assert ":root" in css
+
+
+@patch("app.main.ClusterCollector")
+@patch("app.main.new_cluster_client")
+def test_user_facing_overview_omits_portal_version(
+    _new_cluster_client: Mock, collector_class: Mock,
+) -> None:
+    collector_class.return_value.collect_dashboard.return_value = dashboard_payload()
+    response = client.get("/?cluster=kkbtest")
+    assert response.status_code == 200
+    assert 'class="release"' not in response.text
+    assert "v0.4.0" not in response.text
+    assert app.version == "0.4.0"
+    database = (Path(__file__).parents[1] / "app/db/database.py").read_text()
+    assert "schema_version" in database
 
 
 def test_active_request_and_unhandled_exception_logging(caplog) -> None:

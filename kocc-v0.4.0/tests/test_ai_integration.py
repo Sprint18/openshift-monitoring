@@ -545,6 +545,20 @@ def test_shiftlight_nav_is_deemphasized_and_legacy_route_opens_drawer() -> None:
     assert "/ai-assistant" not in navigation
 
 
+def test_shiftlight_uses_live_shared_portal_theme() -> None:
+    project = Path(__file__).parents[1]
+    shared_theme = (project / "app/static/portal_theme.js").read_text()
+    css = (project / "app/static/shiftlight_assistant.css").read_text()
+    assert 'const key = "dashboardTheme"' in shared_theme
+    assert 'root.dataset.theme = selected' in shared_theme
+    assert 'new CustomEvent("kocc:themechange"' in shared_theme
+    assert '[data-theme="dark"] .shiftlight-drawer' in css
+    assert '[data-theme="dark"] .shiftlight-conversation' in css
+    assert '[data-theme="dark"] .shiftlight-composer textarea' in css
+    assert ".shiftlight-drawer {" in css
+    assert "background: #f7f9fb" in css
+
+
 def test_shiftlight_welcome_nudge_and_accessibility_hooks() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()

@@ -93,15 +93,6 @@
             margin: 0 0 20px;
             color: #4f5255;
         }
-        .release {
-            display: inline-block;
-            margin-left: 8px;
-            padding: 3px 8px;
-            border-radius: 10px;
-            background: #e7f1fa;
-            color: #004b95;
-            font-size: 12px;
-        }
         .cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -673,7 +664,6 @@
         <p class="selected">
             Görüntülenen cluster:
             <strong>{{ selected_cluster_name }}</strong>
-            <span class="release">v{{ release }}</span>
         </p>
         {% if not error %}
         <div class="refresh-meta">
@@ -2217,14 +2207,11 @@
 
         const root = document.documentElement;
         const themeToggle = document.getElementById("theme-toggle");
-        const themeKey = "dashboardTheme";
         const applyTheme = (theme) => {
-            const safeTheme = theme === "dark" ? "dark" : "light";
-            root.dataset.theme = safeTheme;
+            const safeTheme = window.KOCCTheme.apply(theme);
             themeToggle.textContent = safeTheme === "dark" ? "Light mode" : "Dark mode";
-            localStorage.setItem(themeKey, safeTheme);
         };
-        applyTheme(localStorage.getItem(themeKey) || "light");
+        applyTheme(window.KOCCTheme.current());
         themeToggle.addEventListener("click", () => applyTheme(
             root.dataset.theme === "dark" ? "light" : "dark"
         ));

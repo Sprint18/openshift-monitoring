@@ -139,6 +139,47 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 .shiftlight-composer textarea { width:100%; min-height:48px; max-height:145px; padding:10px 11px; resize:none; border:1px solid #8f9ba7; border-radius:12px; font:14px/1.45 Arial,sans-serif; }
 .shiftlight-composer > div { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px; }.shiftlight-composer > div span{color:var(--shiftlight-muted);font-size:11px}.shiftlight-composer > div span.error{color:#a30000}.shiftlight-composer button{padding:8px 13px;color:#fff;background:var(--shiftlight-navy);border:0;border-radius:7px;font-weight:bold;cursor:pointer}.shiftlight-composer button:disabled{cursor:not-allowed;opacity:.55}.shiftlight-composer small{display:block;margin-top:4px;color:var(--shiftlight-muted);font-size:10px}
 .shiftlight-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+[data-theme="dark"] {
+    --shiftlight-border:#405775;
+    --shiftlight-muted:#b9c2cc;
+}
+[data-theme="dark"] .shiftlight-launcher { color:#f4f7fa; background:rgba(30,48,71,.98); border-color:#526b88; box-shadow:0 8px 22px rgba(0,0,0,.45); }
+[data-theme="dark"] .shiftlight-nudge { color:#f4f7fa; background:#1e3047; border-color:#718096; border-left-color:var(--shiftlight-orange); box-shadow:0 8px 24px rgba(0,0,0,.45); }
+[data-theme="dark"] .shiftlight-nudge::after { background:#1e3047; border-color:#718096; }
+[data-theme="dark"] .shiftlight-nudge button { color:#dce6ef; }
+[data-theme="dark"] .shiftlight-drawer { color:#eef2f6; background:#17263a; border-color:var(--shiftlight-border); box-shadow:-12px 0 32px rgba(0,0,0,.55); }
+[data-theme="dark"] .shiftlight-toolbar,
+[data-theme="dark"] .shiftlight-history,
+[data-theme="dark"] .shiftlight-composer { color:#eef2f6; background:#1e3047; border-color:var(--shiftlight-border); }
+[data-theme="dark"] .shiftlight-toolbar button,
+[data-theme="dark"] .shiftlight-toolbar select,
+[data-theme="dark"] .shiftlight-suggestions button,
+[data-theme="dark"] .shiftlight-detail-action,
+[data-theme="dark"] .shiftlight-cluster-choices button { color:#eef2f6; background:#20334b; border-color:#718096; }
+[data-theme="dark"] .shiftlight-history-title,
+[data-theme="dark"] .shiftlight-empty h2,
+[data-theme="dark"] .shiftlight-identity,
+[data-theme="dark"] .shiftlight-answer h1,
+[data-theme="dark"] .shiftlight-answer h2,
+[data-theme="dark"] .shiftlight-answer h3 { color:#f4f7fa; }
+[data-theme="dark"] .shiftlight-history-item { color:#eef2f6; background:#17263a; border-color:#405775; }
+[data-theme="dark"] .shiftlight-history-item:hover,
+[data-theme="dark"] .shiftlight-history-item.active { background:#263d59; border-color:#73bcf7; }
+[data-theme="dark"] .shiftlight-conversation { color:#eef2f6; background:linear-gradient(#132237,#17263a); }
+[data-theme="dark"] .shiftlight-message.user { color:#fff; background:#0b3b6b; }
+[data-theme="dark"] .shiftlight-answer code { color:#f4f7fa; background:#263d59; }
+[data-theme="dark"] .shiftlight-answer a,
+[data-theme="dark"] .shiftlight-evidence summary { color:#73bcf7; }
+[data-theme="dark"] .shiftlight-message.error .shiftlight-answer { color:#ff9b9b; }
+[data-theme="dark"] .shiftlight-table { color:#eef2f6; background:#17263a; border-color:#405775; }
+[data-theme="dark"] .shiftlight-table-actions { background:#1e3047; border-color:#405775; }
+[data-theme="dark"] .shiftlight-table-actions button { color:#73bcf7; background:#20334b; border-color:#718096; }
+[data-theme="dark"] .shiftlight-table th { color:#f4f7fa; background:#20334b; }
+[data-theme="dark"] .shiftlight-table td { color:#eef2f6; border-color:#405775; }
+[data-theme="dark"] .shiftlight-table tbody tr:nth-child(even) { background:#132237; }
+[data-theme="dark"] .shiftlight-table tbody tr:hover { background:#263d59; }
+[data-theme="dark"] .shiftlight-composer textarea { color:#eef2f6; background:#132237; border-color:#718096; }
+[data-theme="dark"] .shiftlight-composer button { color:#fff; background:#0b3b6b; }
 @keyframes shiftlight-float { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shiftlight-flight { 0%{opacity:0;transform:translate3d(190px,120px,0) rotate(-12deg) scale(.9)} 20%{opacity:1;transform:translate3d(-90px,-130px,0) rotate(-4deg) scale(1.04)} 45%{transform:translate3d(-360px,-90px,0) rotate(7deg) scale(1.08)} 70%{transform:translate3d(-210px,45px,0) rotate(-5deg) scale(1.02)} 100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1)} }
 @keyframes shiftlight-land { 0%{transform:translate3d(0,-10px,0) scale(1.04)} 65%{transform:translate3d(0,3px,0) scale(.98)} 100%{transform:translate3d(0,0,0) scale(1)} }
