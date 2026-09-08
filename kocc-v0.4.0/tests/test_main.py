@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from kubernetes.client.exceptions import ApiException
 
+import app.main as main_module
 from app.main import (
     DASHBOARD_CACHE_TTL_SECONDS,
     DIAGNOSTIC_CACHE_TTL_SECONDS,
@@ -670,30 +671,53 @@ def test_overview_and_resources_share_cluster_snapshot(
 
 
 @patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)
+@patch("app.main._schedule_dashboard_refresh")
 @patch("app.main.prepare_dashboard_data")
-def test_cache_expiry_recollects(prepare_data: Mock) -> None:
-    prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
+def test_cache_expiry_serves_stale_without_blocking(
+    prepare_data: Mock, schedule_refresh: Mock,
+) -> None:
+    prepare_data.return_value = {"generation": 1}
+    schedule_refresh.return_value = True
 
     assert cached_dashboard_data("kkbtest")["generation"] == 1
+    stale = cached_dashboard_data("kkbtest")
+    assert stale["generation"] == 1
+    assert stale["cache"]["stale"] is True
+    assert stale["cache"]["refreshing"] is True
+    assert prepare_data.call_count == 1
+    schedule_refresh.assert_called_once_with("kkbtest")
+
+
+@patch("app.main.threading.Thread")
+def test_repeated_stale_requests_schedule_single_cluster_refresh(thread: Mock) -> None:
+    assert main_module._schedule_dashboard_refresh("kkbtest") is True
+    assert main_module._schedule_dashboard_refresh("kkbtest") is False
+    thread.assert_called_once()
+    thread.return_value.start.assert_called_once()
+
+
+@patch("app.main.prepare_dashboard_data")
+def test_background_refresh_replaces_only_its_cluster_snapshot(
+    prepare_data: Mock,
+) -> None:
+    prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
+    cached_dashboard_data("kkbtest")
+    main_module._refresh_dashboard_cache(
+        "kkbtest", main_module._dashboard_cache_generation
+    )
     assert cached_dashboard_data("kkbtest")["generation"] == 2
     assert prepare_data.call_count == 2
 
 
-@patch("app.main.DASHBOARD_CACHE_TTL_SECONDS", 0)
 @patch("app.main.prepare_dashboard_data")
-def test_cache_serves_marked_stale_snapshot_after_failure(
-    prepare_data: Mock,
-) -> None:
-    prepare_data.side_effect = [
-        {"generation": 1},
-        RuntimeError("temporary cluster failure"),
-    ]
+def test_background_refresh_failure_preserves_valid_snapshot(prepare_data: Mock) -> None:
+    prepare_data.side_effect = [{"generation": 1}, RuntimeError("temporary cluster failure")]
 
     cached_dashboard_data("kkbtest")
-    stale = cached_dashboard_data("kkbtest")
-
-    assert stale["generation"] == 1
-    assert stale["cache"]["stale"] is True
+    main_module._refresh_dashboard_cache(
+        "kkbtest", main_module._dashboard_cache_generation
+    )
+    assert cached_dashboard_data("kkbtest")["generation"] == 1
 
 
 @patch("app.main.prepare_dashboard_data")

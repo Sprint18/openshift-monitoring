@@ -699,7 +699,7 @@
                 </span>
                 {% if data["cache"]["hit"] %}
                 <br>Data age: {{ data["cache"]["age_seconds"] }} sec
-                {% if "stale" in data["cache"] and data["cache"]["stale"] %}· <span class="warning">Stale snapshot</span>{% endif %}
+                {% if "stale" in data["cache"] and data["cache"]["stale"] %}· <span class="warning">Stale snapshot{% if data["cache"].get("refreshing") %} · refreshing{% endif %}</span>{% endif %}
                 {% endif %}
                 <div id="refresh-duration-warning" class="refresh-warning">
                     Refresh interval is close to collection duration

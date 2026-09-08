@@ -286,6 +286,13 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     assert patch_page.status_code == 200
     assert "Patch Monitoring" in patch_page.text
     assert "KKBTEST1" in patch_page.text
+    navigation = patch_page.text.split(
+        'aria-label="Dashboard navigation"', 1
+    )[1].split("</nav>", 1)[0]
+    assert "admin" in navigation
+    assert "Parola Değiştir" in navigation
+    assert '<form method="post" action="/logout">' in navigation
+    assert ">Hesap<" not in navigation
 
     assert client.get("/api/patch/summary").status_code == 503
     assert client.get("/health").status_code == 200
@@ -303,6 +310,8 @@ def test_password_change_validation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(main, "AUTH_SESSION_SECRET", "test-session-secret")
     monkeypatch.setattr(main, "user_repository", users)
     monkeypatch.setattr(main, "session_store", SessionStore())
+    change_password = Mock(wraps=users.change_password)
+    monkeypatch.setattr(users, "change_password", change_password)
     client = TestClient(app)
     client.post("/login", data={"username": "admin", "password": "admin"})
 
@@ -310,13 +319,21 @@ def test_password_change_validation(monkeypatch, tmp_path: Path) -> None:
         "current_password": "admin", "new_password": "one", "confirm_password": "two",
     })
     assert mismatch.status_code == 400
+    change_password.assert_not_called()
     wrong = client.post("/change-password", data={
         "current_password": "bad", "new_password": "new", "confirm_password": "new",
     })
     assert wrong.status_code == 400
+    assert change_password.call_count == 1
+    change_password.reset_mock()
     changed = client.post("/change-password", data={
         "current_password": "admin", "new_password": "new", "confirm_password": "new",
-    })
-    assert changed.status_code == 200
+    }, follow_redirects=False)
+    assert changed.status_code == 303
+    assert changed.headers["location"] == "/change-password?changed=1"
+    change_password.assert_called_once_with("admin", "admin", "new")
+    success = client.get(changed.headers["location"])
+    assert success.status_code == 200
+    assert "Parolanız başarıyla değiştirildi." in success.text
     assert users.verify("admin", "admin") is False
     assert users.verify("admin", "new") is True

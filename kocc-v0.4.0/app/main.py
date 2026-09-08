@@ -227,6 +227,8 @@ _diagnostic_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _platform_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _dashboard_cache_lock = threading.Lock()
 _cluster_cache_locks: dict[str, threading.Lock] = {}
+_dashboard_refreshing: dict[str, int] = {}
+_dashboard_cache_generation = 0
 _active_requests = 0
 _active_requests_lock = threading.Lock()
 
@@ -385,10 +387,16 @@ async def logout(request: Request) -> RedirectResponse:
 
 
 @app.get("/change-password", response_class=HTMLResponse)
-async def change_password_page(request: Request) -> HTMLResponse:
+async def change_password_page(
+    request: Request,
+    changed: bool = Query(default=False),
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request, name="change_password.html",
-        context={"error": None, "success": None},
+        context={
+            "error": None,
+            "success": "Parolanız başarıyla değiştirildi." if changed else None,
+        },
     )
 
 
@@ -405,10 +413,11 @@ async def change_password(request: Request) -> HTMLResponse:
         error = "Yeni parola doğrulaması eşleşmiyor."
     elif not user_repository.change_password(request.state.username, current, new):
         error = "Mevcut parola hatalı."
+    if not error:
+        return RedirectResponse("/change-password?changed=1", status_code=303)
     return templates.TemplateResponse(
-        request=request, name="change_password.html",
-        status_code=400 if error else 200,
-        context={"error": error, "success": None if error else "Parolanız güncellendi."},
+        request=request, name="change_password.html", status_code=400,
+        context={"error": error, "success": None},
     )
 
 
@@ -1217,11 +1226,56 @@ def prepare_dashboard_data(cluster_key: str) -> dict[str, Any]:
 
 
 def clear_dashboard_cache() -> None:
+    global _dashboard_cache_generation
     with _dashboard_cache_lock:
+        _dashboard_cache_generation += 1
         _dashboard_cache.clear()
         _cluster_cache_locks.clear()
+        _dashboard_refreshing.clear()
         _diagnostic_cache.clear()
         _platform_cache.clear()
+
+
+def _refresh_dashboard_cache(cluster_key: str, generation: int) -> None:
+    """Refresh one stale cluster snapshot without blocking browser requests."""
+    try:
+        with _dashboard_cache_lock:
+            cluster_lock = _cluster_cache_locks.setdefault(
+                cluster_key, threading.Lock()
+            )
+        with cluster_lock:
+            data = prepare_dashboard_data(cluster_key)
+            persist_collected_snapshot(cluster_key, data)
+            with _dashboard_cache_lock:
+                if generation == _dashboard_cache_generation:
+                    _dashboard_cache[cluster_key] = (
+                        time.monotonic(), deepcopy(data)
+                    )
+        logger.info("snapshot cluster=%s background_refresh=SUCCESS", cluster_key)
+    except Exception as exc:
+        logger.warning(
+            "snapshot cluster=%s background_refresh=FAILED exception_type=%s",
+            cluster_key, type(exc).__name__,
+        )
+    finally:
+        with _dashboard_cache_lock:
+            if _dashboard_refreshing.get(cluster_key) == generation:
+                _dashboard_refreshing.pop(cluster_key, None)
+
+
+def _schedule_dashboard_refresh(cluster_key: str) -> bool:
+    with _dashboard_cache_lock:
+        if cluster_key in _dashboard_refreshing:
+            return False
+        generation = _dashboard_cache_generation
+        _dashboard_refreshing[cluster_key] = generation
+    threading.Thread(
+        target=_refresh_dashboard_cache,
+        args=(cluster_key, generation),
+        name=f"kocc-refresh-{cluster_key}",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _cached_dashboard_data(
@@ -1249,9 +1303,36 @@ def _cached_dashboard_data(
                 extra={"snapshot_age_ms": age_ms},
             )
             return data
+        if not force_refresh and cached:
+            age_seconds = round(now - cached[0], 2)
+            data = deepcopy(cached[1])
+            data["cache"] = {
+                "hit": True,
+                "stale": True,
+                "refreshing": True,
+                "age_seconds": age_seconds,
+            }
+            stale_age_ms = round(age_seconds * 1000)
+        else:
+            data = None
+            stale_age_ms = 0
         cluster_lock = _cluster_cache_locks.setdefault(
             cluster_key, threading.Lock()
         )
+
+    if data is not None:
+        scheduled = _schedule_dashboard_refresh(cluster_key)
+        data["cache"]["refreshing"] = True
+        logger.info(
+            "snapshot cluster=%s path=%s cache=STALE age_ms=%s background_refresh=%s",
+            cluster_key, get_perf_path(), stale_age_ms,
+            "STARTED" if scheduled else "IN_PROGRESS",
+        )
+        log_performance(
+            "cache.stale_while_revalidate", cache_started, cache_hit=True,
+            extra={"snapshot_age_ms": stale_age_ms},
+        )
+        return data
 
     with cluster_lock:
         now = time.monotonic()

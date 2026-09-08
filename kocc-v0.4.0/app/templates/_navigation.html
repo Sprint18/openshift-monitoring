@@ -12,6 +12,17 @@
     {% if patch_enabled %}
     <a href="/patch-monitoring"{% if page == "patch-monitoring" %} class="active" aria-current="page"{% endif %}>Patch Monitoring</a>
     {% endif %}
-    {% if auth_enabled %}<a href="/change-password">Hesap</a>{% endif %}
+    {% if request.state.username is defined %}
+    <details class="account-menu">
+        <summary aria-label="Kullanıcı menüsünü aç">{{ request.state.username }} <span aria-hidden="true">▾</span></summary>
+        <div class="account-dropdown">
+            <a href="/change-password">Parola Değiştir</a>
+            <form method="post" action="/logout"><button type="submit">Çıkış Yap</button></form>
+        </div>
+    </details>
+    {% endif %}
 </nav>
+<style>
+.account-menu{position:relative;margin-left:auto;align-self:center;color:#fff}.account-menu summary{padding:8px 12px;border:1px solid rgba(255,255,255,.35);border-radius:6px;cursor:pointer;white-space:nowrap;list-style:none}.account-menu summary::-webkit-details-marker{display:none}.account-menu summary:focus-visible{outline:3px solid #73bcf7;outline-offset:2px}.account-dropdown{position:absolute;right:0;z-index:100;min-width:170px;margin-top:5px;padding:6px;background:#fff;border:1px solid #d8dee6;border-radius:7px;box-shadow:0 5px 16px rgba(0,0,0,.24)}.primary-nav .account-dropdown a,.account-dropdown button{display:block;width:100%;margin:0;padding:9px 10px;border:0;border-radius:4px;background:transparent;color:#132b4f;text-align:left;text-decoration:none;font:inherit;cursor:pointer;white-space:nowrap}.primary-nav .account-dropdown a:hover,.primary-nav .account-dropdown a:focus,.account-dropdown button:hover,.account-dropdown button:focus{background:#fff3e8;color:#132b4f}.account-dropdown form{margin:0}@media(max-width:700px){.account-menu{position:sticky;right:0;background:#0d213d}.account-dropdown{position:fixed;top:auto;right:12px}}
+</style>
 {% include "_shiftlight_assistant.html" %}
