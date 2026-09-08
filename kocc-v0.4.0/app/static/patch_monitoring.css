@@ -1,0 +1,36 @@
+:root{--navy:#062b55;--orange:#f58220;--bg:#f3f6fa;--panel:#fff;--line:#d9e2ec;--text:#102a43;--muted:#61758a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui}
+.header{display:flex;align-items:center;gap:12px;padding:14px 22px;color:#fff;background:linear-gradient(110deg,#062b55,#021d3d);border-bottom:3px solid var(--orange)}
+.header img{width:44px;height:44px;object-fit:contain;background:#fff;border-radius:6px}
+.header h1{margin:0;font-size:18px}.header p{margin:2px 0 0;color:#cad8e8;font-size:12px}
+main{max-width:1500px;margin:auto;padding:22px}
+.patch-title,.section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.patch-title h1{margin-bottom:3px}.patch-title p{margin:0;color:var(--muted)}
+.patch-subnav{display:flex;gap:4px;margin:18px 0;border-bottom:1px solid var(--line);overflow:auto}
+.patch-subnav a{padding:11px 13px;color:var(--navy);text-decoration:none;white-space:nowrap}
+.patch-subnav a.active{font-weight:750;border-bottom:3px solid var(--orange)}
+.panel{margin-bottom:14px;padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 5px 16px #16324a12}
+.patch-form{display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:12px}
+.patch-form label,.patch-form fieldset{display:grid;gap:5px;margin:0;color:var(--muted);font-size:12px}
+.patch-form fieldset{grid-column:span 2;padding:9px;border:1px solid var(--line);border-radius:7px}
+.patch-form input,.patch-form select,.section-heading select,.filters input,.filters select{width:100%;padding:9px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:7px}
+.cluster-options{display:flex;flex-wrap:wrap;gap:12px}.cluster-options label{display:flex;align-items:center;gap:5px;color:var(--text)}.cluster-options input{width:auto}
+.form-actions{display:flex;align-items:end;gap:8px;grid-column:1/-1}
+.form-actions button,.patch-action{padding:9px 13px;color:var(--navy);background:#fff;border:1px solid #9cafc1;border-radius:7px;font-weight:700;cursor:pointer}
+.form-actions .primary{color:#fff;background:var(--navy)}.form-actions .secondary{background:#e8eef5}
+.patch-output{margin-top:14px;padding:13px;color:var(--text);background:#f7f9fb;border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.patch-alert{margin:12px 0;padding:12px;color:#fff0f1;background:#762b34;border:1px solid #e06a76;border-radius:8px}
+.patch-cards{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:10px}.patch-card{padding:13px;background:#f7f9fb;border:1px solid var(--line);border-radius:9px}.patch-card strong{display:block;margin-top:6px;font-size:20px}
+.filters{display:flex;gap:8px;min-width:min(600px,60vw)}.table-wrap{max-width:100%;overflow:auto}
+table{width:100%;border-collapse:collapse}th,td{padding:9px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{position:sticky;top:0;color:#334e68;background:#edf3f8}td small{display:block;color:var(--muted)}
+.empty{padding:22px;text-align:center;color:var(--muted)}
+.pagination{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.pagination button,.detail-button{padding:6px 10px;color:var(--navy);background:var(--panel);border:1px solid #9cafc1;border-radius:6px;font-weight:650;cursor:pointer}.pagination button:disabled{cursor:not-allowed;opacity:.45}.cluster-error{display:block;max-width:460px;overflow-wrap:anywhere}
+[data-theme="dark"] body{--bg:#0d1726;--panel:#17263a;--line:#405775;--text:#eef2f6;--muted:#b9c2cc}
+[data-theme="dark"] .patch-subnav a{color:#dce8f5}
+[data-theme="dark"] .panel,[data-theme="dark"] .patch-output,[data-theme="dark"] .patch-card{color:var(--text);background:var(--panel);border-color:var(--line)}
+[data-theme="dark"] .form-actions button{color:#eef2f6;background:#20334b;border-color:#718096}
+[data-theme="dark"] .form-actions .primary{background:#0b477f}[data-theme="dark"] .form-actions .secondary{background:#344960}
+[data-theme="dark"] .pagination button,[data-theme="dark"] .detail-button{color:#eef2f6;background:#20334b;border-color:#718096}
+@media(max-width:900px){.patch-form{grid-template-columns:1fr 1fr}.patch-cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){main{padding:12px}.patch-form,.patch-cards{grid-template-columns:1fr}.patch-form fieldset{grid-column:auto}.section-heading{align-items:stretch;flex-direction:column}.filters{min-width:0;flex-direction:column}}

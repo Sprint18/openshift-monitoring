@@ -403,6 +403,31 @@ python -m pip install -r requirements-dev.txt
 pytest
 ```
 
+## Central Patch Monitor entegrasyonu
+
+Patch Monitoring, Central Patch Monitor 0.7.2'yi KOCC içine kopyalamaz. Tarayıcı
+yalnız KOCC'nin allowlist edilmiş `/api/patch/*` proxy endpointlerini çağırır;
+backend adresi ve opsiyonel bearer token tarayıcıya gönderilmez.
+
+```text
+Browser -> KOCC -> Central Patch Monitor -> local/remote Kubernetes API
+             |              |
+          /data/kocc.db   /data/patch.db
+```
+
+İki SQLite veritabanının sahipliği kesin olarak ayrıdır. KOCC yalnız `kocc.db`,
+Central Patch Monitor yalnız kendi PVC'sindeki `patch.db` dosyasını açar. Central
+uygulamanın `designs`, `sessions`, `clusters` ve `rows` tabloları KOCC şemasına
+eklenmez; baseline, scan scheduling, karşılaştırma ve retention iş mantığı Central
+serviste kalır.
+
+`KOCC_PATCH_BACKEND_URL` Central Patch Monitor Service URL'sini,
+`KOCC_PATCH_API_TOKEN` gerekiyorsa opsiyonel server-side token'ı belirtir. Backend
+disabled, timeout veya unavailable olduğunda yalnız Patch Monitoring bölümü güvenli
+bir hata gösterir; diğer KOCC ekranları çalışmaya devam eder. Canlı ekran bounded
+sayfalar kullanır ve revision SSE yalnız yenileme sinyali taşır. Background polling
+ve SSE, KOCC kullanıcı idle session süresini yenilemez.
+
 ## Performans ve restart teşhisi
 
 Overview, mevcut cluster snapshot'ından üretilen Executive Dashboard'dur. KPI,

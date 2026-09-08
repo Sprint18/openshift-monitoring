@@ -45,15 +45,15 @@ def test_successful_probe_and_static_requests_are_debug_only() -> None:
     assert main.request_log_level("/api/summary", 200) == logging.INFO
     for path in (
         "/api/session/activity",
-        "/api/patch/summary",
-        "/api/patch/events",
-        "/api/patch/agents",
-        "/api/patch/runs",
+        "/api/patch/config",
+        "/api/patch/sessions/abc/summary",
+        "/api/patch/sessions/abc/images",
+        "/api/patch/sessions/abc/changes",
     ):
         assert main.request_log_level(path, 200) == logging.DEBUG
         assert main.request_log_level(path, 401) == logging.WARNING
-    assert main.request_log_level("/api/patch/start", 200) == logging.INFO
-    assert main.request_log_level("/api/patch/stop", 200) == logging.INFO
+    assert main.request_log_level("/api/patch/sessions", 200, "POST") == logging.INFO
+    assert main.request_log_level("/api/patch/sessions/abc/stop", 200, "POST") == logging.INFO
     assert main.request_log_level("/health", 500) == logging.ERROR
 
 

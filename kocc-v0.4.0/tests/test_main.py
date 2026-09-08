@@ -1122,7 +1122,7 @@ def test_cache_defaults_and_request_observability_contract() -> None:
     assert "unhandled_exception path=" in source
     assert "QUIET_SUCCESS_PATHS" in source
     assert 'path.startswith("/static/")' in source
-    assert "request_log_level(request.url.path, status)" in source
+    assert "request_log_level(request.url.path, status, request.method)" in source
 
 
 def test_authenticated_user_menu_overlay_and_logout_contract() -> None:

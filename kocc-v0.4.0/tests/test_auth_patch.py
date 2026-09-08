@@ -11,7 +11,7 @@ from app.auth import SessionStore, UserRepository
 from app.db.database import Database
 from app.main import app
 import app.main as main
-from app.patch_client import PatchBackendClient, PatchBackendError
+from app.patch_client import CentralPatchClient, PatchBackendError
 
 
 class FakeClock:
@@ -141,7 +141,7 @@ def test_independent_browser_sessions_logout_and_fixation(monkeypatch, tmp_path:
 
     assert browser_a.get("/", follow_redirects=False).status_code == 303
     assert browser_b.get("/?cluster=rmtest", follow_redirects=False).status_code == 303
-    assert browser_b.get("/api/patch/summary").status_code == 401
+    assert browser_b.get("/api/patch/config").status_code == 401
     assert browser_b.get("/api/ai/clusters").status_code == 401
 
     assert browser_a.post(
@@ -183,7 +183,7 @@ def test_expired_cookie_redirects_html_and_rejects_api(monkeypatch, tmp_path: Pa
     assert client.get("/change-password").status_code == 200
     clock.advance(901)
     assert client.get("/", follow_redirects=False).status_code == 303
-    assert client.get("/api/patch/summary").status_code == 401
+    assert client.get("/api/patch/config").status_code == 401
 
 
 def test_background_patch_polling_does_not_extend_idle_session(
@@ -198,9 +198,9 @@ def test_background_patch_polling_does_not_extend_idle_session(
     clock.advance(899)
     # The backend may be disabled, but authentication succeeds without touching
     # the idle timestamp for this automatic API request.
-    assert browser.get("/api/patch/summary").status_code != 401
+    assert browser.get("/api/patch/config").status_code != 401
     clock.advance(2)
-    assert browser.get("/api/patch/summary").status_code == 401
+    assert browser.get("/api/patch/config").status_code == 401
     assert browser.get("/", follow_redirects=False).status_code == 303
 
 
@@ -222,72 +222,81 @@ def test_explicit_browser_activity_refreshes_idle_session(
 
 
 def test_patch_polling_stops_and_redirects_after_unauthorized_response() -> None:
-    source = (Path(__file__).parents[1] / "app/templates/patch_monitoring.html").read_text()
-    assert "sessionExpired:false" in source
-    assert "if(r.status===401)" in source
+    source = (Path(__file__).parents[1] / "app/static/patch_monitoring.js").read_text()
+    assert "expired: false" in source
+    assert "response.status === 401" in source
     assert "clearInterval(state.timer)" in source
-    assert "state.timer=null" in source
-    assert "if(state.sessionExpired)return" in source
+    assert "state.expired || state.refreshing" in source
     assert "location.assign(`/login?next=${next}`)" in source
 
 
 @patch("app.patch_client.urllib.request.urlopen")
-def test_patch_client_uses_fixed_path_and_server_token(urlopen: Mock) -> None:
+def test_central_patch_client_uses_allowlisted_contract_and_server_token(urlopen: Mock) -> None:
     response = Mock()
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    response.read.return_value = json.dumps({"agent_status": "ONLINE"}).encode()
+    response.read.return_value = json.dumps({"items": []}).encode()
     urlopen.return_value = response
-    client = PatchBackendClient("http://patch-master:8090", 5, "secret-token")
+    client = CentralPatchClient("http://patch-monitor:8080", 5, "secret-token")
 
-    assert client.get("summary")["agent_status"] == "ONLINE"
+    assert client.clusters() == {"items": []}
     request = urlopen.call_args.args[0]
-    assert request.full_url == "http://patch-master:8090/api/v1/summary"
+    assert request.full_url == "http://patch-monitor:8080/api/v1/clusters"
     assert request.get_header("Authorization") == "Bearer secret-token"
-
-    try:
-        client.get("https://attacker.invalid")
-    except PatchBackendError as exc:
-        assert exc.code == "invalid_resource"
-    else:
-        raise AssertionError("arbitrary resource must be rejected")
+    with pytest.raises(PatchBackendError, match="invalid_resource"):
+        client.session_view("safe-id", "arbitrary")
+    with pytest.raises(PatchBackendError, match="invalid_resource"):
+        client.session("../../secret")
 
 
 @patch("app.patch_client.urllib.request.urlopen")
-def test_patch_client_without_token_is_configured_and_omits_auth(urlopen: Mock) -> None:
+def test_central_patch_client_without_token_omits_authorization(urlopen: Mock) -> None:
     response = Mock()
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    response.read.return_value = b'{"agent_status":"ONLINE"}'
+    response.read.return_value = b'{"templates":{},"designs":[]}'
     urlopen.return_value = response
-    client = PatchBackendClient("http://patch-master:8090", 5, "")
+    client = CentralPatchClient("http://patch-monitor:8080", 5, "")
     assert client.configured is True
-    assert client.get("summary")["agent_status"] == "ONLINE"
+    assert client.flows()["templates"] == {}
     assert urlopen.call_args.args[0].get_header("Authorization") is None
-    assert PatchBackendClient("", 5, "token").configured is False
-    assert PatchBackendClient("https://patch-master", 5, "token").configured is True
+    assert CentralPatchClient("", 5, "token").configured is False
+    assert CentralPatchClient("https://patch-monitor", 5, "token").configured is True
 
 
 @patch("app.patch_client.urllib.request.urlopen")
-def test_patch_client_start_stop_and_malformed_response(urlopen: Mock) -> None:
+def test_central_patch_client_complete_api_mapping_and_query_allowlist(urlopen: Mock) -> None:
     response = Mock()
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    response.read.return_value = b'{"desired_state":"RUNNING"}'
+    response.read.return_value = b'{"ok":true}'
     urlopen.return_value = response
-    client = PatchBackendClient("http://patch-master:8090", 5, "token")
-    assert client.start({"target_tag": "1.4.1"})["desired_state"] == "RUNNING"
-    assert urlopen.call_args.args[0].full_url.endswith("/api/v1/start")
-    response.read.return_value = b'{"desired_state":"STOPPED"}'
-    assert client.stop()["desired_state"] == "STOPPED"
-    assert urlopen.call_args.args[0].full_url.endswith("/api/v1/stop")
+    client = CentralPatchClient("http://patch-monitor:8080", 5, "token")
+    calls = [
+        (client.config, (), "/api/v1/config"),
+        (client.clusters, (), "/api/v1/clusters"),
+        (client.flows, (), "/api/v1/flows"),
+        (client.preview, ({"target_tag": "1.4.1"},), "/api/v1/flows/preview"),
+        (client.save_design, ({"name": "test"},), "/api/v1/flows/designs"),
+        (client.sessions, (), "/api/v1/sessions"),
+        (client.create_session, ({"target_tag": "1.4.1"},), "/api/v1/sessions"),
+        (client.session, ("abc123",), "/api/v1/sessions/abc123"),
+        (client.session_action, ("abc123", "baseline"), "/api/v1/sessions/abc123/baseline"),
+        (client.session_action, ("abc123", "start"), "/api/v1/sessions/abc123/start"),
+        (client.session_action, ("abc123", "stop"), "/api/v1/sessions/abc123/stop"),
+        (client.container, ("abc123", "row-1"), "/api/v1/sessions/abc123/containers/row-1"),
+    ]
+    for operation, args, suffix in calls:
+        assert operation(*args) == {"ok": True}
+        assert urlopen.call_args.args[0].full_url.endswith(suffix)
+    for resource in ("summary", "images", "targets", "changes", "facets"):
+        client.session_view("abc123", resource, {"limit": 50, "secret": "no"})
+        url = urlopen.call_args.args[0].full_url
+        assert f"/api/v1/sessions/abc123/{resource}" in url
+        assert "limit=50" in url and "secret" not in url
     response.read.return_value = b"[]"
-    try:
-        client.get("events")
-    except PatchBackendError as exc:
-        assert exc.code == "invalid_response"
-    else:
-        raise AssertionError("non-object response must be rejected")
+    with pytest.raises(PatchBackendError, match="invalid_response"):
+        client.config()
 
 
 def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) -> None:
@@ -301,14 +310,14 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(main, "user_repository", users)
     monkeypatch.setattr(main, "session_store", SessionStore())
     monkeypatch.setattr(main, "KOCC_PATCH_ENABLED", True)
-    monkeypatch.setattr(main.patch_backend_client, "get", Mock(side_effect=PatchBackendError("unavailable")))
+    monkeypatch.setattr(main.patch_backend_client, "config", Mock(side_effect=PatchBackendError("unavailable")))
     client = TestClient(app)
 
     assert client.get("/health").status_code == 200
     assert client.get("/ready").status_code == 200
     assert client.get("/api/ai/clusters").status_code == 401
     assert client.get("/api/summary").status_code == 401
-    assert client.get("/api/patch/summary").status_code == 401
+    assert client.get("/api/patch/config").status_code == 401
     assert client.get("/", follow_redirects=False).status_code == 303
     assert client.get("/?cluster=rmtest", follow_redirects=False).status_code == 303
     assert client.get("/patch-monitoring", follow_redirects=False).status_code == 303
@@ -330,7 +339,7 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     patch_page = client.get("/patch-monitoring")
     assert patch_page.status_code == 200
     assert "Patch Monitoring" in patch_page.text
-    assert "KKBTEST1" in patch_page.text
+    assert "Central Patch Monitor 0.7.2" in patch_page.text
     navigation = patch_page.text.split(
         'aria-label="Dashboard navigation"', 1
     )[1].split("</nav>", 1)[0]
@@ -339,10 +348,10 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     assert '<form method="post" action="/logout">' in navigation
     assert ">Hesap<" not in navigation
 
-    assert client.get("/api/patch/summary").status_code == 503
+    assert client.get("/api/patch/config").status_code == 503
     assert client.get("/health").status_code == 200
     assert client.post("/logout", follow_redirects=False).status_code == 303
-    assert client.get("/api/patch/summary").status_code == 401
+    assert client.get("/api/patch/config").status_code == 401
 
 
 def test_password_change_validation(monkeypatch, tmp_path: Path) -> None:

@@ -48,7 +48,7 @@ from app.performance import (
     set_perf_cluster,
     set_perf_path,
 )
-from app.patch_client import PatchBackendClient, PatchBackendError
+from app.patch_client import CentralPatchClient, PatchBackendError
 from app.resource_parser import format_cpu, format_memory
 
 LOG_LEVEL = configure_application_logging()
@@ -195,7 +195,7 @@ KOCC_PATCH_ENABLED = boolean_env("KOCC_PATCH_ENABLED")
 KOCC_PATCH_BACKEND_URL = os.getenv("KOCC_PATCH_BACKEND_URL", "").strip()
 KOCC_PATCH_API_TOKEN = os.getenv("KOCC_PATCH_API_TOKEN", "")
 KOCC_PATCH_TIMEOUT_SECONDS = positive_env_seconds("KOCC_PATCH_TIMEOUT_SECONDS", 5)
-patch_backend_client = PatchBackendClient(
+patch_backend_client = CentralPatchClient(
     KOCC_PATCH_BACKEND_URL, KOCC_PATCH_TIMEOUT_SECONDS, KOCC_PATCH_API_TOKEN
 )
 templates.env.globals["patch_enabled"] = KOCC_PATCH_ENABLED
@@ -209,12 +209,6 @@ class AIChatRequest(BaseModel):
     recent_turns: list[dict[str, Any]] = Field(default_factory=list)
     conversation_context: dict[str, Any] = Field(default_factory=dict)
     conversation_summary: str = ""
-
-
-class PatchStartRequest(BaseModel):
-    target_tag: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-    process_id: str | None = Field(default=None, max_length=160)
-    duration_minutes: int = Field(default=60, ge=1, le=720)
 
 
 DASHBOARD_CACHE_TTL_SECONDS = positive_env_seconds(
@@ -265,14 +259,10 @@ AUTH_PUBLIC_PATHS = frozenset({"/health", "/ready", "/login", "/favicon.ico"})
 QUIET_SUCCESS_PATHS = frozenset({"/health", "/ready", "/favicon.ico"})
 QUIET_SUCCESS_API_PATHS = frozenset({
     "/api/session/activity",
-    "/api/patch/summary",
-    "/api/patch/events",
-    "/api/patch/agents",
-    "/api/patch/runs",
 })
 
 
-def request_log_level(path: str, status: int) -> int:
+def request_log_level(path: str, status: int, method: str = "GET") -> int:
     if status >= 500:
         return logging.ERROR
     if status >= 400:
@@ -280,6 +270,7 @@ def request_log_level(path: str, status: int) -> int:
     if (
         path in QUIET_SUCCESS_PATHS
         or path in QUIET_SUCCESS_API_PATHS
+        or (method == "GET" and path.startswith("/api/patch/"))
         or path.startswith("/static/")
     ):
         return logging.DEBUG
@@ -361,7 +352,7 @@ async def request_timing_middleware(request: Request, call_next: Any) -> Any:
         with _active_requests_lock:
             _active_requests -= 1
             active_at_end = _active_requests
-        level = request_log_level(request.url.path, status)
+        level = request_log_level(request.url.path, status, request.method)
         if should_log_request(request.url.path, cluster_key, status):
             logger.log(
                 level,
@@ -1604,6 +1595,10 @@ def ai_error_response(exc: AIBackendError) -> JSONResponse:
 def patch_error_response(exc: PatchBackendError) -> JSONResponse:
     if exc.code == "timeout":
         return JSONResponse({"error": "patch_timeout"}, status_code=504)
+    if exc.http_status == 409:
+        return JSONResponse({"error": "patch_conflict"}, status_code=409)
+    if exc.http_status == 422:
+        return JSONResponse({"error": "patch_validation_failed"}, status_code=422)
     if exc.code.startswith("http_4"):
         return JSONResponse({"error": "patch_request_rejected"}, status_code=400)
     if exc.code in {"unavailable", "http_503"}:
@@ -1617,43 +1612,120 @@ def patch_enabled_or_response() -> JSONResponse | None:
     return None
 
 
-@app.get("/api/patch/{resource}")
-def api_patch_resource(resource: str) -> JSONResponse:
+def patch_call(operation: Any, *args: Any, **kwargs: Any) -> JSONResponse:
     disabled = patch_enabled_or_response()
     if disabled:
         return disabled
     try:
-        return JSONResponse(patch_backend_client.get(resource))
+        return JSONResponse(operation(*args, **kwargs))
     except PatchBackendError as exc:
         return patch_error_response(exc)
 
 
-@app.post("/api/patch/start")
-def api_patch_start(payload: PatchStartRequest) -> JSONResponse:
+@app.get("/api/patch/config")
+def api_patch_config() -> JSONResponse:
+    return patch_call(patch_backend_client.config)
+
+
+@app.get("/api/patch/clusters")
+def api_patch_clusters() -> JSONResponse:
+    return patch_call(patch_backend_client.clusters)
+
+
+@app.get("/api/patch/flows")
+def api_patch_flows() -> JSONResponse:
+    return patch_call(patch_backend_client.flows)
+
+
+@app.post("/api/patch/flows/preview")
+def api_patch_flow_preview(payload: dict[str, Any]) -> JSONResponse:
+    return patch_call(patch_backend_client.preview, payload)
+
+
+@app.post("/api/patch/flows/designs")
+def api_patch_flow_design(payload: dict[str, Any]) -> JSONResponse:
+    return patch_call(patch_backend_client.save_design, payload)
+
+
+@app.get("/api/patch/sessions")
+def api_patch_sessions() -> JSONResponse:
+    return patch_call(patch_backend_client.sessions)
+
+
+@app.post("/api/patch/sessions")
+def api_patch_create_session(payload: dict[str, Any]) -> JSONResponse:
+    return patch_call(patch_backend_client.create_session, payload)
+
+
+@app.get("/api/patch/sessions/{session_id}")
+def api_patch_session(session_id: str) -> JSONResponse:
+    return patch_call(patch_backend_client.session, session_id)
+
+
+@app.post("/api/patch/sessions/{session_id}/baseline")
+def api_patch_session_baseline(session_id: str) -> JSONResponse:
+    return patch_call(patch_backend_client.session_action, session_id, "baseline")
+
+
+@app.post("/api/patch/sessions/{session_id}/start")
+def api_patch_session_start(session_id: str) -> JSONResponse:
+    return patch_call(patch_backend_client.session_action, session_id, "start")
+
+
+@app.post("/api/patch/sessions/{session_id}/stop")
+def api_patch_session_stop(session_id: str) -> JSONResponse:
+    return patch_call(patch_backend_client.session_action, session_id, "stop")
+
+
+def patch_session_view(
+    request: Request, session_id: str, resource: str,
+) -> JSONResponse:
+    query = patch_backend_client.filtered_query(dict(request.query_params))
+    return patch_call(
+        patch_backend_client.session_view, session_id, resource, query
+    )
+
+
+@app.get("/api/patch/sessions/{session_id}/summary")
+def api_patch_session_summary(request: Request, session_id: str) -> JSONResponse:
+    return patch_session_view(request, session_id, "summary")
+
+
+@app.get("/api/patch/sessions/{session_id}/images")
+def api_patch_session_images(request: Request, session_id: str) -> JSONResponse:
+    return patch_session_view(request, session_id, "images")
+
+
+@app.get("/api/patch/sessions/{session_id}/targets")
+def api_patch_session_targets(request: Request, session_id: str) -> JSONResponse:
+    return patch_session_view(request, session_id, "targets")
+
+
+@app.get("/api/patch/sessions/{session_id}/changes")
+def api_patch_session_changes(request: Request, session_id: str) -> JSONResponse:
+    return patch_session_view(request, session_id, "changes")
+
+
+@app.get("/api/patch/sessions/{session_id}/facets")
+def api_patch_session_facets(request: Request, session_id: str) -> JSONResponse:
+    return patch_session_view(request, session_id, "facets")
+
+
+@app.get("/api/patch/sessions/{session_id}/containers/{row_id}")
+def api_patch_container(session_id: str, row_id: str) -> JSONResponse:
+    return patch_call(patch_backend_client.container, session_id, row_id)
+
+
+@app.get("/api/patch/sessions/{session_id}/stream")
+def api_patch_stream(session_id: str) -> Any:
     disabled = patch_enabled_or_response()
     if disabled:
         return disabled
-    body: dict[str, Any] = {
-        "target_tag": payload.target_tag,
-        "duration_minutes": payload.duration_minutes,
-    }
-    if payload.process_id:
-        body["process_id"] = payload.process_id
-    try:
-        return JSONResponse(patch_backend_client.start(body))
-    except PatchBackendError as exc:
-        return patch_error_response(exc)
-
-
-@app.post("/api/patch/stop")
-def api_patch_stop() -> JSONResponse:
-    disabled = patch_enabled_or_response()
-    if disabled:
-        return disabled
-    try:
-        return JSONResponse(patch_backend_client.stop())
-    except PatchBackendError as exc:
-        return patch_error_response(exc)
+    return StreamingResponse(
+        patch_backend_client.stream(session_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/ai/clusters")
@@ -2229,16 +2301,50 @@ def ai_assistant_page(
     )
 
 
-@app.get("/patch-monitoring", response_class=HTMLResponse)
-def patch_monitoring_page(request: Request) -> HTMLResponse:
+def render_patch_monitoring_page(
+    request: Request, view: str, cluster: str,
+) -> HTMLResponse:
     if not KOCC_PATCH_ENABLED:
         raise HTTPException(status_code=404, detail="Patch monitoring disabled")
+    cluster_key = cluster.lower()
+    if cluster_key not in get_cluster_definitions():
+        cluster_key = DEFAULT_CLUSTER
     return templates.TemplateResponse(
         request=request,
         name="patch_monitoring.html",
         context={
-            "selected_cluster": "kkbtest",
-            "selected_cluster_name": "KKBTEST1",
+            "selected_cluster": cluster_key,
+            "selected_cluster_name": get_cluster_definitions()[cluster_key].name,
             "page": "patch-monitoring",
+            "patch_view": view,
         },
     )
+
+
+@app.get("/patch-monitoring", response_class=HTMLResponse)
+@app.get("/patch-monitoring/flow", response_class=HTMLResponse)
+def patch_monitoring_page(
+    request: Request, cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_patch_monitoring_page(request, "flow", cluster)
+
+
+@app.get("/patch-monitoring/live", response_class=HTMLResponse)
+def patch_monitoring_live_page(
+    request: Request, cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_patch_monitoring_page(request, "live", cluster)
+
+
+@app.get("/patch-monitoring/compare", response_class=HTMLResponse)
+def patch_monitoring_compare_page(
+    request: Request, cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_patch_monitoring_page(request, "compare", cluster)
+
+
+@app.get("/patch-monitoring/history", response_class=HTMLResponse)
+def patch_monitoring_history_page(
+    request: Request, cluster: str = Query(default=DEFAULT_CLUSTER),
+) -> HTMLResponse:
+    return render_patch_monitoring_page(request, "history", cluster)
