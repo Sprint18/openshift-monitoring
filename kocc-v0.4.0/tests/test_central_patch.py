@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import re
 import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -63,9 +64,9 @@ def test_patch_flow_live_compare_and_history_ux_contracts() -> None:
     script = (PROJECT / "app/static/patch_monitoring.js").read_text()
     for text in (
         "Patch akışını oluştur", "Hazır bir akış seç", "Hedef ve kapsam",
-        "İzleme davranışı", "Bu akış ne yapacak?", "Başlangıç durumunu kaydeder",
-        "Henüz oturum yok", "Görüntülenen container", "Hedef sürümde sağlıklı",
-        "Hedef dışında kalan", "Tag'i bilinmeyen", "Hedefte hazır değil",
+        "İzleme davranışı", "Bu akış ne yapacak?", "Patch öncesi baseline alınır",
+        "Henüz oturum yok", "Gözlenen container", "Hedef tag'de sağlıklı",
+        "Eski tag'de kalan", "Tag bilinmeyen", "Ready olmayan / bekleyen",
         "Şu anda hangi image'lar var?", "Hedef sürüme geçenler",
         "Önce / sonra karşılaştırması", "Sürüm geçişi ile sağlık değişimi ayrı değerlendirilir",
         "Oturum Geçmişi",
@@ -76,6 +77,7 @@ def test_patch_flow_live_compare_and_history_ux_contracts() -> None:
     assert "patch-no-session" in template and "showSessionArea" in script
     assert "next_cursor" in script and "PAGE_SIZE = 50" in script
     assert "session.id.slice(0, 8)" in script and "Oturumu aç →" in script
+    assert "sessionStorage" in script and "localStorage" not in script
 
 
 def test_patch_bootstrap_is_compatibility_first_and_errors_are_humanized() -> None:
@@ -92,6 +94,54 @@ def test_patch_bootstrap_is_compatibility_first_and_errors_are_humanized() -> No
     assert "esc(cluster.error" not in script
     assert "önceki güvenli veri korunuyor" in script
     assert "patch-error-state" in script and "patch-content" in script
+
+
+def test_patch_namespace_scope_contract_and_sandbox_exclusion() -> None:
+    template = (PROJECT / "app/templates/patch_monitoring.html").read_text()
+    script = (PROJECT / "app/static/patch_monitoring.js").read_text()
+    is_kkb_app = lambda namespace: namespace.startswith(("test-", "uat-"))
+    assert is_kkb_app("test-app") is True
+    assert is_kkb_app("uat-app") is True
+    assert is_kkb_app("sandbox-app") is False
+    assert is_kkb_app("openshift-monitoring") is False
+    assert 'KKB_APPS_GLOB = "test-*,uat-*"' in script
+    assert 'value="kkb" checked' in template
+    assert 'value="all"' in template
+    assert "sandbox-*" not in template and "sandbox-*" not in script
+    assert 'namespace_glob:selectedViewScope() === "kkb" ? KKB_APPS_GLOB : ""' in script
+    assert "Others" not in template
+
+
+def test_compare_dom_contract_and_filter_request_are_complete() -> None:
+    template = (PROJECT / "app/templates/patch_monitoring.html").read_text()
+    script = (PROJECT / "app/static/patch_monitoring.js").read_text()
+    template_ids = set(re.findall(r'id="([^"]+)"', template))
+    referenced_ids = set(re.findall(r'byId\("([^"]+)"\)', script))
+    assert referenced_ids <= template_ids
+    assert 'id="patch-compare-context"' in template
+    assert 'byId("patch-compare-context").textContent' in script
+    assert "...viewFilters(),limit:PAGE_SIZE,cursor:state.cursors.changes" in script
+    assert 'search:byId("patch-compare-search").value' in script
+    assert 'version_status:byId("patch-version-status").value' in script
+    assert 'health_change:byId("patch-health-change").value' in script
+
+
+def test_patch_operator_status_labels_and_completed_freshness_are_explicit() -> None:
+    script = (PROJECT / "app/static/patch_monitoring.js").read_text()
+    theme = (PROJECT / "app/static/portal_theme.js").read_text()
+    for value, label in (
+        ("TARGET_REACHED", "Hedef sürümde"),
+        ("NOT_UPDATED", "Eski sürümde"),
+        ("MIXED_VERSION", "Karışık sürüm"),
+        ("REGRESSION", "Patch sonrası bozuldu"),
+        ("RECOVERED", "Düzeldi"),
+        ("PERSISTING_ERROR", "Sorun devam ediyor"),
+        ("HEALTHY", "Sağlıklı"),
+    ):
+        assert f'{value}:"{label}"' in script
+    assert 'PERSISTING_ERROR:"Patch öncesinde de sorun vardı."' in script
+    assert '["COMPLETED","STOPPED"].includes(session.status) ? "LAST_RECORD"' in script
+    assert "persistingerror" in theme and "newwitherrors" in theme
 
 
 def test_patch_page_routes_keep_global_cluster_as_initial_hint(monkeypatch) -> None:

@@ -65,6 +65,14 @@
 .patch-monitoring .cluster-chip { display:flex; align-items:center; gap:7px; padding:10px 12px; color:var(--text-primary, #151515); background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:8px; cursor:pointer; }
 .patch-monitoring .cluster-chip:has(input:checked) { border-color:var(--patch-orange); background:var(--table-hover, #fff3e8); }
 .patch-monitoring .cluster-chip input { accent-color:var(--patch-orange); }
+.patch-monitoring .patch-scope-options { display:flex; flex-wrap:wrap; gap:9px; }
+.patch-monitoring .patch-scope-options label { display:flex; align-items:center; gap:7px; padding:9px 12px; color:var(--text-primary, #151515); background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:8px; font-weight:650; cursor:pointer; }
+.patch-monitoring .patch-scope-options label:has(input:checked) { border-color:var(--patch-orange); background:var(--table-hover, #fff3e8); }
+.patch-monitoring .patch-scope-options input { accent-color:var(--patch-orange); }
+.patch-monitoring .patch-scope-options small { font-weight:400; }
+.patch-monitoring .patch-advanced { padding:10px 12px; background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:8px; }
+.patch-monitoring .patch-advanced summary { color:var(--heading-color, var(--patch-navy)); font-weight:700; cursor:pointer; }
+.patch-monitoring .patch-advanced label { margin-top:12px; }
 .patch-monitoring .patch-actions { display:flex; flex-wrap:wrap; gap:9px; }
 .patch-monitoring .patch-actions button,
 .patch-monitoring .patch-session-actions button,
@@ -93,6 +101,13 @@
 .patch-monitoring .patch-cluster-strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:9px; margin-top:12px; }
 .patch-monitoring .patch-cluster-item { padding:11px; background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:8px; }
 .patch-monitoring .patch-cluster-item p { margin:7px 0 0; color:var(--text-secondary, #59636e); font-size:12px; overflow-wrap:anywhere; }
+.patch-monitoring .patch-view-scope { display:flex; align-items:end; flex-wrap:wrap; gap:12px; margin-top:16px; padding:12px; background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:9px; }
+.patch-monitoring .patch-view-scope > strong { align-self:center; color:var(--heading-color, var(--patch-navy)); }
+.patch-monitoring .patch-view-scope > label { display:grid; gap:5px; min-width:220px; font-size:12px; font-weight:650; }
+.patch-monitoring .patch-view-scope select { width:100%; padding:9px; color:var(--text-primary, #151515); background:var(--input-bg, #fff); border:1px solid var(--border-color, #bdcad6); border-radius:7px; }
+.patch-monitoring .patch-quick-filters { display:flex; flex-wrap:wrap; gap:7px; margin-top:16px; }
+.patch-monitoring .patch-quick-filters button { padding:7px 11px; color:var(--heading-color, var(--patch-navy)); background:var(--panel-bg-alt, #f7f9fb); border:1px solid var(--border-color, #d8dee6); border-radius:999px; font:inherit; font-weight:650; cursor:pointer; }
+.patch-monitoring .patch-quick-filters button:hover { border-color:var(--patch-orange); }
 .patch-monitoring .patch-filters { display:flex; gap:8px; min-width:min(580px, 55vw); }
 .patch-monitoring .patch-compare-filters { justify-content:flex-start; min-width:0; margin:18px 0; }
 .patch-monitoring .patch-compare-filters label { min-width:230px; }
@@ -130,4 +145,5 @@
     .patch-monitoring .patch-session-actions,
     .patch-monitoring .patch-history-item { align-items:stretch; flex-direction:column; }
     .patch-monitoring .patch-filters { min-width:0; flex-direction:column; }
+    .patch-monitoring .patch-view-scope { align-items:stretch; flex-direction:column; }
 }

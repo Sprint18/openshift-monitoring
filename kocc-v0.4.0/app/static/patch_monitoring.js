@@ -5,6 +5,17 @@
     if (!root) return;
 
     const PAGE_SIZE = 50;
+    const KKB_APPS_GLOB = "test-*,uat-*";
+    const STATUS_LABELS = {
+        TARGET_REACHED:"Hedef sürümde",NOT_UPDATED:"Eski sürümde",MIXED_VERSION:"Karışık sürüm",
+        UNKNOWN_VERSION:"Tag bilinmiyor",PARTLY_UNKNOWN:"Bazı tag'ler bilinmiyor",REGRESSION:"Patch sonrası bozuldu",
+        RECOVERED:"Düzeldi",PERSISTING_ERROR:"Sorun devam ediyor",IMPROVING:"İyileşiyor",HEALTHY:"Sağlıklı",
+        NOT_READY:"Hazır değil",NEW_WITH_ERRORS:"Yeni kaynak sorunlu",NEW_RESOURCE:"Yeni kaynak",
+        READY:"Sağlıklı",CRASH:"Crash",IMAGE_PULL_ERROR:"Image çekilemiyor",ERROR:"Başlatma hatası",
+        FRESH:"Veri güncel",STALE:"Veri güncel değil",LAST_RECORD:"Son kayıt",COMPLETED:"Tamamlandı",STOPPED:"Durduruldu",
+    };
+    const STATUS_HINTS = {REGRESSION:"Baseline sağlıklı, güncel durumda sorun gözlendi.",PERSISTING_ERROR:"Patch öncesinde de sorun vardı.",RECOVERED:"Baseline sorunu güncel durumda görülmüyor."};
+    const SESSION_STORAGE_KEY = `koccPatchSession:${root.dataset.user}`;
     const ERROR_MESSAGES = {
         patch_timeout: "Backend yanıt vermiyor.",
         patch_unavailable: "Central Patch Monitor bağlantısı kurulamadı.",
@@ -15,21 +26,24 @@
         patch_request_rejected: "Patch Monitor isteği reddetti.",
     };
     const state = {
-        sessionId: localStorage.getItem("koccPatchSession") || "",
+        sessionId: sessionStorage.getItem(SESSION_STORAGE_KEY) || "",
         timer: null,
         stream: null,
         expired: false,
         refreshing: false,
         designs: [],
         sessions: [],
+        facets: [],
         selectedDesign: null,
         cursors: {images:"",targets:"",changes:""},
     };
     const byId = id => document.getElementById(id);
     const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
-    const status = value => `<span class="${window.KOCCTheme.statusClass(value)}">${esc(value || "Unknown")}</span>`;
+    const status = value => `<span class="${window.KOCCTheme.statusClass(value)}"${STATUS_HINTS[value] ? ` title="${esc(STATUS_HINTS[value])}"` : ""}>${esc(STATUS_LABELS[value] || value || "Bilinmiyor")}</span>`;
+    const isKkbApp = namespace => namespace.startsWith("test-") || namespace.startsWith("uat-");
+    const scopeLabel = namespaceGlob => namespaceGlob === KKB_APPS_GLOB ? "KKB Apps" : namespaceGlob === "*" ? "Tümü" : "Özel kapsam";
     const humanTime = value => value ? new Date(Number(value) * 1000).toLocaleString("tr-TR", {timeZone:"Europe/Istanbul"}) : "Henüz gözlem yok";
-    const clusterObservation = cluster => cluster.error ? "Son tarama başarısız; önceki güvenli veri korunuyor." : humanTime(cluster.observed);
+    const clusterObservation = (cluster, sessionStatus) => ["COMPLETED","STOPPED"].includes(sessionStatus) ? `Son kayıt: ${humanTime(cluster.observed)}` : cluster.error ? "Son tarama başarısız; önceki güvenli veri korunuyor." : humanTime(cluster.observed);
     const expire = () => {
         if (state.expired) return;
         state.expired = true;
@@ -70,8 +84,8 @@
     const table = (headers, rows) => rows.length ? `<table class="patch-table"><thead><tr>${headers.map(esc).map(x => `<th>${x}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${value}</td>`).join("")}</tr>`).join("")}</tbody></table>` : '<div class="patch-empty">Gösterilecek veri yok.</div>';
     const setSession = id => {
         state.sessionId = id || "";
-        if (id) localStorage.setItem("koccPatchSession", id);
-        else localStorage.removeItem("koccPatchSession");
+        if (id) sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+        else sessionStorage.removeItem(SESSION_STORAGE_KEY);
         state.cursors = {images:"",targets:"",changes:""};
     };
     const currentSettings = () => ({
@@ -84,11 +98,18 @@
         interval_seconds:byId("patch-interval").value ? Number(byId("patch-interval").value) : null,
         tag_match_mode:byId("patch-tag-mode").value,
     });
+    const setSessionScope = scope => {
+        const pattern = scope === "all" ? "*" : KKB_APPS_GLOB;
+        byId("patch-namespace-glob").value = pattern;
+        const radio = document.querySelector(`[name="patch-session-scope"][value="${scope}"]`);
+        if (radio) radio.checked = true;
+        renderLocalPreview();
+    };
     const renderLocalPreview = () => {
         const output = byId("patch-preview-output");
         if (!output) return;
         const value = currentSettings();
-        output.innerHTML = `<strong>${esc(value.target_tag || "Hedef sürüm seç")}</strong> için <strong>${value.clusters.length} cluster</strong><br>${esc(value.clusters.join(", ") || "Cluster seçilmedi")}<br>Namespace: <strong>${esc(value.namespace_glob)}</strong>${value.namespaces.length ? ` · ${esc(value.namespaces.join(", "))}` : ""}<br>${value.interval_seconds ? `Her <strong>${value.interval_seconds} saniyede</strong>, ` : ""}<strong>${value.duration_minutes} dakika</strong>`;
+        output.innerHTML = `<strong>Hedef:</strong> ${esc(value.target_tag || "Hedef sürüm seç")}<br><strong>Cluster:</strong> ${value.clusters.length}<br>${esc(value.clusters.join(", ") || "Cluster seçilmedi")}<br><strong>Kapsam:</strong> ${esc(scopeLabel(value.namespace_glob))}<br>${esc(value.namespace_glob)}${value.namespaces.length ? ` · ${esc(value.namespaces.join(", "))}` : ""}<br><strong>Tarama:</strong> ${value.interval_seconds ? `${value.interval_seconds} saniye` : "Şablon varsayılanı"}<br><strong>Süre:</strong> ${value.duration_minutes} dakika`;
     };
     const applySettings = value => {
         if (!value) return;
@@ -96,6 +117,9 @@
         byId("patch-flow").value = value.flow || byId("patch-flow").value;
         byId("patch-duration").value = value.duration_minutes || 60;
         byId("patch-namespace-glob").value = Array.isArray(value.namespace_glob) ? value.namespace_glob.join(",") : (value.namespace_glob || "*");
+        const knownScope = byId("patch-namespace-glob").value === KKB_APPS_GLOB ? "kkb" : byId("patch-namespace-glob").value === "*" ? "all" : "";
+        document.querySelectorAll('[name="patch-session-scope"]').forEach(input => { input.checked = input.value === knownScope; });
+        byId("patch-namespace-glob").closest("details").open = !knownScope;
         byId("patch-namespaces").value = (value.namespaces || []).join(",");
         byId("patch-interval").value = value.interval_seconds || "";
         byId("patch-tag-mode").value = value.tag_match_mode || "exact";
@@ -117,7 +141,8 @@
         });
     };
     const renderServerPreview = preview => {
-        byId("patch-preview-output").innerHTML = `<strong>${esc(preview.target_tag)}</strong> için <strong>${(preview.clusters || []).length} cluster</strong><br>${esc((preview.clusters || []).join(", "))}<br>Namespace: <strong>${esc(preview.scope?.namespace_glob || "*")}</strong>${preview.scope?.namespaces?.length ? ` · ${esc(preview.scope.namespaces.join(", "))}` : ""}<br>Her <strong>${esc(preview.interval_seconds)} saniyede</strong>, <strong>${esc(preview.duration_minutes)} dakika</strong>`;
+        const pattern = Array.isArray(preview.scope?.namespace_glob) ? preview.scope.namespace_glob.join(",") : (preview.scope?.namespace_glob || "*");
+        byId("patch-preview-output").innerHTML = `<strong>Hedef:</strong> ${esc(preview.target_tag)}<br><strong>Cluster:</strong> ${(preview.clusters || []).length}<br>${esc((preview.clusters || []).join(", "))}<br><strong>Kapsam:</strong> ${esc(scopeLabel(pattern))}<br>${esc(pattern)}${preview.scope?.namespaces?.length ? ` · ${esc(preview.scope.namespaces.join(", "))}` : ""}<br><strong>Tarama:</strong> ${esc(preview.interval_seconds)} saniye<br><strong>Süre:</strong> ${esc(preview.duration_minutes)} dakika`;
         if (preview.steps?.length) byId("patch-preview-steps").innerHTML = preview.steps.map(step => `<li>${esc(step)}.</li>`).join("");
     };
     const watchSession = () => {
@@ -154,6 +179,12 @@
         const firstTemplate = templates[byId("patch-flow").value];
         if (firstTemplate) byId("patch-interval").value = firstTemplate.interval_seconds;
         renderDesigns(flows.designs);
+        document.querySelectorAll('[name="patch-session-scope"]').forEach(input => { input.onchange = () => setSessionScope(input.value); });
+        byId("patch-namespace-glob").oninput = () => {
+            const pattern = byId("patch-namespace-glob").value.trim();
+            document.querySelectorAll('[name="patch-session-scope"]').forEach(input => { input.checked = (input.value === "kkb" && pattern === KKB_APPS_GLOB) || (input.value === "all" && pattern === "*"); });
+            renderLocalPreview();
+        };
         byId("patch-flow-form").addEventListener("input", renderLocalPreview);
         byId("patch-preview").onclick = async () => {
             try { renderServerPreview(await api("/api/patch/flows/preview", {method:"POST",body:JSON.stringify(currentSettings())})); }
@@ -187,8 +218,32 @@
         const select = byId("patch-session-select");
         if (select) {
             select.innerHTML = state.sessions.map(session => `<option value="${esc(session.id)}" ${session.id === state.sessionId ? "selected" : ""}>Hedef ${esc(session.target)} · ${esc(session.status)}</option>`).join("");
-            select.onchange = () => { setSession(select.value); refreshView(); connectStream(); };
+            select.onchange = async () => { setSession(select.value); await loadFacets(); refreshView(); connectStream(); };
         }
+    };
+    const selectedViewScope = () => document.querySelector('[name="patch-view-scope"]:checked')?.value || "kkb";
+    const viewFilters = () => ({
+        namespace_glob:selectedViewScope() === "kkb" ? KKB_APPS_GLOB : "",
+        namespace:byId("patch-namespace-filter")?.value || "",
+    });
+    const renderNamespaceOptions = () => {
+        const select = byId("patch-namespace-filter");
+        if (!select) return;
+        const previous = select.value;
+        const namespaces = selectedViewScope() === "kkb" ? state.facets.filter(isKkbApp) : state.facets;
+        select.innerHTML = '<option value="">Tüm namespace\'ler</option>' + namespaces.map(namespace => `<option value="${esc(namespace)}">${esc(namespace)}</option>`).join("");
+        if (namespaces.includes(previous)) select.value = previous;
+    };
+    const loadFacets = async () => {
+        if (!state.sessionId || !byId("patch-namespace-filter")) return;
+        const result = await api(`/api/patch/sessions/${encodeURIComponent(state.sessionId)}/facets`);
+        state.facets = result.namespaces || [];
+        renderNamespaceOptions();
+    };
+    const bindViewScope = () => {
+        document.querySelectorAll('[name="patch-view-scope"]').forEach(input => {
+            input.onchange = () => { renderNamespaceOptions(); state.cursors = {images:"",targets:"",changes:""}; refreshView(); };
+        });
     };
     const showSessionArea = hasSession => {
         byId("patch-no-session").hidden = hasSession;
@@ -226,26 +281,30 @@
             byId("patch-detail-panel").scrollIntoView({behavior:"smooth",block:"nearest"});
         } catch (error) { showError(error.message); }
     };
-    const rowCells = row => [`<strong>${esc(row.workload)}</strong><small>${esc(row.cluster)} · ${esc(row.namespace)}</small>`,esc(row.container),`${esc(row.image_tag || "Tag bilinmiyor")}<small>${esc(row.image || row.image_ref)}</small>`,`${status(row.health)}<small>${esc(row.reason || "")}</small>`,`<button type="button" class="patch-detail-button" data-row-id="${esc(row.id)}">İncele</button>`];
+    const targetStatus = row => !row.image_tag ? "UNKNOWN_VERSION" : row.target_match ? "TARGET_REACHED" : "NOT_UPDATED";
+    const rowCells = row => [`<strong>${esc(row.workload)}</strong><small>${esc(row.cluster)} · ${esc(row.namespace)}</small>`,esc(row.container),`${esc(row.image_tag || "Tag bilinmiyor")}<small>${esc(row.image || row.image_ref)}</small>`,status(targetStatus(row)),`${status(row.health)}<small>${esc(row.reason || "")}</small>`,`<button type="button" class="patch-detail-button" data-row-id="${esc(row.id)}">İncele</button>`];
     const loadLive = async () => {
         if (!state.sessionId) return;
-        const common = {limit:PAGE_SIZE,search:byId("patch-search").value,health:byId("patch-health").value};
+        const filters = viewFilters();
+        const common = {...filters,limit:PAGE_SIZE,search:byId("patch-search").value,health:byId("patch-health").value};
         const [session, summary, images, targets] = await Promise.all([
             api(`/api/patch/sessions/${state.sessionId}`),
-            api(`/api/patch/sessions/${state.sessionId}/summary`),
+            api(`/api/patch/sessions/${state.sessionId}/summary?${query(filters)}`),
             api(`/api/patch/sessions/${state.sessionId}/images?${query({...common,cursor:state.cursors.images})}`),
             api(`/api/patch/sessions/${state.sessionId}/targets?${query({...common,cursor:state.cursors.targets})}`),
         ]);
         renderSessionControl(session);
         byId("patch-session-context").textContent = `Hedef ${session.target} · ${(session.clusters || []).map(cluster => cluster.cluster).join(", ")} · ${session.scope?.namespace_glob || "*"}`;
         const totals = summaryTotals(summary.counts);
-        const cards = [["Görüntülenen container",totals.total],["Hedef sürümde sağlıklı",totals.ready],["Hedef sürümde sorunlu",totals.bad],["Hedef dışında kalan",totals.old],["Tag'i bilinmeyen",totals.unknown],["Hedefte hazır değil",totals.pending]];
+        const mixed = Number(summary.change_counts?.MIXED_VERSION || 0);
+        const passed = totals.ready + totals.bad + totals.pending;
+        const cards = [["Gözlenen container",totals.total],["Hedef tag'e geçen",passed],["Hedef tag'de sağlıklı",totals.ready],["Hedef tag'de sorunlu",totals.bad],["Eski tag'de kalan",totals.old],["Karışık rollout",mixed],["Tag bilinmeyen",totals.unknown],["Ready olmayan / bekleyen",totals.pending]];
         byId("patch-live-summary").innerHTML = cards.map(([label,value]) => `<article class="patch-card"><span>${label}</span><strong>${value}</strong></article>`).join("");
         const strip = byId("patch-cluster-status");
         strip.hidden = !(summary.clusters || []).length;
-        strip.innerHTML = (summary.clusters || []).map(cluster => `<article class="patch-cluster-item"><strong>${esc(cluster.cluster)}</strong> ${status(cluster.freshness)}<p>${esc(clusterObservation(cluster))}</p></article>`).join("");
-        byId("patch-live-table").innerHTML = table(["Cluster / Uygulama","Container","Image","Sağlık","Detay"], (images.items || []).map(rowCells));
-        byId("patch-target-table").innerHTML = table(["Cluster / Uygulama","Container","Image","Sağlık","Detay"], (targets.items || []).map(rowCells));
+        strip.innerHTML = (summary.clusters || []).map(cluster => `<article class="patch-cluster-item"><strong>${esc(cluster.cluster)}</strong> ${status(["COMPLETED","STOPPED"].includes(session.status) ? "LAST_RECORD" : cluster.freshness)}<p>${esc(clusterObservation(cluster, session.status))}</p></article>`).join("");
+        byId("patch-live-table").innerHTML = table(["Cluster / Uygulama","Container","Current image/tag","Hedef durumu","Sağlık","Detay"], (images.items || []).map(rowCells));
+        byId("patch-target-table").innerHTML = table(["Cluster / Uygulama","Container","Current image/tag","Hedef durumu","Sağlık","Detay"], (targets.items || []).map(rowCells));
         renderPagination("images", images.next_cursor);
         renderPagination("targets", targets.next_cursor);
         root.querySelectorAll("[data-row-id]").forEach(button => { button.onclick = () => inspectRow(button.dataset.rowId); });
@@ -253,7 +312,7 @@
     const loadCompare = async () => {
         if (!state.sessionId) return;
         const session = await api(`/api/patch/sessions/${state.sessionId}`);
-        const data = await api(`/api/patch/sessions/${state.sessionId}/changes?${query({limit:PAGE_SIZE,cursor:state.cursors.changes,version_status:byId("patch-version-status").value,health_change:byId("patch-health-change").value})}`);
+        const data = await api(`/api/patch/sessions/${state.sessionId}/changes?${query({...viewFilters(),limit:PAGE_SIZE,cursor:state.cursors.changes,search:byId("patch-compare-search").value,version_status:byId("patch-version-status").value,health_change:byId("patch-health-change").value})}`);
         byId("patch-compare-context").textContent = `Hedef ${session.target} · ${(session.clusters || []).map(cluster => cluster.cluster).join(", ")}`;
         byId("patch-compare-table").innerHTML = table(["Cluster / Uygulama","Başlangıçta","Şimdi","Sürüm durumu","Sağlık değişimi"], (data.items || []).map(row => [`<strong>${esc(row.workload)}</strong><small>${esc(row.cluster)} · ${esc(row.namespace)} · ${esc(row.container)}</small>`,`${esc(row.before_images || "—")}<small>${row.before_ready ?? 0} hazır · ${row.before_errors ?? 0} hata</small>`,`${esc(row.after_images || "—")}<small>${row.after_ready ?? 0} hazır · ${row.after_errors ?? 0} hata</small>`,status(row.version_status),status(row.health_change)]));
         renderPagination("changes", data.next_cursor);
@@ -292,6 +351,8 @@
             else {
                 showSessionArea(Boolean(state.sessionId));
                 if (state.sessionId) {
+                    bindViewScope();
+                    await loadFacets();
                     await refreshView();
                     connectStream();
                     state.timer = setInterval(refreshView, 15000);
@@ -302,8 +363,17 @@
 
     byId("patch-retry").onclick = bootstrap;
     byId("patch-detail-close")?.addEventListener("click", () => { byId("patch-detail-panel").hidden = true; });
-    [byId("patch-search"),byId("patch-health"),byId("patch-version-status"),byId("patch-health-change")].filter(Boolean).forEach(control => {
+    [byId("patch-search"),byId("patch-health"),byId("patch-compare-search"),byId("patch-version-status"),byId("patch-health-change"),byId("patch-namespace-filter")].filter(Boolean).forEach(control => {
         control.onchange = () => { state.cursors = {images:"",targets:"",changes:""}; refreshView(); };
+    });
+    root.querySelectorAll("[data-compare-filter]").forEach(button => {
+        button.onclick = () => {
+            const preset = button.dataset.compareFilter;
+            byId("patch-version-status").value = preset === "not-updated" ? "NOT_UPDATED" : "";
+            byId("patch-health-change").value = preset === "regression" ? "REGRESSION" : preset === "recovered" ? "RECOVERED" : "";
+            state.cursors.changes = "";
+            refreshView();
+        };
     });
     window.addEventListener("pagehide", () => { if (state.timer) clearInterval(state.timer); if (state.stream) state.stream.close(); });
     bootstrap();

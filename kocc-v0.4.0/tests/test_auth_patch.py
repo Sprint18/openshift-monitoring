@@ -290,10 +290,14 @@ def test_central_patch_client_complete_api_mapping_and_query_allowlist(urlopen: 
         assert operation(*args) == {"ok": True}
         assert urlopen.call_args.args[0].full_url.endswith(suffix)
     for resource in ("summary", "images", "targets", "changes", "facets"):
-        client.session_view("abc123", resource, {"limit": 50, "secret": "no"})
+        client.session_view(
+            "abc123", resource,
+            {"limit": 50, "namespace_glob": "test-*,uat-*", "secret": "no"},
+        )
         url = urlopen.call_args.args[0].full_url
         assert f"/api/v1/sessions/abc123/{resource}" in url
         assert "limit=50" in url and "secret" not in url
+        assert "namespace_glob=test-%2A%2Cuat-%2A" in url
     response.read.return_value = b"[]"
     with pytest.raises(PatchBackendError, match="invalid_response"):
         client.config()

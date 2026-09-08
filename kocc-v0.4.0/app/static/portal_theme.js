@@ -13,8 +13,8 @@
     const statusClass = value => {
         const status = String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
         if (["healthy","ready","assigned","available","online","recovered","targetreached"].includes(status)) return "status-success";
-        if (["pending","podinitializing","containercreating","notready","progressing","stale","mixedversion","oldversion","partlyunknown"].includes(status)) return "status-warning";
-        if (["crashloopbackoff","imagepullbackoff","errimagepull","error","failed","critical","unavailable","degraded","regression"].includes(status)) return "status-danger";
+        if (["pending","podinitializing","containercreating","notready","progressing","stale","mixedversion","oldversion","notupdated","unknownversion","partlyunknown"].includes(status)) return "status-warning";
+        if (["crashloopbackoff","imagepullbackoff","errimagepull","error","failed","critical","unavailable","degraded","regression","persistingerror","newwitherrors"].includes(status)) return "status-danger";
         if (["running","newresource","improving"].includes(status)) return "status-info";
         return "status-neutral";
     };
