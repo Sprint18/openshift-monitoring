@@ -25,6 +25,13 @@ any admin/session credential is supplied; partial configuration fails startup
 instead of exposing the portal anonymously. Credentials must be created from
 `openshift/kocc-auth-secret-template.yaml` without committing real values.
 
+Authenticated sessions have a 15-minute idle timeout by default. Set the
+positive integer `KOCC_SESSION_IDLE_TIMEOUT_SECONDS` to override it.
+Authenticated UI/API requests refresh server-side activity; health, readiness,
+login, favicon, and static requests do not. The cookie is browser-session
+scoped. Sessions are process-local, so a pod restart logs out active users; a
+future multi-replica deployment requires a shared session store.
+
 ```bash
 oc project ocp-monitoring-portal-test
 cp openshift/kocc-auth-secret-template.yaml /tmp/kocc-auth-secrets.yaml

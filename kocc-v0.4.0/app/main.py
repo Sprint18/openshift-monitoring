@@ -26,7 +26,7 @@ from kubernetes.client.exceptions import ApiException
 from pydantic import BaseModel, Field
 
 from app.ai_client import AIBackendClient, AIBackendError
-from app.auth import SessionStore, UserRepository
+from app.auth import LocalAuthProvider, SessionStore, UserRepository
 from app.cluster_loader import (
     DEFAULT_CLUSTER,
     ClusterConfigurationError,
@@ -60,6 +60,14 @@ def boolean_env(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def positive_integer_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 def auth_should_be_enabled(explicit: bool, values: tuple[str, str, str]) -> bool:
     return explicit or any(values)
 
@@ -77,7 +85,10 @@ AUTH_ENABLED = auth_should_be_enabled(
 AUTH_COOKIE_SECURE = boolean_env("KOCC_AUTH_COOKIE_SECURE", True)
 AUTH_SESSION_SECRET = AUTH_CONFIGURATION_VALUES[2]
 AUTH_COOKIE_NAME = "kocc_session"
-session_store = SessionStore()
+SESSION_IDLE_TIMEOUT_SECONDS = positive_integer_env(
+    "KOCC_SESSION_IDLE_TIMEOUT_SECONDS", 900
+)
+session_store = SessionStore(ttl_seconds=SESSION_IDLE_TIMEOUT_SECONDS)
 
 
 def initialize_persistence() -> None:
@@ -227,7 +238,7 @@ def signed_session_cookie(token: str) -> str:
     return f"{token}.{signature}"
 
 
-def session_username(request: Request) -> str | None:
+def session_username(request: Request, *, touch: bool = True) -> str | None:
     value = request.cookies.get(AUTH_COOKIE_NAME, "")
     token, separator, signature = value.rpartition(".")
     if not separator or not token or not AUTH_SESSION_SECRET:
@@ -237,7 +248,7 @@ def session_username(request: Request) -> str | None:
     ).hexdigest()
     if not hmac.compare_digest(signature, expected):
         return None
-    return session_store.username(token)
+    return session_store.username(token, touch=touch)
 
 
 def safe_local_path(value: str) -> str:
@@ -331,7 +342,7 @@ async def favicon() -> FileResponse:
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = Query(default="/")) -> HTMLResponse:
-    if AUTH_ENABLED and session_username(request):
+    if AUTH_ENABLED and session_username(request, touch=False):
         return RedirectResponse(safe_local_path(next), status_code=303)
     return templates.TemplateResponse(
         request=request, name="login.html",
@@ -345,17 +356,20 @@ async def login(request: Request) -> HTMLResponse:
     username = body.get("username", [""])[0].strip()
     password = body.get("password", [""])[0]
     next_path = body.get("next", ["/"])[0]
-    if not AUTH_ENABLED or not user_repository.verify(username, password):
+    if not AUTH_ENABLED or not LocalAuthProvider(user_repository).verify(username, password):
         await asyncio.sleep(0.25)
         return templates.TemplateResponse(
             request=request, name="login.html", status_code=401,
             context={"error": "Kullanıcı adı veya parola hatalı.", "next_path": next_path},
         )
+    existing_cookie = request.cookies.get(AUTH_COOKIE_NAME, "")
+    existing_token, _, _ = existing_cookie.rpartition(".")
+    session_store.destroy(existing_token)
     token = session_store.create(username)
     response = RedirectResponse(safe_local_path(next_path), status_code=303)
     response.set_cookie(
         AUTH_COOKIE_NAME, signed_session_cookie(token), httponly=True,
-        secure=AUTH_COOKIE_SECURE, samesite="strict", max_age=session_store.ttl_seconds,
+        secure=AUTH_COOKIE_SECURE, samesite="strict",
     )
     return response
 

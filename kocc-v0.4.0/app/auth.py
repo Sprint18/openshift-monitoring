@@ -7,11 +7,14 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Callable
+
 from app.db.database import Database
 
 
 PASSWORD_ITERATIONS = 600_000
-SESSION_TTL_SECONDS = 8 * 60 * 60
+SESSION_IDLE_TIMEOUT_SECONDS = 15 * 60
+MAX_ACTIVE_SESSIONS = 10_000
 
 
 def hash_password(password: str, salt: bytes, iterations: int) -> bytes:
@@ -73,32 +76,61 @@ class UserRepository:
         return True
 
 
-@dataclass(frozen=True)
+class LocalAuthProvider:
+    """Local authentication boundary; future providers can implement verify()."""
+
+    def __init__(self, repository: UserRepository) -> None:
+        self.repository = repository
+
+    def verify(self, username: str, password: str) -> bool:
+        return self.repository.verify(username, password)
+
+
+@dataclass
 class Session:
     username: str
-    expires_at: float
+    created_at: float
+    last_activity: float
 
 
 class SessionStore:
-    def __init__(self, ttl_seconds: int = SESSION_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        ttl_seconds: int = SESSION_IDLE_TIMEOUT_SECONDS,
+        clock: Callable[[], float] = time.time,
+        max_sessions: int = MAX_ACTIVE_SESSIONS,
+    ) -> None:
+        if ttl_seconds <= 0 or max_sessions <= 0:
+            raise ValueError("session limits must be positive")
         self.ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._max_sessions = max_sessions
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
     def create(self, username: str) -> str:
         token = secrets.token_urlsafe(48)
         with self._lock:
-            self._purge_locked()
-            self._sessions[token] = Session(username, time.time() + self.ttl_seconds)
+            now = self._clock()
+            self._purge_locked(now)
+            if len(self._sessions) >= self._max_sessions:
+                oldest = min(self._sessions, key=lambda key: self._sessions[key].last_activity)
+                self._sessions.pop(oldest, None)
+            self._sessions[token] = Session(username, now, now)
         return token
 
-    def username(self, token: str | None) -> str | None:
+    def username(self, token: str | None, *, touch: bool = True) -> str | None:
         if not token:
             return None
         with self._lock:
-            self._purge_locked()
+            now = self._clock()
+            self._purge_locked(now)
             session = self._sessions.get(token)
-            return session.username if session else None
+            if session is None:
+                return None
+            if touch:
+                session.last_activity = now
+            return session.username
 
     def destroy(self, token: str | None) -> None:
         if not token:
@@ -106,8 +138,10 @@ class SessionStore:
         with self._lock:
             self._sessions.pop(token, None)
 
-    def _purge_locked(self) -> None:
-        now = time.time()
-        expired = [key for key, value in self._sessions.items() if value.expires_at <= now]
+    def _purge_locked(self, now: float) -> None:
+        expired = [
+            key for key, value in self._sessions.items()
+            if now - value.last_activity >= self.ttl_seconds
+        ]
         for key in expired:
             self._sessions.pop(key, None)

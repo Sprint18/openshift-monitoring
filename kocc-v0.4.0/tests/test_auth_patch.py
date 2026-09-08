@@ -14,6 +14,29 @@ import app.main as main
 from app.patch_client import PatchBackendClient, PatchBackendError
 
 
+class FakeClock:
+    def __init__(self, now: float = 1_000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def configure_test_auth(monkeypatch, tmp_path: Path, store: SessionStore) -> None:
+    database = Database(tmp_path / "browser-auth.db")
+    database.initialize()
+    users = UserRepository(database)
+    users.bootstrap("admin", "admin")
+    monkeypatch.setattr(main, "AUTH_ENABLED", True)
+    monkeypatch.setattr(main, "AUTH_COOKIE_SECURE", False)
+    monkeypatch.setattr(main, "AUTH_SESSION_SECRET", "test-session-secret")
+    monkeypatch.setattr(main, "user_repository", users)
+    monkeypatch.setattr(main, "session_store", store)
+
+
 def test_bootstrap_password_change_survives_database_reopen(tmp_path: Path) -> None:
     database = Database(tmp_path / "kocc.db")
     database.initialize()
@@ -64,6 +87,103 @@ def test_logout_invalidates_server_side_session() -> None:
     assert store.username(token) == "admin"
     store.destroy(token)
     assert store.username(token) is None
+
+
+def test_session_idle_timeout_and_activity_refresh() -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock)
+    token = store.create("admin")
+    clock.advance(899)
+    assert store.username(token) == "admin"
+    clock.advance(899)
+    assert store.username(token) == "admin"
+    clock.advance(900)
+    assert store.username(token) is None
+
+
+def test_session_lookup_without_touch_does_not_refresh_activity() -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock)
+    token = store.create("admin")
+    clock.advance(899)
+    assert store.username(token, touch=False) == "admin"
+    clock.advance(1)
+    assert store.username(token) is None
+
+
+def test_session_store_bounds_active_records() -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock, max_sessions=2)
+    first = store.create("admin")
+    clock.advance(1)
+    second = store.create("admin")
+    clock.advance(1)
+    third = store.create("admin")
+    assert store.username(first) is None
+    assert store.username(second) == "admin"
+    assert store.username(third) == "admin"
+
+
+def test_invalid_session_timeout_configuration_uses_safe_default(monkeypatch) -> None:
+    monkeypatch.setenv("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", "invalid")
+    assert main.positive_integer_env("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", 900) == 900
+    monkeypatch.setenv("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", "0")
+    assert main.positive_integer_env("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", 900) == 900
+    monkeypatch.setenv("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", "120")
+    assert main.positive_integer_env("KOCC_SESSION_IDLE_TIMEOUT_SECONDS", 900) == 120
+
+
+def test_independent_browser_sessions_logout_and_fixation(monkeypatch, tmp_path: Path) -> None:
+    store = SessionStore(ttl_seconds=900)
+    configure_test_auth(monkeypatch, tmp_path, store)
+    browser_a = TestClient(app)
+    browser_b = TestClient(app)
+
+    assert browser_a.get("/", follow_redirects=False).status_code == 303
+    assert browser_b.get("/?cluster=rmtest", follow_redirects=False).status_code == 303
+    assert browser_b.get("/api/patch/summary").status_code == 401
+    assert browser_b.get("/api/ai/clusters").status_code == 401
+
+    assert browser_a.post(
+        "/login", data={"username": "admin", "password": "admin"},
+        follow_redirects=False,
+    ).status_code == 303
+    token_a = browser_a.cookies.get(main.AUTH_COOKIE_NAME)
+    assert token_a
+    assert browser_a.get("/change-password").status_code == 200
+    assert browser_b.get("/change-password", follow_redirects=False).status_code == 303
+
+    assert browser_b.post(
+        "/login", data={"username": "admin", "password": "admin"},
+        follow_redirects=False,
+    ).status_code == 303
+    token_b = browser_b.cookies.get(main.AUTH_COOKIE_NAME)
+    assert token_b and token_b != token_a
+
+    assert browser_a.post("/logout", follow_redirects=False).status_code == 303
+    assert browser_a.get("/change-password", follow_redirects=False).status_code == 303
+    assert browser_b.get("/change-password").status_code == 200
+
+    old_b_token = token_b.rpartition(".")[0]
+    assert browser_b.post(
+        "/login", data={"username": "admin", "password": "admin"},
+        follow_redirects=False,
+    ).status_code == 303
+    replacement = browser_b.cookies.get(main.AUTH_COOKIE_NAME)
+    assert replacement and replacement != token_b
+    assert store.username(old_b_token) is None
+
+
+def test_expired_cookie_redirects_html_and_rejects_api(monkeypatch, tmp_path: Path) -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock)
+    configure_test_auth(monkeypatch, tmp_path, store)
+    client = TestClient(app)
+    client.post("/login", data={"username": "admin", "password": "admin"})
+    assert client.get("/change-password").status_code == 200
+    clock.advance(901)
+    assert client.get("/", follow_redirects=False).status_code == 303
+    assert client.get("/api/patch/summary").status_code == 401
 
 
 @patch("app.patch_client.urllib.request.urlopen")
@@ -160,6 +280,7 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     assert login.status_code == 303
     assert "HttpOnly" in login.headers["set-cookie"]
     assert "SameSite=strict" in login.headers["set-cookie"]
+    assert "Max-Age" not in login.headers["set-cookie"]
 
     patch_page = client.get("/patch-monitoring")
     assert patch_page.status_code == 200

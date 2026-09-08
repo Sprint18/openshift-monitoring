@@ -168,6 +168,8 @@ spec:
               value: "true"
             - name: KOCC_AUTH_COOKIE_SECURE
               value: "true"
+            - name: KOCC_SESSION_IDLE_TIMEOUT_SECONDS
+              value: "900"
             - name: KOCC_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:

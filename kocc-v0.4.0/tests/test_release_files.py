@@ -152,6 +152,7 @@ def test_test_deployment_configures_auth_and_patch_backend_secrets() -> None:
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     env = {item["name"]: item for item in container["env"]}
     assert env["KOCC_AUTH_ENABLED"]["value"] == "true"
+    assert env["KOCC_SESSION_IDLE_TIMEOUT_SECONDS"]["value"] == "900"
     assert env["KOCC_PATCH_ENABLED"]["value"] == "true"
     assert env["KOCC_PATCH_BACKEND_URL"]["value"].endswith(
         ".ocp-patch-agent.svc.cluster.local:8090"
