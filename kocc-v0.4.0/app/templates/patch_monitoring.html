@@ -1,51 +1,83 @@
 <!doctype html>
-<html lang="tr" data-patch-view="{{ patch_view }}"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Patch Monitoring · KOCC</title>
-<link rel="stylesheet" href="/static/patch_monitoring.css">
-</head><body>
-<header class="header"><img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB"><div><h1>OpenShift Clusters Monitoring Platform</h1><p>Multi Cluster OpenShift Operations &amp; Monitoring Platform</p></div></header>
+<html lang="tr" data-patch-view="{{ patch_view }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Patch Monitoring · KOCC</title>
+    <link rel="stylesheet" href="/static/patch_monitoring.css">
+</head>
+<body class="patch-monitoring">
+<header class="header">
+    <img src="/static/kkb-turuncu-lacivert-logo.png" alt="KKB">
+    <div><h1>OpenShift Clusters Monitoring Platform</h1><p>Multi Cluster OpenShift Operations &amp; Monitoring Platform</p></div>
+</header>
 {% include "_navigation.html" %}
-<main id="patch-app" data-view="{{ patch_view }}" data-kocc-cluster="{{ selected_cluster }}">
-  <div class="patch-title"><div><h1>Patch Monitoring</h1><p>Central Patch Monitor 0.7.2 · Çoklu cluster baseline ve canlı karşılaştırma</p></div><span id="patch-connection" class="status-neutral">Bağlanıyor</span></div>
-  <nav class="patch-subnav" aria-label="Patch Monitoring navigation">
-    {% for route,label,key in [("/patch-monitoring/flow","Akış Tasarla","flow"),("/patch-monitoring/live","Canlı İzle","live"),("/patch-monitoring/compare","Önce / Sonra","compare"),("/patch-monitoring/history","Oturum Geçmişi","history")] %}
-    <a href="{{ route }}?cluster={{ selected_cluster }}"{% if patch_view == key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
-    {% endfor %}
-  </nav>
-  <div id="patch-alert" class="patch-alert" hidden role="alert"></div>
+<main id="patch-app" class="patch-main" data-view="{{ patch_view }}" data-kocc-cluster="{{ selected_cluster }}">
+    <div class="patch-title">
+        <div><h1>Patch Monitoring</h1><p>Çoklu cluster patch geçişi, baseline ve canlı karşılaştırma</p></div>
+        <span id="patch-connection" class="status-neutral">Bağlanıyor</span>
+    </div>
+    <nav class="patch-subnav" aria-label="Patch Monitoring navigation">
+        {% for route,label,key in [("/patch-monitoring/flow","1 · Akış Tasarla","flow"),("/patch-monitoring/live","2 · Canlı İzle","live"),("/patch-monitoring/compare","3 · Önce / Sonra","compare"),("/patch-monitoring/history","Oturum Geçmişi","history")] %}
+        <a href="{{ route }}?cluster={{ selected_cluster }}"{% if patch_view == key %} class="active" aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+    </nav>
 
-  {% if patch_view == "flow" %}
-  <section class="panel"><h2>Akış Tasarla</h2>
-    <form id="patch-flow-form" class="patch-form">
-      <label>Akış şablonu<select id="patch-flow" required></select></label>
-      <label>Kayıtlı tasarım<select id="patch-design"><option value="">Yeni tasarım</option></select></label>
-      <label>Hedef image tag<input id="patch-target" required maxlength="128" placeholder="1.4.1"></label>
-      <label>Tag eşleştirme<select id="patch-tag-mode"><option value="exact">Exact</option><option value="release">Release</option></select></label>
-      <fieldset><legend>Cluster'lar</legend><div id="patch-clusters" class="cluster-options">Yükleniyor…</div></fieldset>
-      <label>Namespace pattern<input id="patch-namespace-glob" value="test-*,uat-*" placeholder="test-*,uat-*"></label>
-      <label>Explicit namespace'ler<input id="patch-namespaces" placeholder="namespace-a,namespace-b"></label>
-      <label>Tarama aralığı (sn)<input id="patch-interval" type="number" min="1" max="3600"></label>
-      <label>Süre (dakika)<input id="patch-duration" type="number" min="1" max="720" value="60"></label>
-      <div class="form-actions"><button type="button" id="patch-preview">Önizle</button><button type="button" id="patch-save" class="secondary">Akışı Kaydet</button><button type="button" id="patch-create" class="primary">Oturum Oluştur</button></div>
-    </form>
-    <div id="patch-preview-output" class="patch-output">Akış ayarlarını doğrulamak için Önizle'yi kullanın.</div>
-  </section>
-  <section class="panel"><h2>Oturum Kontrolü</h2><div id="patch-session-control" class="patch-output">Bir oturum oluşturun veya geçmişten seçin.</div></section>
-  {% elif patch_view == "live" %}
-  <section class="panel"><div class="section-heading"><h2>Canlı İzle</h2><select id="patch-session-select" aria-label="Oturum seç"></select></div><div id="patch-live-summary" class="patch-cards"></div></section>
-  <section class="panel"><h2>Cluster Durumu ve Güncellik</h2><div id="patch-cluster-status" class="table-wrap"></div></section>
-  <section class="panel"><div class="section-heading"><h2>Current Images</h2><div class="filters"><input id="patch-search" type="search" placeholder="Namespace, workload, container"><select id="patch-health"><option value="">Tüm sağlık durumları</option><option>READY</option><option>CRASH</option><option>ERROR</option><option>IMAGE_PULL_ERROR</option></select></div></div><div id="patch-live-table" class="table-wrap"></div><div id="patch-images-pagination" class="pagination"></div></section>
-  <section class="panel"><h2>Target Rows</h2><div id="patch-target-table" class="table-wrap"></div><div id="patch-targets-pagination" class="pagination"></div></section>
-  <section class="panel"><h2>Container Detayı</h2><div id="patch-detail" class="patch-output">Detay için bir image satırındaki İncele düğmesini kullanın.</div></section>
-  {% elif patch_view == "compare" %}
-  <section class="panel"><div class="section-heading"><h2>Önce / Sonra</h2><select id="patch-session-select" aria-label="Oturum seç"></select></div>
-    <div class="filters"><select id="patch-version-status"><option value="">Tüm sürüm durumları</option>{% for item in ["TARGET_REACHED","NOT_UPDATED","MIXED_VERSION","UNKNOWN_VERSION","PARTLY_UNKNOWN","REMOVED"] %}<option>{{ item }}</option>{% endfor %}</select><select id="patch-health-change"><option value="">Tüm sağlık değişimleri</option>{% for item in ["REGRESSION","RECOVERED","IMPROVING","PERSISTING_ERROR","HEALTHY","NOT_READY","NEW_RESOURCE","NEW_WITH_ERRORS","REMOVED"] %}<option>{{ item }}</option>{% endfor %}</select></div>
-    <div id="patch-compare-table" class="table-wrap"></div><div id="patch-changes-pagination" class="pagination"></div>
-  </section>
-  {% else %}
-  <section class="panel"><h2>Oturum Geçmişi</h2><div id="patch-history-table" class="table-wrap">Yükleniyor…</div></section>
-  {% endif %}
+    <section id="patch-loading" class="patch-state" aria-live="polite"><span class="patch-spinner" aria-hidden="true"></span><div><strong>Patch Monitor hazırlanıyor</strong><p>Bağlantı ve çalışma akışları kontrol ediliyor.</p></div></section>
+    <section id="patch-error-state" class="patch-state patch-state-error" hidden role="alert"><div><strong>Patch Monitoring kullanılamıyor</strong><p id="patch-error-message">Central Patch Monitor bağlantısı kurulamadı.</p></div><button id="patch-retry" type="button">Tekrar dene</button></section>
+
+    {% if patch_view == "flow" %}
+    <div id="patch-content" hidden>
+        <section class="patch-intro"><h2>Patch akışını oluştur</h2><p>Nereyi, hangi sürüm için ve ne sıklıkta izleyeceğini seç.</p></section>
+        <section class="patch-panel">
+            <div class="patch-section-heading"><div><h2>Hazır bir akış seç</h2><p>Kayıtlı tasarım yalnız formu doldurur; oturum otomatik başlamaz.</p></div></div>
+            <div id="patch-designs" class="patch-designs"></div>
+        </section>
+        <section class="patch-builder">
+            <div class="patch-panel patch-builder-form">
+                <form id="patch-flow-form">
+                    <fieldset><legend>1. Hedef ve kapsam</legend>
+                        <div class="patch-fields">
+                            <label>Hedef sürüm<input id="patch-target" required maxlength="128" placeholder="1.4.1"></label>
+                            <label>Tag eşleştirme<select id="patch-tag-mode"><option value="exact">Birebir tag</option><option value="release">Sürüm ailesi</option></select></label>
+                            <div class="patch-field-wide"><span class="patch-label">İzlenecek cluster'lar</span><div id="patch-clusters" class="cluster-options"><span class="patch-muted">Cluster listesi yükleniyor…</span></div></div>
+                            <label>Namespace deseni<input id="patch-namespace-glob" value="test-*,uat-*" placeholder="test-*,uat-*"><small>Virgülle ayrılmış glob desenleri kullanabilirsin.</small></label>
+                            <label>Belirli namespace'ler<input id="patch-namespaces" placeholder="namespace-a,namespace-b"><small>Boş bırakılırsa yalnız desen uygulanır.</small></label>
+                        </div>
+                    </fieldset>
+                    <fieldset><legend>2. İzleme davranışı</legend>
+                        <div class="patch-fields">
+                            <label>Flow şablonu<select id="patch-flow" required></select></label>
+                            <label>Tarama aralığı (sn)<input id="patch-interval" type="number" min="1" max="3600"></label>
+                            <label>Süre (dakika)<input id="patch-duration" type="number" min="1" max="720" value="60"></label>
+                        </div>
+                    </fieldset>
+                    <div class="patch-actions"><button type="button" id="patch-preview">Önizle</button><button type="button" id="patch-save" class="patch-secondary">Akışı Kaydet</button><button type="button" id="patch-create" class="patch-primary">Oturum Oluştur</button></div>
+                </form>
+            </div>
+            <aside class="patch-panel patch-preview"><h2>Bu akış ne yapacak?</h2><div id="patch-preview-output" class="patch-preview-summary">Ayarları tamamlayıp Önizle'yi kullanın.</div><ol id="patch-preview-steps" class="patch-steps"><li>Başlangıç durumunu kaydeder.</li><li>Hazır olduğunda canlı izlemeyi başlatır.</li><li>Image ve sağlık değişimini karşılaştırır.</li><li>Süre sonunda durur.</li></ol></aside>
+        </section>
+        <section id="patch-session-panel" class="patch-panel" hidden><div class="patch-section-heading"><div><h2>Oturum hazır</h2><p>Backend durumuna göre yalnız geçerli sonraki işlem gösterilir.</p></div></div><div id="patch-session-control"></div></section>
+    </div>
+    {% elif patch_view == "live" %}
+    <div id="patch-content" hidden>
+        <section id="patch-no-session" class="patch-state" hidden><div><strong>Henüz oturum yok</strong><p>Önce Akış Tasarla sekmesinden bir oturum oluştur.</p><a class="patch-primary-link" href="/patch-monitoring/flow?cluster={{ selected_cluster }}">Akış Tasarla'ya git</a></div></section>
+        <div id="patch-live-content" hidden>
+            <section class="patch-panel"><div class="patch-section-heading"><div><h2>Canlı geçiş takibi</h2><p id="patch-session-context">Oturum bilgileri yükleniyor.</p></div><select id="patch-session-select" aria-label="Oturum seç"></select></div><div id="patch-session-control" class="patch-session-actions"></div><div id="patch-live-summary" class="patch-cards"></div><div id="patch-cluster-status" class="patch-cluster-strip"></div></section>
+            <section class="patch-panel"><div class="patch-section-heading"><div><h2>Şu anda hangi image'lar var?</h2><p>Güncel pod/container envanteri</p></div><div class="patch-filters"><input id="patch-search" type="search" placeholder="Namespace, workload, container"><select id="patch-health"><option value="">Tüm sağlık durumları</option><option>READY</option><option>ERRORS</option><option>CRASH</option><option>IMAGE_PULL_ERROR</option><option>ERROR</option></select></div></div><div id="patch-live-table" class="patch-table-wrap"></div><div id="patch-images-pagination" class="patch-pagination"></div></section>
+            <section class="patch-panel"><div class="patch-section-heading"><div><h2>Hedef sürüme geçenler</h2><p>Hedef tag ile eşleşen satırlar</p></div></div><div id="patch-target-table" class="patch-table-wrap"></div><div id="patch-targets-pagination" class="patch-pagination"></div></section>
+            <section id="patch-detail-panel" class="patch-panel" hidden><div class="patch-section-heading"><h2>Önce / şimdi ayrıntısı</h2><button id="patch-detail-close" type="button" aria-label="Detayı kapat">Kapat</button></div><div id="patch-detail" class="patch-detail"></div></section>
+        </div>
+    </div>
+    {% elif patch_view == "compare" %}
+    <div id="patch-content" hidden>
+        <section id="patch-no-session" class="patch-state" hidden><div><strong>Karşılaştırılacak oturum yok</strong><p>Önce Akış Tasarla sekmesinden baseline içeren bir oturum oluştur.</p><a class="patch-primary-link" href="/patch-monitoring/flow?cluster={{ selected_cluster }}">Akış Tasarla'ya git</a></div></section>
+        <section id="patch-compare-content" class="patch-panel" hidden><div class="patch-section-heading"><div><h2>Önce / sonra karşılaştırması</h2><p>Sürüm geçişi ile sağlık değişimi ayrı değerlendirilir.</p></div><select id="patch-session-select" aria-label="Oturum seç"></select></div><div class="patch-filters patch-compare-filters"><label>Sürüm durumu<select id="patch-version-status"><option value="">Tüm sürüm durumları</option>{% for item in ["TARGET_REACHED","NOT_UPDATED","MIXED_VERSION","UNKNOWN_VERSION","PARTLY_UNKNOWN","REMOVED"] %}<option>{{ item }}</option>{% endfor %}</select></label><label>Sağlık değişimi<select id="patch-health-change"><option value="">Tüm sağlık değişimleri</option>{% for item in ["REGRESSION","RECOVERED","IMPROVING","PERSISTING_ERROR","HEALTHY","NOT_READY","NEW_RESOURCE","NEW_WITH_ERRORS","REMOVED"] %}<option>{{ item }}</option>{% endfor %}</select></label></div><div id="patch-compare-table" class="patch-table-wrap"></div><div id="patch-changes-pagination" class="patch-pagination"></div></section>
+    </div>
+    {% else %}
+    <div id="patch-content" hidden><section class="patch-panel"><div class="patch-section-heading"><div><h2>Oturum Geçmişi</h2><p>Geçmiş patch oturumlarını hızlıca aç ve incele.</p></div></div><div id="patch-history-list" class="patch-history"></div></section></div>
+    {% endif %}
 </main>
 <script src="/static/patch_monitoring.js" defer></script>
-</body></html>
+</body>
+</html>

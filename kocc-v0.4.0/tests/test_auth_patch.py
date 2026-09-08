@@ -227,7 +227,7 @@ def test_patch_polling_stops_and_redirects_after_unauthorized_response() -> None
     assert "response.status === 401" in source
     assert "clearInterval(state.timer)" in source
     assert "state.expired || state.refreshing" in source
-    assert "location.assign(`/login?next=${next}`)" in source
+    assert "location.assign(`/login?next=${encodeURIComponent" in source
 
 
 @patch("app.patch_client.urllib.request.urlopen")
@@ -339,7 +339,8 @@ def test_auth_boundary_and_patch_failure_isolation(monkeypatch, tmp_path: Path) 
     patch_page = client.get("/patch-monitoring")
     assert patch_page.status_code == 200
     assert "Patch Monitoring" in patch_page.text
-    assert "Central Patch Monitor 0.7.2" in patch_page.text
+    assert "Çoklu cluster patch geçişi, baseline ve canlı karşılaştırma" in patch_page.text
+    assert "Central Patch Monitor 0.7.2" not in patch_page.text
     navigation = patch_page.text.split(
         'aria-label="Dashboard navigation"', 1
     )[1].split("</nav>", 1)[0]

@@ -1595,13 +1595,19 @@ def ai_error_response(exc: AIBackendError) -> JSONResponse:
 def patch_error_response(exc: PatchBackendError) -> JSONResponse:
     if exc.code == "timeout":
         return JSONResponse({"error": "patch_timeout"}, status_code=504)
+    if exc.http_status in {401, 403}:
+        return JSONResponse(
+            {"error": "patch_authorization_failed"}, status_code=502
+        )
+    if exc.http_status == 404 or exc.code == "invalid_response":
+        return JSONResponse({"error": "patch_incompatible"}, status_code=502)
     if exc.http_status == 409:
         return JSONResponse({"error": "patch_conflict"}, status_code=409)
     if exc.http_status == 422:
         return JSONResponse({"error": "patch_validation_failed"}, status_code=422)
     if exc.code.startswith("http_4"):
         return JSONResponse({"error": "patch_request_rejected"}, status_code=400)
-    if exc.code in {"unavailable", "http_503"}:
+    if exc.code == "unavailable" or exc.code.startswith("http_5"):
         return JSONResponse({"error": "patch_unavailable"}, status_code=503)
     return JSONResponse({"error": "patch_invalid_response"}, status_code=502)
 

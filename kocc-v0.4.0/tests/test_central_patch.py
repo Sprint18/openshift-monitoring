@@ -25,7 +25,7 @@ def test_native_central_patch_ui_contract() -> None:
     for legacy in ("Agent Status", "Crash Analysis", ">Agents<", ">Events<", ">Runs<"):
         assert legacy not in template
     for field in (
-        "patch-design", "patch-target", "patch-tag-mode", "patch-clusters",
+        "patch-designs", "patch-target", "patch-tag-mode", "patch-clusters",
         "patch-namespace-glob", "patch-namespaces", "patch-interval",
         "patch-duration",
     ):
@@ -37,11 +37,61 @@ def test_native_central_patch_ui_contract() -> None:
     assert 'window.addEventListener("pagehide"' in script
     assert "PAGE_SIZE = 50" in script
     assert "flows.designs" in script
-    assert "summary.counts" in script and "countSummary" in script
+    assert "summary.counts" in script and "summaryTotals" in script
     assert "patch-target-table" in template
     assert "next_cursor" in script and "patch-images-pagination" in template
     assert "/containers/" in script and "patch-detail" in template
     assert '[data-theme="dark"]' in css
+    assert "Central Patch Monitor 0.7.2" not in template
+    assert "Çoklu cluster patch geçişi, baseline ve canlı karşılaştırma" in template
+
+
+def test_patch_css_is_scoped_and_global_navigation_stays_native() -> None:
+    css = (PROJECT / "app/static/patch_monitoring.css").read_text()
+    template = (PROJECT / "app/templates/patch_monitoring.html").read_text()
+    unsafe_prefixes = ("body", "header", "nav", "main", "table", "button", "input", "select", "a")
+    rules = [line.strip() for line in css.splitlines() if "{" in line]
+    assert all(not rule.startswith(unsafe_prefixes) for rule in rules)
+    assert '<body class="patch-monitoring">' in template
+    assert '{% include "_navigation.html" %}' in template
+    assert ".patch-monitoring .primary-nav > a" in css
+    assert ".account-menu" not in css
+
+
+def test_patch_flow_live_compare_and_history_ux_contracts() -> None:
+    template = (PROJECT / "app/templates/patch_monitoring.html").read_text()
+    script = (PROJECT / "app/static/patch_monitoring.js").read_text()
+    for text in (
+        "Patch akışını oluştur", "Hazır bir akış seç", "Hedef ve kapsam",
+        "İzleme davranışı", "Bu akış ne yapacak?", "Başlangıç durumunu kaydeder",
+        "Henüz oturum yok", "Görüntülenen container", "Hedef sürümde sağlıklı",
+        "Hedef dışında kalan", "Tag'i bilinmeyen", "Hedefte hazır değil",
+        "Şu anda hangi image'lar var?", "Hedef sürüme geçenler",
+        "Önce / sonra karşılaştırması", "Sürüm geçişi ile sağlık değişimi ayrı değerlendirilir",
+        "Oturum Geçmişi",
+    ):
+        assert text in template or text in script
+    assert "renderDesigns" in script and "applySettings" in script
+    assert "session.status" in script and "data-session-action" in script
+    assert "patch-no-session" in template and "showSessionArea" in script
+    assert "next_cursor" in script and "PAGE_SIZE = 50" in script
+    assert "session.id.slice(0, 8)" in script and "Oturumu aç →" in script
+
+
+def test_patch_bootstrap_is_compatibility_first_and_errors_are_humanized() -> None:
+    script = (PROJECT / "app/static/patch_monitoring.js").read_text()
+    config_position = script.index('await api("/api/patch/config")')
+    parallel_position = script.index("await Promise.all", config_position)
+    assert config_position < parallel_position
+    for code in (
+        "patch_timeout", "patch_unavailable", "patch_authorization_failed",
+        "patch_incompatible", "patch_conflict", "patch_validation_failed",
+    ):
+        assert code in script
+    assert "data.error ||" not in script
+    assert "esc(cluster.error" not in script
+    assert "önceki güvenli veri korunuyor" in script
+    assert "patch-error-state" in script and "patch-content" in script
 
 
 def test_patch_page_routes_keep_global_cluster_as_initial_hint(monkeypatch) -> None:
@@ -144,8 +194,13 @@ def test_central_patch_http_errors_keep_safe_status_mapping(
 @pytest.mark.parametrize(
     ("error", "status_code", "body"),
     [
+        (PatchBackendError("http_401", 401), 502, b'{"error":"patch_authorization_failed"}'),
+        (PatchBackendError("http_403", 403), 502, b'{"error":"patch_authorization_failed"}'),
+        (PatchBackendError("http_404", 404), 502, b'{"error":"patch_incompatible"}'),
+        (PatchBackendError("invalid_response"), 502, b'{"error":"patch_incompatible"}'),
         (PatchBackendError("http_409", 409), 409, b'{"error":"patch_conflict"}'),
         (PatchBackendError("http_422", 422), 422, b'{"error":"patch_validation_failed"}'),
+        (PatchBackendError("http_500", 500), 503, b'{"error":"patch_unavailable"}'),
         (PatchBackendError("timeout"), 504, b'{"error":"patch_timeout"}'),
         (PatchBackendError("unavailable"), 503, b'{"error":"patch_unavailable"}'),
     ],
