@@ -55,7 +55,9 @@
 [data-theme="dark"] table tbody tr { color:var(--text-primary); background:var(--table-row) !important; }
 [data-theme="dark"] table tbody tr:nth-child(even) { background:var(--table-row-alt) !important; }
 [data-theme="dark"] table tbody tr:hover { background:var(--table-hover) !important; }
-[data-theme="dark"] table td { color:inherit; border-color:var(--border-color) !important; }
+[data-theme="dark"] table tbody tr > td { color:inherit; background:var(--table-row) !important; border-color:var(--border-color) !important; }
+[data-theme="dark"] table tbody tr:nth-child(even) > td { background:var(--table-row-alt) !important; }
+[data-theme="dark"] table tbody tr:hover > td { background:var(--table-hover) !important; }
 [data-theme="dark"] table tbody tr.row-warning > td { background:#3b3421 !important; }
 [data-theme="dark"] table tbody tr.row-high > td,
 [data-theme="dark"] table tbody tr.egress-unassigned > td { background:#442d20 !important; }
@@ -76,7 +78,7 @@
 .account-menu summary::-webkit-details-marker { display:none; }
 .account-menu summary:hover { background:rgba(255,255,255,.08); }
 .account-menu summary:focus-visible { outline:3px solid #73bcf7; outline-offset:2px; }
-.account-avatar { width:19px; height:19px; padding:2px; color:#132b4f; background:#f58220; border-radius:50%; fill:none; stroke:currentColor; stroke-width:1.8; }
+.account-avatar { width:19px; height:19px; padding:2px; color:#52606d; background:#d9e2ec; border-radius:50%; fill:none; stroke:currentColor; stroke-width:1.8; }
 .account-dropdown { position:fixed; z-index:1250; min-width:180px; padding:6px; color:var(--text-primary); background:var(--dropdown-bg); border:1px solid var(--border-color); border-radius:7px; box-shadow:0 8px 20px rgba(5,18,34,.28); }
 .primary-nav .account-dropdown a,
 .account-dropdown button { display:block; width:100%; margin:0; padding:9px 10px; border:0; border-radius:4px; color:var(--heading-color); background:transparent; text-align:left; text-decoration:none; font:inherit; cursor:pointer; white-space:nowrap; }
@@ -86,7 +88,7 @@
 .account-dropdown button:focus { color:var(--heading-color); background:var(--table-hover); }
 .account-dropdown form { margin:0; }
 [data-theme="dark"] .account-menu summary { border-color:#718096; }
-[data-theme="dark"] .account-avatar { color:#17263a; }
+[data-theme="dark"] .account-avatar { color:#eef2f6; background:#52606d; }
 [data-theme="dark"] .account-dropdown { box-shadow:0 10px 24px rgba(0,0,0,.5); }
 
 @media(max-width:700px) {

@@ -166,6 +166,16 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 [data-theme="dark"] .shiftlight-history-item:hover,
 [data-theme="dark"] .shiftlight-history-item.active { background:#263d59; border-color:#73bcf7; }
 [data-theme="dark"] .shiftlight-conversation { color:#eef2f6; background:linear-gradient(#132237,#17263a); }
+[data-theme="dark"] .shiftlight-message.assistant,
+[data-theme="dark"] .shiftlight-answer,
+[data-theme="dark"] .shiftlight-answer p,
+[data-theme="dark"] .shiftlight-answer ul,
+[data-theme="dark"] .shiftlight-answer ol,
+[data-theme="dark"] .shiftlight-answer li,
+[data-theme="dark"] .shiftlight-answer strong,
+[data-theme="dark"] .shiftlight-empty p,
+[data-theme="dark"] .shiftlight-scope-note,
+[data-theme="dark"] .shiftlight-helper { color:#eef2f6; }
 [data-theme="dark"] .shiftlight-message.user { color:#fff; background:#0b3b6b; }
 [data-theme="dark"] .shiftlight-answer code { color:#f4f7fa; background:#263d59; }
 [data-theme="dark"] .shiftlight-answer a,
@@ -175,10 +185,11 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 [data-theme="dark"] .shiftlight-table-actions { background:#1e3047; border-color:#405775; }
 [data-theme="dark"] .shiftlight-table-actions button { color:#73bcf7; background:#20334b; border-color:#718096; }
 [data-theme="dark"] .shiftlight-table th { color:#f4f7fa; background:#20334b; }
-[data-theme="dark"] .shiftlight-table td { color:#eef2f6; border-color:#405775; }
-[data-theme="dark"] .shiftlight-table tbody tr:nth-child(even) { background:#132237; }
-[data-theme="dark"] .shiftlight-table tbody tr:hover { background:#263d59; }
+[data-theme="dark"] .shiftlight-table tbody tr > td { color:#eef2f6; background:#17263a !important; border-color:#405775; }
+[data-theme="dark"] .shiftlight-table tbody tr:nth-child(even) > td { background:#132237 !important; }
+[data-theme="dark"] .shiftlight-table tbody tr:hover > td { background:#263d59 !important; }
 [data-theme="dark"] .shiftlight-composer textarea { color:#eef2f6; background:#132237; border-color:#718096; }
+[data-theme="dark"] .shiftlight-composer textarea::placeholder { color:#b9c2cc; opacity:1; }
 [data-theme="dark"] .shiftlight-composer button { color:#fff; background:#0b3b6b; }
 @keyframes shiftlight-float { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shiftlight-flight { 0%{opacity:0;transform:translate3d(190px,120px,0) rotate(-12deg) scale(.9)} 20%{opacity:1;transform:translate3d(-90px,-130px,0) rotate(-4deg) scale(1.04)} 45%{transform:translate3d(-360px,-90px,0) rotate(7deg) scale(1.08)} 70%{transform:translate3d(-210px,45px,0) rotate(-5deg) scale(1.02)} 100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1)} }

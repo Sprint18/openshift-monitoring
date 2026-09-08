@@ -39,6 +39,7 @@ from app.collector import ClusterCollector
 from app.diagnostics import analyze_pod_diagnostics
 from app.db.database import Database
 from app.db.repository import SnapshotRepository
+from app.logging_config import configure_application_logging
 from app.performance import (
     log_performance,
     get_perf_path,
@@ -50,6 +51,7 @@ from app.performance import (
 from app.patch_client import PatchBackendClient, PatchBackendError
 from app.resource_parser import format_cpu, format_memory
 
+LOG_LEVEL = configure_application_logging()
 logger = logging.getLogger("kocc")
 SQLITE_DATABASE_PATH = Path(os.getenv("KOCC_SQLITE_PATH", "/data/kocc.db"))
 snapshot_repository = SnapshotRepository(Database(SQLITE_DATABASE_PATH))
@@ -230,6 +232,9 @@ _dashboard_refreshing: dict[str, int] = {}
 _dashboard_cache_generation = 0
 _active_requests = 0
 _active_requests_lock = threading.Lock()
+_request_log_lock = threading.Lock()
+_request_log_last: dict[tuple[str, str, int], float] = {}
+REQUEST_LOG_DEDUP_SECONDS = 60
 
 
 def signed_session_cookie(token: str) -> str:
@@ -257,6 +262,45 @@ def safe_local_path(value: str) -> str:
 
 
 AUTH_PUBLIC_PATHS = frozenset({"/health", "/ready", "/login", "/favicon.ico"})
+QUIET_SUCCESS_PATHS = frozenset({"/health", "/ready", "/favicon.ico"})
+
+
+def request_log_level(path: str, status: int) -> int:
+    if status >= 500:
+        return logging.ERROR
+    if status >= 400:
+        return logging.WARNING
+    if path in QUIET_SUCCESS_PATHS or path.startswith("/static/"):
+        return logging.DEBUG
+    if path.startswith("/api/") or path in {"/login", "/logout", "/change-password"}:
+        return logging.INFO
+    return logging.DEBUG
+
+
+def should_log_request(
+    path: str,
+    cluster: str,
+    status: int,
+    *,
+    now: float | None = None,
+) -> bool:
+    if LOG_LEVEL <= logging.DEBUG or status != 401 or not path.startswith("/api/patch/"):
+        return True
+    current = time.monotonic() if now is None else now
+    key = (path, cluster, status)
+    with _request_log_lock:
+        previous = _request_log_last.get(key)
+        if previous is not None and current - previous < REQUEST_LOG_DEDUP_SECONDS:
+            return False
+        _request_log_last[key] = current
+        expired = [
+            item for item, timestamp in _request_log_last.items()
+            if current - timestamp >= REQUEST_LOG_DEDUP_SECONDS
+        ]
+        for item in expired:
+            if item != key:
+                _request_log_last.pop(item, None)
+    return True
 
 
 @app.middleware("http")
@@ -304,17 +348,19 @@ async def request_timing_middleware(request: Request, call_next: Any) -> Any:
         with _active_requests_lock:
             _active_requests -= 1
             active_at_end = _active_requests
-        if request.url.path not in {"/health", "/ready"}:
-            logger.info(
-                "request path=%s cluster=%s status=%s duration_ms=%s active_requests=%s active_requests_after=%s",
-                request.url.path, cluster_key, status, duration_ms,
-                active_at_start, active_at_end,
+        level = request_log_level(request.url.path, status)
+        if should_log_request(request.url.path, cluster_key, status):
+            logger.log(
+                level,
+                "http_request method=%s path=%s status=%s duration_ms=%s cluster=%s active_requests=%s",
+                request.method, request.url.path, status, duration_ms,
+                cluster_key, active_at_start,
             )
-            log_performance(
-                "total.request", started, item_count=1,
-                extra={"path": request.url.path, "status": status,
-                       "active_requests": active_at_start},
-            )
+        log_performance(
+            "total.request", started, item_count=1,
+            extra={"path": request.url.path, "status": status,
+                   "active_requests": active_at_start},
+        )
         reset_perf_cluster(perf_token)
         reset_perf_path(path_token)
 
@@ -358,6 +404,7 @@ async def login(request: Request) -> HTMLResponse:
     password = body.get("password", [""])[0]
     next_path = body.get("next", ["/"])[0]
     if not AUTH_ENABLED or not LocalAuthProvider(user_repository).verify(username, password):
+        logger.warning("authentication_login status=failed username=%s", username or "missing")
         await asyncio.sleep(0.25)
         return templates.TemplateResponse(
             request=request, name="login.html", status_code=401,
@@ -367,6 +414,7 @@ async def login(request: Request) -> HTMLResponse:
     existing_token, _, _ = existing_cookie.rpartition(".")
     session_store.destroy(existing_token)
     token = session_store.create(username)
+    logger.info("authentication_login status=success username=%s", username)
     response = RedirectResponse(safe_local_path(next_path), status_code=303)
     response.set_cookie(
         AUTH_COOKIE_NAME, signed_session_cookie(token), httponly=True,
@@ -380,6 +428,7 @@ async def logout(request: Request) -> RedirectResponse:
     value = request.cookies.get(AUTH_COOKIE_NAME, "")
     token, _, _ = value.rpartition(".")
     session_store.destroy(token)
+    logger.info("authentication_logout status=success")
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(AUTH_COOKIE_NAME)
     return response
@@ -413,7 +462,9 @@ async def change_password(request: Request) -> HTMLResponse:
     elif not user_repository.change_password(request.state.username, current, new):
         error = "Mevcut parola hatalı."
     if not error:
+        logger.info("authentication_password_change status=success username=%s", request.state.username)
         return RedirectResponse("/change-password?changed=1", status_code=303)
+    logger.warning("authentication_password_change status=failed reason=validation")
     return templates.TemplateResponse(
         request=request, name="change_password.html", status_code=400,
         context={"error": error, "success": None},
@@ -1250,7 +1301,7 @@ def _refresh_dashboard_cache(cluster_key: str, generation: int) -> None:
                     _dashboard_cache[cluster_key] = (
                         time.monotonic(), deepcopy(data)
                     )
-        logger.info("snapshot cluster=%s background_refresh=SUCCESS", cluster_key)
+        logger.debug("snapshot cluster=%s background_refresh=SUCCESS", cluster_key)
     except Exception as exc:
         logger.warning(
             "snapshot cluster=%s background_refresh=FAILED exception_type=%s",
@@ -1287,7 +1338,7 @@ def _cached_dashboard_data(
         cached = _dashboard_cache.get(cluster_key)
         if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
             age_ms = round((now - cached[0]) * 1000)
-            logger.info(
+            logger.debug(
                 "snapshot cluster=%s path=%s cache=HIT age_ms=%s ttl_ms=%s",
                 cluster_key, get_perf_path(), age_ms,
                 DASHBOARD_CACHE_TTL_SECONDS * 1000,
@@ -1322,7 +1373,7 @@ def _cached_dashboard_data(
     if data is not None:
         scheduled = _schedule_dashboard_refresh(cluster_key)
         data["cache"]["refreshing"] = True
-        logger.info(
+        logger.debug(
             "snapshot cluster=%s path=%s cache=STALE age_ms=%s background_refresh=%s",
             cluster_key, get_perf_path(), stale_age_ms,
             "STARTED" if scheduled else "IN_PROGRESS",
@@ -1339,7 +1390,7 @@ def _cached_dashboard_data(
             cached = _dashboard_cache.get(cluster_key)
             if not force_refresh and cached and now - cached[0] < DASHBOARD_CACHE_TTL_SECONDS:
                 age_ms = round((now - cached[0]) * 1000)
-                logger.info(
+                logger.debug(
                     "snapshot cluster=%s path=%s cache=HIT age_ms=%s ttl_ms=%s",
                     cluster_key, get_perf_path(), age_ms,
                     DASHBOARD_CACHE_TTL_SECONDS * 1000,
@@ -1354,7 +1405,7 @@ def _cached_dashboard_data(
                     extra={"snapshot_age_ms": age_ms},
                 )
                 return data
-        logger.info(
+        logger.debug(
             "snapshot cluster=%s path=%s cache=%s age_ms=%s ttl_ms=%s",
             cluster_key, get_perf_path(),
             "BYPASS" if force_refresh else "MISS",

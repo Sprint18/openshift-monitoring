@@ -153,6 +153,7 @@ def test_test_deployment_configures_auth_and_patch_backend_secrets() -> None:
     env = {item["name"]: item for item in container["env"]}
     assert env["KOCC_AUTH_ENABLED"]["value"] == "true"
     assert env["KOCC_SESSION_IDLE_TIMEOUT_SECONDS"]["value"] == "900"
+    assert env["KOCC_LOG_LEVEL"]["value"] == "INFO"
     assert env["KOCC_PATCH_ENABLED"]["value"] == "true"
     assert env["KOCC_PATCH_BACKEND_URL"]["value"].endswith(
         ".ocp-patch-agent.svc.cluster.local:8090"
@@ -161,6 +162,11 @@ def test_test_deployment_configures_auth_and_patch_backend_secrets() -> None:
     assert env["KOCC_SESSION_SECRET"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-auth"
     assert env["KOCC_PATCH_API_TOKEN"]["valueFrom"]["secretKeyRef"]["name"] == "kocc-patch-api"
     assert env["KOCC_PATCH_API_TOKEN"]["valueFrom"]["secretKeyRef"]["optional"] is True
+
+
+def test_container_disables_generic_uvicorn_access_log() -> None:
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+    assert "--no-access-log" in dockerfile
 
 
 def test_test_route_allows_long_ai_requests() -> None:

@@ -471,6 +471,21 @@ def test_ai_template_keeps_composer_and_keyboard_behavior() -> None:
     assert "!text.trim()" in source
 
 
+def test_shiftlight_dark_theme_keeps_all_conversation_text_readable() -> None:
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    for selector in (
+        '[data-theme="dark"] .shiftlight-message.assistant',
+        '[data-theme="dark"] .shiftlight-answer p',
+        '[data-theme="dark"] .shiftlight-answer strong',
+        '[data-theme="dark"] .shiftlight-empty p',
+        '[data-theme="dark"] .shiftlight-composer textarea::placeholder',
+        '[data-theme="dark"] .shiftlight-table tbody tr:nth-child(even) > td',
+    ):
+        assert selector in css
+    assert "color:#eef2f6" in css
+    assert "color:#b9c2cc" in css
+
+
 def test_ai_template_new_chat_defaults_to_auto_scope() -> None:
     partial, source = shiftlight_partial(), shiftlight_source()
     assert 'id="shiftlight-new"' in partial

@@ -7,7 +7,7 @@ def test_performance_log_contains_structured_fields(monkeypatch, caplog) -> None
     monkeypatch.setattr(performance.time, "perf_counter", lambda: 2.5)
     token = performance.set_perf_cluster("kkbtest")
     try:
-        with caplog.at_level(logging.INFO, logger="kocc.performance"):
+        with caplog.at_level(logging.DEBUG, logger="kocc.performance"):
             performance.log_performance(
                 "api.list_pods", 2.0, item_count=955, cache_hit=False
             )
@@ -23,6 +23,6 @@ def test_performance_log_contains_structured_fields(monkeypatch, caplog) -> None
 
 def test_slow_operation_threshold(monkeypatch, caplog) -> None:
     monkeypatch.setattr(performance.time, "perf_counter", lambda: 3.01)
-    with caplog.at_level(logging.INFO, logger="kocc.performance"):
+    with caplog.at_level(logging.WARNING, logger="kocc.performance"):
         performance.log_performance("api.list_nodes", 2.0)
     assert "slow_operation cluster=unknown path=unknown op=api.list_nodes duration_ms=1010" in caplog.text

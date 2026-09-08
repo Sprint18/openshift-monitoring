@@ -598,7 +598,7 @@ def test_cache_hit_and_miss_are_logged(
 ) -> None:
     prepare_data.return_value = {"snapshot": True}
 
-    with caplog.at_level("INFO", logger="kocc.performance"):
+    with caplog.at_level("DEBUG", logger="kocc.performance"):
         cached_dashboard_data("kkbtest")
         cached_dashboard_data("kkbtest")
 
@@ -612,7 +612,7 @@ def test_cache_force_refresh_bypasses_fresh_snapshot(
     prepare_data: Mock, caplog,
 ) -> None:
     prepare_data.side_effect = [{"generation": 1}, {"generation": 2}]
-    with caplog.at_level("INFO", logger="kocc"):
+    with caplog.at_level("DEBUG", logger="kocc"):
         assert cached_dashboard_data("kkbtest")["generation"] == 1
         assert cached_dashboard_data("kkbtest")["generation"] == 1
         assert cached_dashboard_data("kkbtest", force_refresh=True)["generation"] == 2
@@ -1120,7 +1120,9 @@ def test_cache_defaults_and_request_observability_contract() -> None:
     source = (Path(__file__).parents[1] / "app/main.py").read_text()
     assert "active_requests=" in source
     assert "unhandled_exception path=" in source
-    assert 'request.url.path not in {"/health", "/ready"}' in source
+    assert "QUIET_SUCCESS_PATHS" in source
+    assert 'path.startswith("/static/")' in source
+    assert "request_log_level(request.url.path, status)" in source
 
 
 def test_authenticated_user_menu_overlay_and_logout_contract() -> None:
@@ -1149,8 +1151,11 @@ def test_shared_dark_theme_covers_tables_inputs_and_user_menu() -> None:
         "--dropdown-bg",
     ):
         assert token in css
-    assert '[data-theme="dark"] table tbody tr:nth-child(even)' in css
-    assert '[data-theme="dark"] table tbody tr:hover' in css
+    assert '[data-theme="dark"] table tbody tr:nth-child(even) > td' in css
+    assert '[data-theme="dark"] table tbody tr:hover > td' in css
+    assert 'table tbody tr > td' in css
+    assert "background:#d9e2ec" in css
+    assert "background:#f58220" not in css
     assert '[data-theme="dark"] input' in css
     assert '[data-theme="dark"] .account-dropdown' in css
     assert ":root" in css
@@ -1184,6 +1189,7 @@ def test_active_request_and_unhandled_exception_logging(caplog) -> None:
     assert response.status_code == 500
     assert healthy.status_code == 200
     assert "unhandled_exception path=/_test_unhandled exception_type=RuntimeError" in caplog.text
+    assert "http_request method=GET path=/_test_unhandled status=500" in caplog.text
     assert "active_requests=1" in caplog.text
 
 

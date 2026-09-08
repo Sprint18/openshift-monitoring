@@ -170,6 +170,8 @@ spec:
               value: "true"
             - name: KOCC_SESSION_IDLE_TIMEOUT_SECONDS
               value: "900"
+            - name: KOCC_LOG_LEVEL
+              value: INFO
             - name: KOCC_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:

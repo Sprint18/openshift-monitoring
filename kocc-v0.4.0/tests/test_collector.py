@@ -345,8 +345,8 @@ def test_collect_dashboard_reuses_cluster_lists_and_sets_timeouts(
     custom_api_class: Mock,
     caplog: object,
 ) -> None:
-    caplog.set_level("INFO", logger="kocc.collector")
-    caplog.set_level("INFO", logger="kocc.performance")
+    caplog.set_level("DEBUG", logger="kocc.collector")
+    caplog.set_level("DEBUG", logger="kocc.performance")
     core_api = core_api_class.return_value
     core_api.list_node.return_value = item_list([])
     core_api.list_pod_for_all_namespaces.return_value = item_list([])

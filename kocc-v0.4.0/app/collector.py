@@ -1099,7 +1099,7 @@ class ClusterCollector:
             _request_timeout=API_REQUEST_TIMEOUT,
         ).items
         log_performance("api.list_nodes", step_started, item_count=len(nodes))
-        logger.info("collect_nodes: %.2fs", time.perf_counter() - step_started)
+        logger.debug("collect_nodes: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         pods = self.core_api.list_pod_for_all_namespaces(
             resource_version="0",
@@ -1109,7 +1109,7 @@ class ClusterCollector:
             "api.list_pods", step_started, item_count=len(pods),
             extra={"resource_version_mode": "cache"},
         )
-        logger.info("collect_pods: %.2fs", time.perf_counter() - step_started)
+        logger.debug("collect_pods: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         namespaces = self.core_api.list_namespace(
             _request_timeout=API_REQUEST_TIMEOUT,
@@ -1117,7 +1117,7 @@ class ClusterCollector:
         log_performance(
             "api.list_namespaces", step_started, item_count=len(namespaces)
         )
-        logger.info(
+        logger.debug(
             "collect_namespaces: %.2fs", time.perf_counter() - step_started
         )
 
@@ -1131,21 +1131,21 @@ class ClusterCollector:
             "process.resource_summary", step_started,
             item_count=len(resource_summary["namespaces"]),
         )
-        logger.info(
+        logger.debug(
             "resource_summary: %.2fs", time.perf_counter() - step_started
         )
 
         step_started = time.perf_counter()
         version = self.get_cluster_version()
         log_performance("api.cluster_version", step_started, item_count=1)
-        logger.info("collect_version: %.2fs", time.perf_counter() - step_started)
+        logger.debug("collect_version: %.2fs", time.perf_counter() - step_started)
         step_started = time.perf_counter()
         operators = self.get_cluster_operator_summary()
         log_performance(
             "api.cluster_operators", step_started,
             item_count=len(operators["items"]),
         )
-        logger.info(
+        logger.debug(
             "collect_operators: %.2fs", time.perf_counter() - step_started
         )
         step_started = time.perf_counter()

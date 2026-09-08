@@ -57,7 +57,7 @@ def log_performance(
         fields.append(f"cache_hit={str(cache_hit).lower()}")
     if extra:
         fields.extend(f"{key}={value}" for key, value in extra.items())
-    logger.info(" ".join(fields))
+    logger.debug(" ".join(fields))
     if duration > SLOW_OPERATION_MS:
         logger.warning(
             "slow_operation cluster=%s path=%s op=%s duration_ms=%s",
