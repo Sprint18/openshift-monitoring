@@ -1139,6 +1139,10 @@ def test_authenticated_user_menu_overlay_and_logout_contract() -> None:
     assert "z-index:1250" in theme_css
     assert "getBoundingClientRect" in theme_js
     assert "!menu.contains(event.target)" in theme_js
+    assert 'fetch("/api/session/activity"' in theme_js
+    assert "minimumInterval = 60000" in theme_js
+    assert 'document.addEventListener("click", report' in theme_js
+    assert 'document.addEventListener("keydown", report)' in theme_js
     logout_route = next(route for route in app.routes if route.path == "/logout")
     assert logout_route.methods == {"POST"}
 
@@ -1159,6 +1163,24 @@ def test_shared_dark_theme_covers_tables_inputs_and_user_menu() -> None:
     assert '[data-theme="dark"] input' in css
     assert '[data-theme="dark"] .account-dropdown' in css
     assert ":root" in css
+
+
+def test_dark_login_branding_and_status_colors_are_readable() -> None:
+    project = Path(__file__).parents[1]
+    login = (project / "app/templates/login.html").read_text()
+    css = (project / "app/static/portal_theme.css").read_text()
+    assert '[data-theme="dark"] .login .brand h1{color:#f4f7fa}' in login
+    assert '[data-theme="dark"] .login .brand p{color:#b9c2cc}' in login
+    assert '[data-theme="dark"] .login label{color:#eef2f6}' in login
+    assert ".brand h1{font-size:20px;margin:0;color:var(--navy)}" in login
+    assert '[data-theme="dark"] .status-pill.healthy' in css
+    assert '[data-theme="dark"] .status-pill.ready' in css
+    assert '[data-theme="dark"] .status-pill.assigned' in css
+    assert '[data-theme="dark"] .health-Healthy' in css
+    assert '[data-theme="dark"] .badge.good' in css
+    assert "background:#17643c" in css
+    assert '[data-theme="dark"] .status-pill.warning' in css
+    assert '[data-theme="dark"] .status-pill.critical' in css
 
 
 @patch("app.main.ClusterCollector")

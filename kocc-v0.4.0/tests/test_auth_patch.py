@@ -186,6 +186,51 @@ def test_expired_cookie_redirects_html_and_rejects_api(monkeypatch, tmp_path: Pa
     assert client.get("/api/patch/summary").status_code == 401
 
 
+def test_background_patch_polling_does_not_extend_idle_session(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock)
+    configure_test_auth(monkeypatch, tmp_path, store)
+    browser = TestClient(app)
+    browser.post("/login", data={"username": "admin", "password": "admin"})
+
+    clock.advance(899)
+    # The backend may be disabled, but authentication succeeds without touching
+    # the idle timestamp for this automatic API request.
+    assert browser.get("/api/patch/summary").status_code != 401
+    clock.advance(2)
+    assert browser.get("/api/patch/summary").status_code == 401
+    assert browser.get("/", follow_redirects=False).status_code == 303
+
+
+def test_explicit_browser_activity_refreshes_idle_session(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    store = SessionStore(ttl_seconds=900, clock=clock)
+    configure_test_auth(monkeypatch, tmp_path, store)
+    browser = TestClient(app)
+    browser.post("/login", data={"username": "admin", "password": "admin"})
+
+    clock.advance(899)
+    assert browser.post("/api/session/activity").status_code == 200
+    clock.advance(899)
+    assert browser.post("/api/session/activity").status_code == 200
+    clock.advance(901)
+    assert browser.post("/api/session/activity").status_code == 401
+
+
+def test_patch_polling_stops_and_redirects_after_unauthorized_response() -> None:
+    source = (Path(__file__).parents[1] / "app/templates/patch_monitoring.html").read_text()
+    assert "sessionExpired:false" in source
+    assert "if(r.status===401)" in source
+    assert "clearInterval(state.timer)" in source
+    assert "state.timer=null" in source
+    assert "if(state.sessionExpired)return" in source
+    assert "location.assign(`/login?next=${next}`)" in source
+
+
 @patch("app.patch_client.urllib.request.urlopen")
 def test_patch_client_uses_fixed_path_and_server_token(urlopen: Mock) -> None:
     response = Mock()

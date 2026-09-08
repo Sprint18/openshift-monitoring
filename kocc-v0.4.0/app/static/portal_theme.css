@@ -69,9 +69,33 @@
 [data-theme="dark"] a { color:#73bcf7; }
 [data-theme="dark"] .warning { color:#ffd27d !important; }
 [data-theme="dark"] .healthy,
-[data-theme="dark"] .success { color:#7ee2a8 !important; }
+[data-theme="dark"] .success,
+[data-theme="dark"] .status-ready,
+[data-theme="dark"] .health-Healthy { color:#65e6a3 !important; }
 [data-theme="dark"] .danger,
 [data-theme="dark"] .error { color:#ff9b9b !important; }
+[data-theme="dark"] .status-pill.healthy,
+[data-theme="dark"] .status-pill.ready,
+[data-theme="dark"] .status-pill.assigned,
+[data-theme="dark"] .status-pill.success,
+[data-theme="dark"] .badge.good {
+    color:#e8fff1 !important;
+    background:#17643c !important;
+    border:1px solid #45c47c !important;
+}
+[data-theme="dark"] .status-pill.warning,
+[data-theme="dark"] .badge.warn {
+    color:#fff4d6 !important;
+    background:#6b4708 !important;
+    border:1px solid #d69b2d !important;
+}
+[data-theme="dark"] .status-pill.critical,
+[data-theme="dark"] .status-pill.unavailable,
+[data-theme="dark"] .badge.bad {
+    color:#fff0f1 !important;
+    background:#762b34 !important;
+    border:1px solid #e06a76 !important;
+}
 
 .account-menu { position:relative; flex:0 0 auto; margin-left:auto; align-self:center; color:#fff; }
 .account-menu summary { display:flex; align-items:center; gap:7px; padding:7px 11px; border:1px solid rgba(255,255,255,.35); border-radius:7px; cursor:pointer; white-space:nowrap; list-style:none; }

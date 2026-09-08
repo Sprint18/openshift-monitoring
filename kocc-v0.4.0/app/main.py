@@ -263,6 +263,13 @@ def safe_local_path(value: str) -> str:
 
 AUTH_PUBLIC_PATHS = frozenset({"/health", "/ready", "/login", "/favicon.ico"})
 QUIET_SUCCESS_PATHS = frozenset({"/health", "/ready", "/favicon.ico"})
+QUIET_SUCCESS_API_PATHS = frozenset({
+    "/api/session/activity",
+    "/api/patch/summary",
+    "/api/patch/events",
+    "/api/patch/agents",
+    "/api/patch/runs",
+})
 
 
 def request_log_level(path: str, status: int) -> int:
@@ -270,7 +277,11 @@ def request_log_level(path: str, status: int) -> int:
         return logging.ERROR
     if status >= 400:
         return logging.WARNING
-    if path in QUIET_SUCCESS_PATHS or path.startswith("/static/"):
+    if (
+        path in QUIET_SUCCESS_PATHS
+        or path in QUIET_SUCCESS_API_PATHS
+        or path.startswith("/static/")
+    ):
         return logging.DEBUG
     if path.startswith("/api/") or path in {"/login", "/logout", "/change-password"}:
         return logging.INFO
@@ -307,7 +318,9 @@ def should_log_request(
 async def authentication_middleware(request: Request, call_next: Any) -> Any:
     if not AUTH_ENABLED or request.url.path in AUTH_PUBLIC_PATHS or request.url.path.startswith("/static/"):
         return await call_next(request)
-    username = session_username(request)
+    # Authentication validates every request, but only explicit browser activity
+    # and page navigation extend the idle deadline. Background API polling cannot.
+    username = session_username(request, touch=not request.url.path.startswith("/api/"))
     if username:
         request.state.username = username
         return await call_next(request)
@@ -377,6 +390,13 @@ async def health() -> dict[str, str]:
 @app.get("/ready")
 async def ready() -> dict[str, str]:
     return {"status": "ready", "version": app.version}
+
+
+@app.post("/api/session/activity")
+async def session_activity(request: Request) -> dict[str, str]:
+    if AUTH_ENABLED and not session_username(request, touch=True):
+        raise HTTPException(status_code=401, detail="authentication_required")
+    return {"status": "ok"}
 
 
 @app.get("/favicon.ico", include_in_schema=False)

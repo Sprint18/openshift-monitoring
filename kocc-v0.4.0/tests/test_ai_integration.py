@@ -477,6 +477,7 @@ def test_shiftlight_dark_theme_keeps_all_conversation_text_readable() -> None:
         '[data-theme="dark"] .shiftlight-message.assistant',
         '[data-theme="dark"] .shiftlight-answer p',
         '[data-theme="dark"] .shiftlight-answer strong',
+        '[data-theme="dark"] .shiftlight-answer em',
         '[data-theme="dark"] .shiftlight-empty p',
         '[data-theme="dark"] .shiftlight-composer textarea::placeholder',
         '[data-theme="dark"] .shiftlight-table tbody tr:nth-child(even) > td',
@@ -484,6 +485,12 @@ def test_shiftlight_dark_theme_keeps_all_conversation_text_readable() -> None:
         assert selector in css
     assert "color:#eef2f6" in css
     assert "color:#b9c2cc" in css
+    assert '[data-theme="dark"] #shiftlight-root .shiftlight-drawer' in css
+    assert "background:#17263a !important" in css
+    assert '[data-theme="dark"] #shiftlight-root .shiftlight-conversation' in css
+    assert "background:linear-gradient(#132237,#17263a) !important" in css
+    assert '[data-theme="dark"] .shiftlight-composer > div span' in css
+    assert '[data-theme="dark"] .shiftlight-history-empty' in css
 
 
 def test_ai_template_new_chat_defaults_to_auto_scope() -> None:
@@ -567,8 +574,8 @@ def test_shiftlight_uses_live_shared_portal_theme() -> None:
     assert 'const key = "dashboardTheme"' in shared_theme
     assert 'root.dataset.theme = selected' in shared_theme
     assert 'new CustomEvent("kocc:themechange"' in shared_theme
-    assert '[data-theme="dark"] .shiftlight-drawer' in css
-    assert '[data-theme="dark"] .shiftlight-conversation' in css
+    assert '[data-theme="dark"] #shiftlight-root .shiftlight-drawer' in css
+    assert '[data-theme="dark"] #shiftlight-root .shiftlight-conversation' in css
     assert '[data-theme="dark"] .shiftlight-composer textarea' in css
     assert ".shiftlight-drawer {" in css
     assert "background: #f7f9fb" in css

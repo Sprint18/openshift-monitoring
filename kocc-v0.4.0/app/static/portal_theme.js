@@ -37,9 +37,37 @@
             }
         });
     };
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initializeAccountMenu, {once:true});
-    } else {
+    const initializeSessionActivity = () => {
+        if (!document.querySelector(".account-menu")) return;
+        const minimumInterval = 60000;
+        let lastSent = 0;
+        let pending = false;
+        const report = () => {
+            const now = Date.now();
+            if (pending || now - lastSent < minimumInterval) return;
+            pending = true;
+            lastSent = now;
+            fetch("/api/session/activity", {
+                method: "POST",
+                headers: {"Accept": "application/json"},
+                credentials: "same-origin",
+            }).then(response => {
+                if (response.status === 401) {
+                    const next = encodeURIComponent(location.pathname + location.search);
+                    location.assign(`/login?next=${next}`);
+                }
+            }).catch(() => {}).finally(() => { pending = false; });
+        };
+        document.addEventListener("click", report, {passive:true});
+        document.addEventListener("keydown", report);
+    };
+    const initialize = () => {
         initializeAccountMenu();
+        initializeSessionActivity();
+    };
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initialize, {once:true});
+    } else {
+        initialize();
     }
 })();

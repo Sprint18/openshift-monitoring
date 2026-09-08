@@ -43,6 +43,17 @@ def test_successful_probe_and_static_requests_are_debug_only() -> None:
     assert main.request_log_level("/favicon.ico", 304) == logging.DEBUG
     assert main.request_log_level("/static/app.css", 200) == logging.DEBUG
     assert main.request_log_level("/api/summary", 200) == logging.INFO
+    for path in (
+        "/api/session/activity",
+        "/api/patch/summary",
+        "/api/patch/events",
+        "/api/patch/agents",
+        "/api/patch/runs",
+    ):
+        assert main.request_log_level(path, 200) == logging.DEBUG
+        assert main.request_log_level(path, 401) == logging.WARNING
+    assert main.request_log_level("/api/patch/start", 200) == logging.INFO
+    assert main.request_log_level("/api/patch/stop", 200) == logging.INFO
     assert main.request_log_level("/health", 500) == logging.ERROR
 
 
