@@ -177,6 +177,13 @@ body.shiftlight-fullscreen-open { overflow:hidden; }
 [data-theme="dark"] .shiftlight-empty p,
 [data-theme="dark"] .shiftlight-scope-note,
 [data-theme="dark"] .shiftlight-helper { color:#eef2f6; }
+html[data-theme="dark"] #shiftlight-root .shiftlight-message.assistant > .shiftlight-answer,
+html[data-theme="dark"] #shiftlight-root .shiftlight-message.assistant > .shiftlight-answer > p,
+html[data-theme="dark"] #shiftlight-root .shiftlight-message.assistant > .shiftlight-answer > ul,
+html[data-theme="dark"] #shiftlight-root .shiftlight-message.assistant > .shiftlight-answer > ol {
+    color:#eef2f6 !important;
+    background:transparent !important;
+}
 [data-theme="dark"] .shiftlight-message.user { color:#fff; background:#0b3b6b; }
 [data-theme="dark"] .shiftlight-answer code { color:#f4f7fa; background:#263d59; }
 [data-theme="dark"] .shiftlight-answer a,

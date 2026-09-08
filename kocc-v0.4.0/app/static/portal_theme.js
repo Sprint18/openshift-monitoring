@@ -10,7 +10,15 @@
         window.dispatchEvent(new CustomEvent("kocc:themechange", {detail:{theme:selected}}));
         return selected;
     };
-    window.KOCCTheme = {apply, current:() => normalize(localStorage.getItem(key))};
+    const statusClass = value => {
+        const status = String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (["healthy","ready","assigned","available","online","recovered","targetreached"].includes(status)) return "status-success";
+        if (["pending","podinitializing","containercreating","notready","progressing","stale","mixedversion","oldversion","partlyunknown"].includes(status)) return "status-warning";
+        if (["crashloopbackoff","imagepullbackoff","errimagepull","error","failed","critical","unavailable","degraded","regression"].includes(status)) return "status-danger";
+        if (["running","newresource","improving"].includes(status)) return "status-info";
+        return "status-neutral";
+    };
+    window.KOCCTheme = {apply, statusClass, current:() => normalize(localStorage.getItem(key))};
     apply(localStorage.getItem(key));
 
     const initializeAccountMenu = () => {

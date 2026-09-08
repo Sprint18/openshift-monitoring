@@ -491,6 +491,8 @@ def test_shiftlight_dark_theme_keeps_all_conversation_text_readable() -> None:
     assert "background:linear-gradient(#132237,#17263a) !important" in css
     assert '[data-theme="dark"] .shiftlight-composer > div span' in css
     assert '[data-theme="dark"] .shiftlight-history-empty' in css
+    assert 'html[data-theme="dark"] #shiftlight-root .shiftlight-message.assistant > .shiftlight-answer > p' in css
+    assert "background:transparent !important" in css
 
 
 def test_ai_template_new_chat_defaults_to_auto_scope() -> None:

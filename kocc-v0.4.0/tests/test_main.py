@@ -1183,6 +1183,27 @@ def test_dark_login_branding_and_status_colors_are_readable() -> None:
     assert '[data-theme="dark"] .status-pill.critical' in css
 
 
+def test_semantic_status_palette_covers_operational_states() -> None:
+    project = Path(__file__).parents[1]
+    css = (project / "app/static/portal_theme.css").read_text()
+    js = (project / "app/static/portal_theme.js").read_text()
+    for semantic in ("success", "warning", "danger", "info", "neutral"):
+        assert f"--status-{semantic}-bg" in css
+        assert f"--status-{semantic}-fg" in css
+        assert f".status-{semantic}" in css
+    for legacy in (
+        ".status-pill.pending", ".status-pill.podinitializing",
+        ".status-pill.imagepullbackoff", ".status-pill.crashloopbackoff",
+    ):
+        assert legacy in css
+    assert "const statusClass = value =>" in js
+    assert 'return "status-success"' in js
+    assert 'return "status-warning"' in js
+    assert 'return "status-danger"' in js
+    assert 'return "status-info"' in js
+    assert 'return "status-neutral"' in js
+
+
 @patch("app.main.ClusterCollector")
 @patch("app.main.new_cluster_client")
 def test_user_facing_overview_omits_portal_version(
