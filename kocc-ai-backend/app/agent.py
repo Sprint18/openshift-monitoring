@@ -123,6 +123,7 @@ class AgentResult:
     tool_calls: list[dict[str, str]]
     evidence_items: list[dict[str, Any] | EvidenceEnvelope] = field(default_factory=list)
     iterations: int = 0
+    focus_namespace: str | None = None
 
     @property
     def evidence(self) -> list[dict[str, Any]]:
@@ -421,6 +422,39 @@ def _tool_context(
     return prefix + _serialize_result(result, limit - len(prefix))
 
 
+def _selected_focus_namespace(
+    answer: str, candidates: tuple[str, ...],
+) -> str | None:
+    """Accept assistant focus only when it matches one bounded evidence candidate."""
+    normalized = answer.casefold()
+    matches = {
+        candidate for candidate in candidates[:10]
+        if re.search(rf"(?<![-a-z0-9.]){re.escape(candidate)}(?![-a-z0-9.])", normalized)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _guard_scheduler_inference(answer: str) -> str:
+    """Remove cluster-wide CPU exhaustion claims unsupported by scheduler text."""
+    normalized = answer.casefold()
+    if "insufficient cpu" not in normalized:
+        return answer
+    overclaim = re.compile(
+        r"[^\n.!?]*(?:tüm|tum|entire|whole)[^\n.!?]*cluster[^\n.!?]*"
+        r"(?:tüken|tuken|exhaust|lack cpu)[^\n.!?]*[.!?]?",
+        re.IGNORECASE,
+    )
+    guarded, count = overclaim.subn("", answer)
+    if count == 0:
+        return answer
+    correction = (
+        "Scheduler, bu podun scheduling kararını etkileyen nedenlerden biri olarak "
+        "`Insufficient cpu` bildirdi. Cluster genelinde CPU kapasitesinin tükendiği "
+        "sonucu için ek node/request/capacity kanıtı gerekir."
+    )
+    return guarded.strip() + "\n\n" + correction
+
+
 class AgentLoop:
     def __init__(
         self, settings: Settings, llm_client: LLMClient, mcp_client: MCPClient,
@@ -436,6 +470,8 @@ class AgentLoop:
     def run(
         self, message: str, semantic_history: list[SafeTurn] | None = None,
         investigation_context: str = "",
+        required_fresh_tool: tuple[str, dict[str, Any]] | None = None,
+        focus_candidates: tuple[str, ...] = (),
     ) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
         egress_intent = direct_identity is None and is_egressip_intent(message)
@@ -522,6 +558,34 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         evidence_audit: list[dict[str, Any] | EvidenceEnvelope] = []
         failed_calls: set[tuple[str, str]] = set()
 
+        if required_fresh_tool is not None:
+            required_name, required_arguments = required_fresh_tool
+            required_call = {
+                "id": "backend-required-fresh-evidence",
+                "type": "function",
+                "function": {
+                    "name": required_name,
+                    "arguments": json.dumps(required_arguments),
+                },
+            }
+            messages.append({
+                "role": "assistant", "content": None,
+                "tool_calls": [required_call],
+            })
+            tool_message, summary, facts = self._execute_call(
+                required_call, available_names, tool_schemas, failed_calls, None,
+            )
+            audit.append(summary)
+            if summary["status"] != "success":
+                return AgentResult(
+                    f"Güncel veri alınamadı; `{required_name}` araç çağrısı "
+                    "başarısız veya kullanılamıyor.", audit, [], 0,
+                )
+            messages.append(tool_message)
+            evidence_audit.append(self._tool_evidence(
+                required_name, required_arguments, facts,
+            ))
+
         if node_metrics:
             metrics_result, summary = self._call_backend_tool(
                 "nodes_top", {}, available_names, tool_schemas,
@@ -558,8 +622,11 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
                 return AgentResult(
-                    _guard_cluster_operator_answer(content, evidence_audit),
+                    _guard_scheduler_inference(
+                        _guard_cluster_operator_answer(content, evidence_audit)
+                    ),
                     audit, evidence_audit, iteration,
+                    _selected_focus_namespace(content, focus_candidates),
                 )
 
             messages.append({
@@ -625,6 +692,22 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     )
 
         raise AgentLimitReached("iteration_limit")
+
+    def _tool_evidence(
+        self, name: str, arguments: dict[str, Any], facts: dict[str, Any],
+    ) -> dict[str, Any] | EvidenceEnvelope:
+        if name in {"pods_list", "pods_list_in_namespace"} and "pod_count" in facts:
+            return EvidenceEnvelope.create(
+                cluster_id=self.target_cluster_id or "unspecified",
+                operation="inspect",
+                resource=EvidenceResource(
+                    api_version="v1", kind="Pod",
+                    namespace=arguments.get("namespace"),
+                ),
+                completeness="partial", facts=facts,
+                provenance={"tool": name},
+            )
+        return {"tool": name, "status": "success"}
 
     def _cluster_health_snapshot(
         self, available_names: set[str],

@@ -46,6 +46,7 @@ class ActiveInspection:
     total_restarts: int | None = None
     max_restart_count: int | None = None
     problematic_pod_names: tuple[str, ...] = ()
+    problematic_namespaces: tuple[str, ...] = ()
     observed_at: str = ""
 
     @classmethod
@@ -69,6 +70,11 @@ class ActiveInspection:
             name for item in names[:10]
             if (name := _safe_name(item)) is not None
         ) if isinstance(names, list) else ()
+        namespaces = value.get("problematic_namespaces")
+        safe_namespaces = tuple(dict.fromkeys(
+            name for item in namespaces[:10]
+            if (name := _safe_name(item)) is not None
+        )) if isinstance(namespaces, list) else ()
         return cls(
             inspection_type=inspection_type,
             resource_kind=resource_kind,
@@ -80,6 +86,7 @@ class ActiveInspection:
             total_restarts=_safe_count(value.get("total_restarts")),
             max_restart_count=_safe_count(value.get("max_restart_count")),
             problematic_pod_names=safe_names,
+            problematic_namespaces=safe_namespaces,
             observed_at=(
                 value["observed_at"][:40]
                 if isinstance(value.get("observed_at"), str) else ""
@@ -98,6 +105,7 @@ class ActiveInspection:
             "total_restarts": self.total_restarts,
             "max_restart_count": self.max_restart_count,
             "problematic_pod_names": list(self.problematic_pod_names),
+            "problematic_namespaces": list(self.problematic_namespaces),
             "observed_at": self.observed_at,
         }
 
@@ -118,6 +126,8 @@ class ConversationContext:
     active_inspection: ActiveInspection | None = None
     investigation_focus: str | None = None
     previous_operational_intent: str | None = None
+    pending_operational_intent: str | None = None
+    pending_operational_cluster_id: str | None = None
 
     @classmethod
     def from_payload(cls, value: Any) -> "ConversationContext":
@@ -134,6 +144,10 @@ class ConversationContext:
         operation = value.get("last_query_operation")
         last_operation = value.get("last_operation")
         filter_type = value.get("last_filter_type")
+        pending_cluster = value.get("pending_operational_cluster_id")
+        safe_pending_cluster = (
+            pending_cluster if pending_cluster in ALLOWED_CLUSTERS else None
+        )
         return cls(
             active_cluster_ids=safe_clusters,
             last_resource_kind="Namespace" if resource == "Namespace" else None,
@@ -172,6 +186,14 @@ class ConversationContext:
                     "inspect_pods", "inspect_events", "inspect_resource",
                 } else None
             ),
+            pending_operational_intent=(
+                value.get("pending_operational_intent")
+                if safe_pending_cluster is not None
+                and value.get("pending_operational_intent") in {
+                    "inspect_pods", "inspect_events",
+                } else None
+            ),
+            pending_operational_cluster_id=safe_pending_cluster,
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -197,6 +219,10 @@ class ConversationContext:
             payload["investigation_focus"] = self.investigation_focus
         if self.previous_operational_intent is not None:
             payload["previous_operational_intent"] = self.previous_operational_intent
+        if self.pending_operational_intent is not None:
+            payload["pending_operational_intent"] = self.pending_operational_intent
+        if self.pending_operational_cluster_id is not None:
+            payload["pending_operational_cluster_id"] = self.pending_operational_cluster_id
         return payload
 
     def without_pending_suggestion(self) -> "ConversationContext":
@@ -213,9 +239,16 @@ class ConversationContext:
             active_inspection=self.active_inspection,
             investigation_focus=self.investigation_focus,
             previous_operational_intent=self.previous_operational_intent,
+            pending_operational_intent=self.pending_operational_intent,
+            pending_operational_cluster_id=self.pending_operational_cluster_id,
         )
 
     def with_active_clusters(self, cluster_ids: tuple[str, ...]) -> "ConversationContext":
+        same_scope = set(cluster_ids) == set(self.active_cluster_ids)
+        keeps_investigation = same_scope or (
+            self.active_inspection is not None
+            and self.active_inspection.cluster_id in cluster_ids
+        )
         return ConversationContext(
             active_cluster_ids=cluster_ids,
             last_resource_kind=self.last_resource_kind,
@@ -234,8 +267,22 @@ class ConversationContext:
                 and self.active_inspection.cluster_id in cluster_ids
                 else None
             ),
-            investigation_focus=self.investigation_focus,
-            previous_operational_intent=self.previous_operational_intent,
+            investigation_focus=(
+                self.investigation_focus if keeps_investigation else None
+            ),
+            previous_operational_intent=(
+                self.previous_operational_intent if keeps_investigation else None
+            ),
+            pending_operational_intent=(
+                self.pending_operational_intent
+                if self.pending_operational_cluster_id in {None, *cluster_ids}
+                else None
+            ),
+            pending_operational_cluster_id=(
+                self.pending_operational_cluster_id
+                if self.pending_operational_cluster_id in {None, *cluster_ids}
+                else None
+            ),
         )
 
     def with_active_inspection(
@@ -256,6 +303,8 @@ class ConversationContext:
             active_inspection=inspection,
             investigation_focus=(inspection.namespace or self.investigation_focus),
             previous_operational_intent="inspect_pods",
+            pending_operational_intent=self.pending_operational_intent,
+            pending_operational_cluster_id=self.pending_operational_cluster_id,
         )
 
     def with_operational_focus(
@@ -280,6 +329,32 @@ class ConversationContext:
                     "inspect_pods", "inspect_events", "inspect_resource",
                 } else "inspect_resource"
             ),
+            pending_operational_intent=None,
+            pending_operational_cluster_id=None,
+        )
+
+    def with_pending_operational(
+        self, intent: str, cluster_id: str,
+    ) -> "ConversationContext":
+        if intent not in {"inspect_pods", "inspect_events"}:
+            return self
+        return ConversationContext(
+            active_cluster_ids=(cluster_id,),
+            last_resource_kind=self.last_resource_kind,
+            last_namespace=self.last_namespace,
+            last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
+            last_filter_type=self.last_filter_type,
+            last_filter_value=self.last_filter_value,
+            pending_suggestion_original=self.pending_suggestion_original,
+            pending_suggestion_name=self.pending_suggestion_name,
+            active_entity_kind=self.active_entity_kind,
+            active_entity_name=self.active_entity_name,
+            active_inspection=self.active_inspection,
+            investigation_focus=self.investigation_focus,
+            previous_operational_intent=self.previous_operational_intent,
+            pending_operational_intent=intent,
+            pending_operational_cluster_id=cluster_id,
         )
 
 
@@ -289,7 +364,8 @@ def _safe_name(value: Any) -> str | None:
     candidate = value.strip().casefold()
     return (
         candidate
-        if re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", candidate)
+        if len(candidate) <= 253
+        and re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", candidate)
         else None
     )
 
@@ -353,6 +429,7 @@ def has_active_investigation_reference(
     references = (
         "onun", "bunlar", "bunlarin", "oradaki", "orada", "bunun",
         "ilk baktigimiz", "az onceki", "ayni pod", "bu problem", "bu sorun",
+        "hala",
     )
     if any(reference in normalized for reference in references):
         return True
@@ -375,6 +452,31 @@ def has_unresolved_anaphora(message: str, context: ConversationContext) -> bool:
 def operational_focus_from_message(message: str) -> str | None:
     normalized = _normalize_message(message).strip(" ?.!'")
     return _safe_name(normalized) if " " not in normalized else None
+
+
+def namespace_followup_intent(message: str) -> str | None:
+    normalized = _normalize_message(message)
+    if "event" in normalized:
+        return "inspect_events"
+    if "hala" in normalized and any(term in normalized for term in (
+        "failing", "sorun", "problem", "hatali", "calisiyor", "durum",
+    )):
+        return "inspect_pods"
+    if "pod" in normalized and any(term in normalized for term in (
+        "bak", "kontrol", "durum", "nasil", "incele", "goster",
+    )):
+        return "inspect_pods"
+    if any(term in normalized for term in (
+        "durumuna bak", "health kontrol", "sagligini kontrol",
+    )):
+        return "inspect_pods"
+    return None
+
+
+def operational_request_message(intent: str, namespace: str) -> str:
+    if intent == "inspect_events":
+        return f"{namespace} namespace eventlerini güncel olarak kontrol et"
+    return f"{namespace} namespace podlarını güncel olarak kontrol et"
 
 
 def safe_conversation_summary(value: Any) -> str:

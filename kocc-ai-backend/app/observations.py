@@ -241,6 +241,7 @@ def deterministic_observation(
         total_restarts = 0
         max_restart_count = 0
         problematic_names: list[str] = []
+        problematic_namespaces: list[str] = []
         phase_counts: dict[str, int] = {}
         for item in items:
             if not isinstance(item, dict):
@@ -263,6 +264,17 @@ def deterministic_observation(
                 name = metadata.get("name") if isinstance(metadata, dict) else None
                 if isinstance(name, str) and name and len(problematic_names) < 10:
                     problematic_names.append(name)
+                namespace = (
+                    metadata.get("namespace") if isinstance(metadata, dict) else None
+                )
+                if (
+                    isinstance(namespace, str)
+                    and len(namespace) <= 63
+                    and re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", namespace)
+                    and namespace not in problematic_namespaces
+                    and len(problematic_namespaces) < 10
+                ):
+                    problematic_namespaces.append(namespace)
             pod_restarts = sum(
                 value for container in container_rows
                 if isinstance(container, dict)
@@ -278,6 +290,7 @@ def deterministic_observation(
             "total_restarts": total_restarts,
             "max_restart_count": max_restart_count,
             "problematic_pod_names": problematic_names,
+            "problematic_namespaces": problematic_namespaces,
             "phase_counts": phase_counts,
         })
     return facts
