@@ -17,6 +17,8 @@ MAX_HISTORY_TURNS = 24
 MAX_HISTORY_CHARS = 16000
 MAX_TURN_CHARS = 2000
 MAX_SUMMARY_CHARS = 1200
+MAX_OPERATIONAL_HISTORY_TURNS = 6
+MAX_OPERATIONAL_HISTORY_CHARS = 4000
 ALLOWED_CLUSTERS = frozenset({"kkbtest", "rmtest"})
 
 CONVERSATION_SYSTEM_PROMPT = """You are KKB ShiftLight AI, an OpenShift operations assistant.
@@ -114,6 +116,8 @@ class ConversationContext:
     active_entity_kind: str | None = None
     active_entity_name: str | None = None
     active_inspection: ActiveInspection | None = None
+    investigation_focus: str | None = None
+    previous_operational_intent: str | None = None
 
     @classmethod
     def from_payload(cls, value: Any) -> "ConversationContext":
@@ -161,10 +165,17 @@ class ConversationContext:
             active_inspection=ActiveInspection.from_payload(
                 value.get("active_inspection")
             ),
+            investigation_focus=_safe_name(value.get("investigation_focus")),
+            previous_operational_intent=(
+                value.get("previous_operational_intent")
+                if value.get("previous_operational_intent") in {
+                    "inspect_pods", "inspect_events", "inspect_resource",
+                } else None
+            ),
         )
 
     def public_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "active_cluster_ids": list(self.active_cluster_ids),
             "last_resource_kind": self.last_resource_kind,
             "last_namespace": self.last_namespace,
@@ -180,6 +191,13 @@ class ConversationContext:
                 self.active_inspection.public_dict() if self.active_inspection else None
             ),
         }
+        # Preserve the legacy wire shape until an operational investigation
+        # actually needs the new optional fields.
+        if self.investigation_focus is not None:
+            payload["investigation_focus"] = self.investigation_focus
+        if self.previous_operational_intent is not None:
+            payload["previous_operational_intent"] = self.previous_operational_intent
+        return payload
 
     def without_pending_suggestion(self) -> "ConversationContext":
         return ConversationContext(
@@ -193,6 +211,8 @@ class ConversationContext:
             active_entity_kind=self.active_entity_kind,
             active_entity_name=self.active_entity_name,
             active_inspection=self.active_inspection,
+            investigation_focus=self.investigation_focus,
+            previous_operational_intent=self.previous_operational_intent,
         )
 
     def with_active_clusters(self, cluster_ids: tuple[str, ...]) -> "ConversationContext":
@@ -214,6 +234,8 @@ class ConversationContext:
                 and self.active_inspection.cluster_id in cluster_ids
                 else None
             ),
+            investigation_focus=self.investigation_focus,
+            previous_operational_intent=self.previous_operational_intent,
         )
 
     def with_active_inspection(
@@ -232,6 +254,32 @@ class ConversationContext:
             active_entity_kind=self.active_entity_kind,
             active_entity_name=self.active_entity_name,
             active_inspection=inspection,
+            investigation_focus=(inspection.namespace or self.investigation_focus),
+            previous_operational_intent="inspect_pods",
+        )
+
+    def with_operational_focus(
+        self, focus: str | None, intent: str,
+    ) -> "ConversationContext":
+        return ConversationContext(
+            active_cluster_ids=self.active_cluster_ids,
+            last_resource_kind=self.last_resource_kind,
+            last_namespace=self.last_namespace,
+            last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
+            last_filter_type=self.last_filter_type,
+            last_filter_value=self.last_filter_value,
+            pending_suggestion_original=self.pending_suggestion_original,
+            pending_suggestion_name=self.pending_suggestion_name,
+            active_entity_kind=self.active_entity_kind,
+            active_entity_name=self.active_entity_name,
+            active_inspection=self.active_inspection,
+            investigation_focus=_safe_name(focus) or self.investigation_focus,
+            previous_operational_intent=(
+                intent if intent in {
+                    "inspect_pods", "inspect_events", "inspect_resource",
+                } else "inspect_resource"
+            ),
         )
 
 
@@ -281,6 +329,52 @@ def bounded_history(value: Any) -> list[SafeTurn]:
         remaining -= len(clean)
         accepted.append(SafeTurn(item["role"], clean))
     return list(reversed(accepted))
+
+
+def operational_history(history: list[SafeTurn]) -> list[SafeTurn]:
+    """Return compact semantic context; never live evidence or raw tool output."""
+    accepted: list[SafeTurn] = []
+    remaining = MAX_OPERATIONAL_HISTORY_CHARS
+    for turn in reversed(history[-MAX_OPERATIONAL_HISTORY_TURNS:]):
+        if remaining <= 0:
+            break
+        content = turn.content[:remaining]
+        remaining -= len(content)
+        accepted.append(SafeTurn(turn.role, content))
+    return list(reversed(accepted))
+
+
+def has_active_investigation_reference(
+    message: str, context: ConversationContext,
+) -> bool:
+    if context.active_inspection is None:
+        return False
+    normalized = _normalize_message(message)
+    references = (
+        "onun", "bunlar", "bunlarin", "oradaki", "orada", "bunun",
+        "ilk baktigimiz", "az onceki", "ayni pod", "bu problem", "bu sorun",
+    )
+    if any(reference in normalized for reference in references):
+        return True
+    # A single DNS-like answer can resolve an ongoing operational clarification;
+    # without an active investigation the same word remains ordinary conversation.
+    tokens = normalized.strip(" ?.!'").split()
+    return len(tokens) == 1 and _safe_name(tokens[0]) is not None
+
+
+def has_unresolved_anaphora(message: str, context: ConversationContext) -> bool:
+    if context.active_entity_name or context.active_inspection:
+        return False
+    normalized = _normalize_message(message)
+    return any(reference in normalized for reference in (
+        "onun", "bunun", "bunlarin", "oradaki", "ilk baktigimiz",
+        "az onceki sorun", "ayni pod", "bu problem",
+    ))
+
+
+def operational_focus_from_message(message: str) -> str | None:
+    normalized = _normalize_message(message).strip(" ?.!'")
+    return _safe_name(normalized) if " " not in normalized else None
 
 
 def safe_conversation_summary(value: Any) -> str:

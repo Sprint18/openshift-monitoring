@@ -24,7 +24,10 @@ from app.conversation import (
     context_for_namespace_result, contextual_namespace_query,
     contextual_entity_message, conversational_response,
     namespace_query_from_context, namespace_query_message,
-    render_active_inspection, render_namespace_answer, safe_conversation_summary,
+    has_active_investigation_reference, has_unresolved_anaphora,
+    operational_focus_from_message,
+    operational_history, render_active_inspection, render_namespace_answer,
+    safe_conversation_summary,
 )
 from app.evidence import EvidenceEnvelope
 from app.llm_client import LLMClient, LLMUnavailable
@@ -201,6 +204,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         grounding_required = has_operational_reference(
             payload.message, conversation_context
         )
+        investigation_followup = has_active_investigation_reference(
+            payload.message, conversation_context
+        )
+        grounding_required = grounding_required or investigation_followup
+        unresolved_anaphora = has_unresolved_anaphora(
+            payload.message, conversation_context
+        )
         classification = classify_conversation(payload.message)
         nlu_intent: StructuredIntent | None = None
         if (
@@ -238,6 +248,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "intent_resolution source=deterministic mode=%s scope_level=%s confidence=high",
                 deterministic_intent.mode, deterministic_intent.scope_level,
             )
+        if (
+            unresolved_anaphora
+            and interpreted_namespace_query is None
+            and forced_namespace_query is None
+            and forced_entity_message is None
+        ):
+            return JSONResponse({
+                "answer": "Hangi kaynağı kastettiğini netleştirir misin?",
+                "clusters": [], "tool_calls": [], "evidence": [],
+                "conversation_context": conversation_context.public_dict(),
+            })
         accepted_suggestion = False
         confirmation = confirmation_value(payload.message)
         if conversation_context.pending_suggestion_name and confirmation is not None:
@@ -339,6 +360,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         elif (
             (forced_namespace_query is not None or forced_entity_message is not None
              or interpreted_namespace_query is not None
+             or investigation_followup
              or (deterministic_intent is not None
                  and deterministic_intent.scope_level in {"cluster", "node", "workload"}))
             and conversation_context.active_cluster_ids
@@ -499,12 +521,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     result = replace(result, answer=synthesized_answer)
                 else:
                     _, mcp_client = mcp_for(cluster_id)
-                    result = AgentLoop(
+                    agent_loop = AgentLoop(
                         configuration, application.state.llm_client, mcp_client,
                         selected.id, selected.name,
-                    ).run(
+                    )
+                    agent_message = (
                         namespace_query_message(namespace_query)
                         if namespace_query is not None else operational_message
+                    )
+                    semantic_history = operational_history(history)
+                    active_investigation_context = (
+                        "cluster=" + selected.id
+                        + (f"; focus={conversation_context.investigation_focus}"
+                           if conversation_context.investigation_focus else "")
+                        + (f"; namespace={conversation_context.active_inspection.namespace}"
+                           if conversation_context.active_inspection
+                           and conversation_context.active_inspection.namespace else "")
+                        + (f"; previous_intent={conversation_context.previous_operational_intent}"
+                           if conversation_context.previous_operational_intent else "")
+                    ) if (
+                        semantic_history or conversation_context.active_inspection
+                        or conversation_context.investigation_focus
+                    ) else ""
+                    result = (
+                        agent_loop.run(
+                            agent_message,
+                            semantic_history=semantic_history,
+                            investigation_context=active_investigation_context,
+                        )
+                        if semantic_history or active_investigation_context
+                        else agent_loop.run(agent_message)
                     )
                     next_context = (
                         context_for_namespace_result(
@@ -513,6 +559,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ) if namespace_query is not None
                         else conversation_context.with_active_clusters((selected.id,))
                     )
+                    if conversation_context.active_inspection or investigation_followup:
+                        normalized_operational = payload.message.casefold()
+                        next_context = next_context.with_operational_focus(
+                            operational_focus_from_message(payload.message),
+                            "inspect_events" if "event" in normalized_operational
+                            else "inspect_pods" if "pod" in normalized_operational
+                            else "inspect_resource",
+                        )
                     for item in result.evidence_items:
                         if (
                             isinstance(item, EvidenceEnvelope)

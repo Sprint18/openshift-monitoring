@@ -208,7 +208,10 @@ def has_operational_reference(message: str, context: ConversationContext) -> boo
         "burada", "buradaki", "durumu ne", "ne durumda", "az onceki",
     )
     possible_name = any("-" in token and _safe_name(token.strip("'.,?!")) for token in normalized.split())
-    contextual = bool(context.active_entity_name or context.last_resource_kind)
+    contextual = bool(
+        context.active_entity_name or context.last_resource_kind
+        or context.active_inspection or context.investigation_focus
+    )
     return (
         any(term in normalized for term in resource_terms)
         or possible_name
@@ -263,6 +266,14 @@ def interpret_intent(
             "type": context.last_filter_type,
             "value": context.last_filter_value,
             "operation": context.last_operation,
+        },
+        "active_investigation": {
+            "focus": context.investigation_focus,
+            "intent": context.previous_operational_intent,
+            "namespace": (
+                context.active_inspection.namespace
+                if context.active_inspection else None
+            ),
         },
     }
     try:
