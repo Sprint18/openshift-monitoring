@@ -59,6 +59,19 @@ describe an observed Progressing or Degraded condition as temporary,
 non-critical, harmless, or safe unless direct evidence explicitly supports that
 interpretation. State only the observed condition when severity or duration is
 unknown.
+Pod age is creation age, never outage duration. Restart count indicates
+instability, not continuous unavailability. A failing pod does not prove its
+whole Service or application is down without replica, readiness, and endpoint
+evidence. Namespace names such as lab, uat, or prod do not prove business
+criticality or user impact. Never guarantee that an observability component
+cannot affect application traffic. Separate correlation from causation: label a
+plausible relationship as "Yorum:" unless direct evidence explicitly connects
+the conditions. An explicit registry "manifest unknown" error supports only
+that the requested manifest or tag was not found; it does not by itself exclude
+network or authentication involvement.
+For comparative priority questions, name the criterion (for example technical
+failure severity or observed scope) and label the resulting judgment as
+"Yorum:". Do not present business criticality as an observed cluster fact.
 Use the minimum tools necessary for the user's exact question. Once successful
 evidence is sufficient, answer without broadening scope to unrelated events,
 pods, nodes, namespaces, or general health checks unless the user requested them.
@@ -507,6 +520,61 @@ def _guard_scheduler_inference(
     return guarded.strip() + "\n\n" + correction
 
 
+def _guard_operational_claims(answer: str) -> str:
+    """Downgrade common unsupported operational claims without hiding evidence."""
+    guarded = re.sub(
+        r"\b(\d+)\s*(?:gün|gun|day)s?dür\s*"
+        r"(?:down|kapalı|kapali|çalışmıyor|calismiyor|kesinti(?:\s+var)?)\b",
+        lambda match: (
+            f"Pod {match.group(1)} günlük ve mevcut incelemede problemli durumda"
+        ),
+        answer, flags=re.IGNORECASE,
+    )
+    guarded = re.sub(
+        r"\b(?:tüm|tum|whole|entire)\s+(?:servis|service|uygulama|application)\s+"
+        r"(?:tamamen\s+)?(?:down|kapalı|kapali|kullanılamaz|kullanilamaz)\b"
+        r"|\b(?:servis|service|uygulama|application)\s+(?:tamamen\s+)?"
+        r"(?:down|kapalı|kapali|kullanılamaz|kullanilamaz)\b",
+        "Bu pod hazır değil; servis etkisi mevcut araçlarla doğrulanamadı",
+        guarded, flags=re.IGNORECASE,
+    )
+    guarded = re.sub(
+        r"Dynatrace[^\n.!?]*(?:uygulama|application)[^\n.!?]*"
+        r"(?:trafiğini|trafigini|traffic)[^\n.!?]*(?:etkilemiyor|etkilemez|"
+        r"does not affect|cannot affect)[^\n.!?]*[.!?]?",
+        "Doğrudan uygulama trafik etkisi mevcut kanıtla doğrulanmadı.",
+        guarded, flags=re.IGNORECASE,
+    )
+    guarded = re.sub(
+        r"[^\n.!?]*\b(?:lab|uat|prod)-[-a-z0-9]+\b[^\n.!?]*"
+        r"(?:iş etkisi|is etkisi|business impact|iş kritik|is kritik|"
+        r"business critical)[^\n.!?]*[.!?]?",
+        "Namespace adı tek başına iş etkisini doğrulamaz.",
+        guarded, flags=re.IGNORECASE,
+    )
+    guarded = re.sub(
+        r"[^\n.!?]*(?:tek|single)\s+(?:düzeltme|duzeltme|fix)[^\n.!?]*"
+        r"(?:ikisini|both)[^\n.!?]*(?:toparlar|düzeltir|duzeltir|fix)[^\n.!?]*[.!?]?",
+        "Yorum: Aynı düzeltmenin iki sorunu da gidereceği mevcut kanıtla "
+        "doğrulanmadı.",
+        guarded, flags=re.IGNORECASE,
+    )
+    causal = re.compile(
+        r"(?P<sentence>[^\n.!?]*(?:buna bağımlı olduğu için|"
+        r"buna bagimli oldugu icin|nedeni(?:dir)?|sebebi(?:dir)?|"
+        r"root cause|caused by)[^\n.!?]*[.!?]?)",
+        re.IGNORECASE,
+    )
+
+    def qualify_causal(match: re.Match[str]) -> str:
+        sentence = match.group("sentence").strip()
+        if sentence.casefold().startswith(("yorum:", "inference:")):
+            return match.group("sentence")
+        return " Yorum: " + sentence
+
+    return causal.sub(qualify_causal, guarded).strip()
+
+
 class AgentLoop:
     def __init__(
         self, settings: Settings, llm_client: LLMClient, mcp_client: MCPClient,
@@ -696,9 +764,11 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                         selected_focus or "none", focus_reason,
                     )
                 return AgentResult(
-                    _guard_scheduler_inference(
-                        _guard_cluster_operator_answer(content, evidence_audit),
-                        evidence_audit,
+                    _guard_operational_claims(
+                        _guard_scheduler_inference(
+                            _guard_cluster_operator_answer(content, evidence_audit),
+                            evidence_audit,
+                        )
                     ),
                     audit, evidence_audit, iteration, selected_focus,
                 )
