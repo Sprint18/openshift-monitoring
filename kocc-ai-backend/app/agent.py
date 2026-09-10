@@ -105,6 +105,7 @@ FORBIDDEN_ARGUMENT_KEYS = frozenset({
     "cluster", "context", "kubeconfig", "apiserver", "mcp_url"
 })
 TRUNCATION_MARKER = "\n\n[tool output truncated by KOCC]"
+FOCUS_MARKER_PREFIX = "KOCC_SELECTED_FOCUS"
 PUBLIC_FACT_KEYS = frozenset({
     "resource_count",
     "degraded_true_count",
@@ -422,16 +423,41 @@ def _tool_context(
     return prefix + _serialize_result(result, limit - len(prefix))
 
 
-def _selected_focus_namespace(
+def _focus_selection_contract(candidates: tuple[str, ...]) -> str:
+    bounded = ", ".join(candidates[:10])
+    return (
+        "\nFOCUS SELECTION CONTRACT: This is a comparison/triage turn. Use only "
+        f"these evidence-derived namespace candidates: {bounded}. If you safely "
+        "select exactly one namespace for the next investigation, append exactly "
+        "one private marker on its own final line in the form "
+        "[[KOCC_SELECTED_FOCUS:namespace]]. Otherwise append no marker. The prose "
+        "may compare every candidate, but the marker must contain only the single "
+        "selected candidate. Never expose or explain the marker."
+    )
+
+
+def _structured_focus_selection(
     answer: str, candidates: tuple[str, ...],
-) -> str | None:
-    """Accept assistant focus only when it matches one bounded evidence candidate."""
-    normalized = answer.casefold()
-    matches = {
-        candidate for candidate in candidates[:10]
-        if re.search(rf"(?<![-a-z0-9.]){re.escape(candidate)}(?![-a-z0-9.])", normalized)
-    }
-    return next(iter(matches)) if len(matches) == 1 else None
+) -> tuple[str, str | None, str]:
+    """Extract one explicit internal focus marker and validate it against evidence."""
+    strict = re.compile(
+        rf"\[\[{FOCUS_MARKER_PREFIX}:([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\]\]",
+        re.IGNORECASE,
+    )
+    selections = strict.findall(answer)
+    visible_answer = re.sub(
+        rf"\[\[{FOCUS_MARKER_PREFIX}:[^\r\n]*(?:\]\]|$)", "", answer,
+        flags=re.IGNORECASE,
+    ).strip()
+    if len(selections) != 1:
+        return visible_answer, None, (
+            "absent" if not selections else "multiple"
+        )
+    candidate_map = {item.casefold(): item for item in candidates[:10]}
+    selected = candidate_map.get(selections[0].casefold())
+    if selected is None:
+        return visible_answer, None, "not_in_candidates"
+    return visible_answer, selected, "validated"
 
 
 def _guard_scheduler_inference(
@@ -488,6 +514,7 @@ class AgentLoop:
         investigation_context: str = "",
         required_fresh_tool: tuple[str, dict[str, Any]] | None = None,
         focus_candidates: tuple[str, ...] = (),
+        focus_selection_requested: bool = False,
     ) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
         egress_intent = direct_identity is None and is_egressip_intent(message)
@@ -497,7 +524,9 @@ class AgentLoop:
             and _general_health_intent(message)
         )
         node_metrics = direct_identity is None and _node_metrics_intent(message)
-        available_tools = openai_tools(self.mcp.list_tools())
+        available_tools = (
+            [] if focus_selection_requested else openai_tools(self.mcp.list_tools())
+        )
         if direct_identity is not None:
             available_tools = [
                 item for item in available_tools
@@ -573,12 +602,13 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         audit: list[dict[str, str]] = []
         evidence_audit: list[dict[str, Any] | EvidenceEnvelope] = []
         failed_calls: set[tuple[str, str]] = set()
-        if focus_candidates:
+        if focus_selection_requested:
             logger.info(
-                "investigation_focus candidates=%s cluster_id=%s",
-                ",".join(focus_candidates[:10]),
-                self.target_cluster_id or "unspecified",
+                "analysis_focus candidates=%s cluster_id=%s",
+                len(focus_candidates[:10]), self.target_cluster_id or "unspecified",
             )
+        if focus_selection_requested and focus_candidates:
+            messages[0]["content"] += _focus_selection_contract(focus_candidates)
 
         if required_fresh_tool is not None:
             required_name, required_arguments = required_fresh_tool
@@ -647,13 +677,22 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
+                selected_focus = None
+                focus_reason = "not_requested"
+                if focus_selection_requested:
+                    content, selected_focus, focus_reason = _structured_focus_selection(
+                        content, focus_candidates,
+                    )
+                    logger.info(
+                        "analysis_focus selected=%s reason=%s",
+                        selected_focus or "none", focus_reason,
+                    )
                 return AgentResult(
                     _guard_scheduler_inference(
                         _guard_cluster_operator_answer(content, evidence_audit),
                         evidence_audit,
                     ),
-                    audit, evidence_audit, iteration,
-                    _selected_focus_namespace(content, focus_candidates),
+                    audit, evidence_audit, iteration, selected_focus,
                 )
 
             messages.append({

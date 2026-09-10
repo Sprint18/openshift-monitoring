@@ -27,7 +27,8 @@ from app.conversation import (
     has_active_investigation_reference, has_unresolved_anaphora,
     has_operational_analysis_followup, namespace_followup_intent,
     operational_focus_from_message,
-    operational_history, operational_request_message, render_active_inspection,
+    operational_history, operational_request_message, references_selected_focus,
+    render_active_inspection,
     render_namespace_answer,
     safe_conversation_summary,
 )
@@ -201,6 +202,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         required_fresh_intent: str | None = None
         required_fresh_namespace: str | None = None
         pending_focus = operational_focus_from_message(payload.message)
+        if (
+            pending_focus is None
+            and conversation_context.investigation_focus
+            and references_selected_focus(payload.message)
+        ):
+            pending_focus = conversation_context.investigation_focus
         pending_candidates = (
             conversation_context.active_inspection.problematic_namespaces
             if conversation_context.active_inspection else ()
@@ -268,6 +275,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 required_fresh_namespace = known_namespace
                 forced_entity_message = operational_request_message(
                     followup_intent, known_namespace
+                )
+                logger.info(
+                    "operational_reference resolved_namespace=%s source=investigation_focus",
+                    known_namespace,
                 )
             elif len(conversation_context.active_cluster_ids) == 1:
                 pending = conversation_context.with_pending_operational(
@@ -656,6 +667,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 agent_context.active_inspection.problematic_namespaces
                                 if agent_context.active_inspection else ()
                             ),
+                            focus_selection_requested=analysis_followup,
                         )
                         if semantic_history or active_investigation_context
                         else agent_loop.run(agent_message)

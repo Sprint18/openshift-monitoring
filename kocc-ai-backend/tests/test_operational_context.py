@@ -37,7 +37,10 @@ def history() -> list[dict[str, str]]:
     ]
 
 
-def pod_evidence(*, namespace: str | None = None) -> EvidenceEnvelope:
+def pod_evidence(
+    *, namespace: str | None = None,
+    problematic_namespaces: list[str] | None = None,
+) -> EvidenceEnvelope:
     return EvidenceEnvelope.create(
         cluster_id="kkbtest", operation="inspect",
         resource=EvidenceResource(
@@ -47,7 +50,9 @@ def pod_evidence(*, namespace: str | None = None) -> EvidenceEnvelope:
         facts={
             "pod_count": 2, "ready_count": 0, "non_ready_count": 2,
             "problematic_pod_names": ["oneagent-a", "csi-b"],
-            "problematic_namespaces": ["dynatrace", "application-a"],
+            "problematic_namespaces": problematic_namespaces or [
+                "dynatrace", "application-a",
+            ],
         },
         provenance={"tool": (
             "pods_list_in_namespace" if namespace else "pods_list"
@@ -61,14 +66,22 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
     mcp_class: Mock, agent_class: Mock,
 ) -> None:
     agent_class.return_value.run.side_effect = [
-        AgentResult("Sorunlu podlar", [], [pod_evidence()]),
+        AgentResult("Sorunlu podlar", [], [pod_evidence(
+            problematic_namespaces=["lab-sdlc", "dynatrace", "mw-test2"],
+        )]),
         AgentResult(
-            "Dynatrace en kritik sorun.", [], [], 1, "dynatrace",
+            "En kritik Dynatrace. lab-sdlc ve mw-test2 daha düşük öncelikli.",
+            [], [], 1, "dynatrace",
         ),
         AgentResult(
             "Güncel Dynatrace podları", [{
                 "name": "pods_list_in_namespace", "status": "success",
             }], [pod_evidence(namespace="dynatrace")],
+        ),
+        AgentResult(
+            "Güncel Dynatrace eventleri", [{
+                "name": "events_list", "status": "success",
+            }], [{"tool": "events_list", "status": "success"}],
         ),
     ]
     client = TestClient(create_app(settings(token="token")))
@@ -84,8 +97,9 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
     second_call = agent_class.return_value.run.call_args_list[1]
     assert second_call.kwargs["required_fresh_tool"] is None
     assert second_call.kwargs["focus_candidates"] == (
-        "dynatrace", "application-a",
+        "lab-sdlc", "dynatrace", "mw-test2",
     )
+    assert second_call.kwargs["focus_selection_requested"] is True
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
         "recent_turns": history(),
@@ -96,6 +110,16 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
     assert third.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
     assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
         "pods_list_in_namespace", {"namespace": "dynatrace"},
+    )
+    fourth = client.post("/api/v1/chat", json={
+        "message": "ilk baktığımız problemle ilişkili olabilecek eventleri kontrol et",
+        "recent_turns": history(),
+        "conversation_context": third.json()["conversation_context"],
+    })
+    assert fourth.status_code == 200
+    assert fourth.json()["evidence"][0]["tool"] == "events_list"
+    assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
+        "events_list", {"namespace": "dynatrace"},
     )
 
 
@@ -176,6 +200,28 @@ def test_short_operational_clarification_uses_only_its_conversation(
     assert fresh.status_code == 200
     assert fresh.json()["clusters"] == []
     assert agent_class.return_value.run.call_count == 1
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_pending_reference_to_structured_focus_resolves_without_guessing(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult("fresh", [], [])
+    pending = investigation_context(focus="dynatrace").with_pending_operational(
+        "inspect_pods", "kkbtest",
+    )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={
+            "message": "az önce en kritik dediğin",
+            "conversation_context": pending.public_dict(),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["conversation_context"]["investigation_focus"] == "dynatrace"
+    assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
+        "pods_list_in_namespace", {"namespace": "dynatrace"},
+    )
 
 
 def test_ambiguous_anaphora_without_context_asks_for_resource() -> None:
@@ -293,21 +339,37 @@ def test_pending_namespace_rejects_identifier_outside_bounded_candidates() -> No
 
 def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
     llm = FakeLLM([{
-        "content": "Dynatrace en kritik adaydır.", "tool_calls": None,
+        "content": (
+            "Dynatrace en kritik adaydır; app-team ile karşılaştırıldı.\n"
+            "[[KOCC_SELECTED_FOCUS:dynatrace]]"
+        ), "tool_calls": None,
     }])
     mcp = FakeMCP()
     result = AgentLoop(configured(), llm, mcp).run(
         "bunlar içinde en kritik olan hangisi?",
         focus_candidates=("dynatrace", "app-team"),
+        focus_selection_requested=True,
     )
     assert result.focus_namespace == "dynatrace"
+    assert "KOCC_SELECTED_FOCUS" not in result.answer
+    assert "app-team" in result.answer
 
-    ambiguous = AgentLoop(configured(), FakeLLM([{
-        "content": "Dynatrace ve app-team incelenmeli.", "tool_calls": None,
-    }]), FakeMCP()).run(
-        "hangisi?", focus_candidates=("dynatrace", "app-team"),
+    invalid_answers = (
+        "Dynatrace en kritik, app-team de incelendi.",
+        "Seçim. [[KOCC_SELECTED_FOCUS:made-up-prod]]",
+        "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace]] "
+        "[[KOCC_SELECTED_FOCUS:app-team]]",
+        "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace",
     )
-    assert ambiguous.focus_namespace is None
+    for answer in invalid_answers:
+        invalid = AgentLoop(configured(), FakeLLM([{
+            "content": answer, "tool_calls": None,
+        }]), FakeMCP()).run(
+            "hangisi?", focus_candidates=("dynatrace", "app-team"),
+            focus_selection_requested=True,
+        )
+        assert invalid.focus_namespace is None
+        assert "KOCC_SELECTED_FOCUS" not in invalid.answer
 
 
 @patch("app.main.MCPClient")
@@ -317,7 +379,10 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     mcp = FakeMCP()
     mcp_class.return_value = mcp
     llm = FakeLLM([{
-        "content": "İncelenen adaylar içinde Dynatrace en kritik görünüyor.",
+        "content": (
+            "En kritik Dynatrace; lab-sdlc ve mw-test2 ile karşılaştırıldı.\n"
+            "[[KOCC_SELECTED_FOCUS:dynatrace]]"
+        ),
         "tool_calls": None,
     }])
     llm.is_configured = lambda: True
@@ -338,6 +403,8 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     assert response.status_code == 200
     assert response.json()["conversation_context"]["investigation_focus"] == "dynatrace"
     assert mcp.calls == []
+    assert mcp.list_count == 0
+    assert "KOCC_SELECTED_FOCUS" not in response.json()["answer"]
 
 
 def test_required_fresh_tool_failure_does_not_reuse_history() -> None:

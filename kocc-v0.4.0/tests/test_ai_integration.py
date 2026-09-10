@@ -99,7 +99,7 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
             "pod_count": 2, "ready_count": 0, "non_ready_count": 2,
             "total_restarts": 252, "max_restart_count": 237,
             "problematic_pod_names": ["pod-a", "pod-b"],
-            "problematic_namespaces": ["dynatrace", "uat-zauh"],
+            "problematic_namespaces": ["lab-sdlc", "dynatrace", "mw-test2"],
             "observed_at": "2026-09-03T10:00:00+00:00",
         },
     }
@@ -115,6 +115,10 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
     })
     assert response.status_code == 200
     assert response.json()["conversation_context"] == context
+    assert response.json()["conversation_context"]["investigation_focus"] == "dynatrace"
+    assert response.json()["conversation_context"]["active_inspection"][
+        "problematic_namespaces"
+    ] == ["lab-sdlc", "dynatrace", "mw-test2"]
     assert ai_client.chat.call_args.kwargs["conversation_context"] == context
     assert ai_client.chat.call_args.kwargs["recent_turns"] == [
         {"role": "user", "content": "önceki soru"}

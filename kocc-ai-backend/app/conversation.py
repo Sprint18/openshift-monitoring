@@ -489,6 +489,14 @@ def operational_focus_from_message(message: str) -> str | None:
     return _safe_name(normalized) if " " not in normalized else None
 
 
+def references_selected_focus(message: str) -> bool:
+    normalized = _normalize_message(message)
+    return any(reference in normalized for reference in (
+        "en kritik olarak degerlendirdigin", "az once en kritik dedigin",
+        "the one you considered most critical",
+    ))
+
+
 def namespace_followup_intent(message: str) -> str | None:
     normalized = _normalize_message(message)
     if "event" in normalized:
