@@ -434,17 +434,33 @@ def _selected_focus_namespace(
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-def _guard_scheduler_inference(answer: str) -> str:
+def _guard_scheduler_inference(
+    answer: str, evidence: list[dict[str, Any] | EvidenceEnvelope],
+) -> str:
     """Remove cluster-wide CPU exhaustion claims unsupported by scheduler text."""
     normalized = answer.casefold()
     if "insufficient cpu" not in normalized:
         return answer
-    overclaim = re.compile(
+    supporting_tools = {
+        item.get("tool") if isinstance(item, dict) else item.provenance.get("tool")
+        for item in evidence
+    }
+    if supporting_tools & {
+        "nodes_top", "nodes_stats_summary", "pods_get", "resources_get",
+    }:
+        return answer
+    unsafe_claim = re.compile(
         r"[^\n.!?]*(?:tüm|tum|entire|whole)[^\n.!?]*cluster[^\n.!?]*"
-        r"(?:tüken|tuken|exhaust|lack cpu)[^\n.!?]*[.!?]?",
+        r"(?:tüken|tuken|exhaust|lack cpu)[^\n.!?]*[.!?]?"
+        r"|[^\n.!?]*cluster[^\n.!?]*cpu[^\n.!?]*(?:tüken|tuken|exhaust)"
+        r"[^\n.!?]*[.!?]?"
+        r"|[^\n.!?]*(?:cpu[^\n.!?]*(?:iste|request)[^\n.!?]*"
+        r"(?:düşür|dusur|azalt|lower|reduce)"
+        r"|node[^\n.!?]*(?:kapasite|capacity)[^\n.!?]*"
+        r"(?:ekle|artır|arttir|add|increase))[^\n.!?]*[.!?]?",
         re.IGNORECASE,
     )
-    guarded, count = overclaim.subn("", answer)
+    guarded, count = unsafe_claim.subn("", answer)
     if count == 0:
         return answer
     correction = (
@@ -557,9 +573,19 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         audit: list[dict[str, str]] = []
         evidence_audit: list[dict[str, Any] | EvidenceEnvelope] = []
         failed_calls: set[tuple[str, str]] = set()
+        if focus_candidates:
+            logger.info(
+                "investigation_focus candidates=%s cluster_id=%s",
+                ",".join(focus_candidates[:10]),
+                self.target_cluster_id or "unspecified",
+            )
 
         if required_fresh_tool is not None:
             required_name, required_arguments = required_fresh_tool
+            logger.info(
+                "required_fresh_tool action=attempt cluster_id=%s tool=%s",
+                self.target_cluster_id or "unspecified", required_name,
+            )
             required_call = {
                 "id": "backend-required-fresh-evidence",
                 "type": "function",
@@ -623,7 +649,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     raise LLMUnavailable("LLM returned an invalid response")
                 return AgentResult(
                     _guard_scheduler_inference(
-                        _guard_cluster_operator_answer(content, evidence_audit)
+                        _guard_cluster_operator_answer(content, evidence_audit),
+                        evidence_audit,
                     ),
                     audit, evidence_audit, iteration,
                     _selected_focus_namespace(content, focus_candidates),

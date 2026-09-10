@@ -263,7 +263,9 @@ class AIBackendClient:
             "last_resource_kind", "last_namespace", "last_query_operation",
             "last_operation", "last_filter_type", "last_filter_value",
             "pending_suggestion_original", "pending_suggestion_name",
-            "active_entity_kind", "active_entity_name",
+            "active_entity_kind", "active_entity_name", "investigation_focus",
+            "previous_operational_intent", "pending_operational_intent",
+            "pending_operational_cluster_id",
         ):
             item = value.get(key)
             if isinstance(item, str) and len(item) <= 100:
@@ -289,6 +291,12 @@ class AIBackendClient:
             if isinstance(names, list):
                 safe_inspection["problematic_pod_names"] = [
                     item[:253] for item in names[:10]
+                    if isinstance(item, str)
+                ]
+            namespaces = inspection.get("problematic_namespaces")
+            if isinstance(namespaces, list):
+                safe_inspection["problematic_namespaces"] = [
+                    item[:63] for item in namespaces[:10]
                     if isinstance(item, str)
                 ]
             if safe_inspection:

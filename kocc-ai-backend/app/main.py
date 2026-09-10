@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AgentLimitReached, AgentLoop, can_run_without_llm
-from app.classification import classify_conversation
+from app.classification import ConversationClassification, classify_conversation
 from app.clusters import (
     ClusterScope, UnknownClusterError, cluster_registry,
     conversation_scope_selection, resolve_cluster_request, selected_cluster,
@@ -25,7 +25,8 @@ from app.conversation import (
     contextual_entity_message, conversational_response,
     namespace_query_from_context, namespace_query_message,
     has_active_investigation_reference, has_unresolved_anaphora,
-    namespace_followup_intent, operational_focus_from_message,
+    has_operational_analysis_followup, namespace_followup_intent,
+    operational_focus_from_message,
     operational_history, operational_request_message, render_active_inspection,
     render_namespace_answer,
     safe_conversation_summary,
@@ -188,6 +189,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conversation_context = ConversationContext.from_payload(
             payload.conversation_context
         )
+        resolved = resolve_cluster_request(
+            payload.message, application.state.clusters
+        )
         forced_namespace_query = contextual_namespace_query(
             payload.message, conversation_context
         )
@@ -197,11 +201,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         required_fresh_intent: str | None = None
         required_fresh_namespace: str | None = None
         pending_focus = operational_focus_from_message(payload.message)
+        pending_candidates = (
+            conversation_context.active_inspection.problematic_namespaces
+            if conversation_context.active_inspection else ()
+        )
         if (
             conversation_context.pending_operational_intent
             and conversation_context.pending_operational_cluster_id
             and pending_focus
             and pending_focus not in application.state.clusters
+            and (not pending_candidates or pending_focus in pending_candidates)
         ):
             required_fresh_intent = conversation_context.pending_operational_intent
             required_fresh_namespace = pending_focus
@@ -211,6 +220,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             forced_entity_message = operational_request_message(
                 required_fresh_intent, pending_focus
             )
+            logger.info(
+                "pending_operational action=resolved cluster_id=%s intent=%s",
+                conversation_context.active_cluster_ids[0], required_fresh_intent,
+            )
+        elif (
+            conversation_context.pending_operational_intent
+            and conversation_context.pending_operational_cluster_id
+            and resolved is None
+        ):
+            logger.info(
+                "pending_operational action=awaiting cluster_id=%s intent=%s",
+                conversation_context.pending_operational_cluster_id,
+                conversation_context.pending_operational_intent,
+            )
+            return JSONResponse({
+                "answer": "Hangi namespace'i kastediyorsun?",
+                "clusters": [], "tool_calls": [], "evidence": [],
+                "conversation_context": conversation_context.public_dict(),
+            })
         deterministic_intent = natural_namespace_intent(
             payload.message, conversation_context
         )
@@ -223,6 +251,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload.message, conversation_context
         )
         investigation_followup = has_active_investigation_reference(
+            payload.message, conversation_context
+        )
+        analysis_followup = has_operational_analysis_followup(
             payload.message, conversation_context
         )
         followup_intent = namespace_followup_intent(payload.message)
@@ -242,16 +273,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pending = conversation_context.with_pending_operational(
                     followup_intent, conversation_context.active_cluster_ids[0]
                 )
+                logger.info(
+                    "pending_operational action=created cluster_id=%s intent=%s",
+                    conversation_context.active_cluster_ids[0], followup_intent,
+                )
                 return JSONResponse({
                     "answer": "Hangi namespace'i kastediyorsun?",
                     "clusters": [], "tool_calls": [], "evidence": [],
                     "conversation_context": pending.public_dict(),
                 })
-        grounding_required = grounding_required or investigation_followup
+        grounding_required = (
+            grounding_required or investigation_followup or analysis_followup
+        )
         unresolved_anaphora = has_unresolved_anaphora(
             payload.message, conversation_context
         )
         classification = classify_conversation(payload.message)
+        if investigation_followup or analysis_followup:
+            classification = ConversationClassification(
+                "operational", "operational"
+            )
+        logger.info(
+            "route_classification class=%s subtype=%s active_investigation=%s followup=%s",
+            classification.conversation_class, classification.subtype,
+            str(bool(conversation_context.active_inspection)).lower(),
+            "analysis" if analysis_followup else (
+                "operational" if investigation_followup else "none"
+            ),
+        )
         nlu_intent: StructuredIntent | None = None
         if (
             interpreted_namespace_query is None
@@ -259,6 +308,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and forced_entity_message is None
             and grounding_required
             and classification.conversation_class == "conversational"
+            and not investigation_followup
+            and not analysis_followup
         ):
             nlu_intent = interpret_intent(
                 application.state.llm_client, payload.message,
@@ -322,9 +373,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 })
         elif conversation_context.pending_suggestion_name:
             conversation_context = conversation_context.without_pending_suggestion()
-        resolved = resolve_cluster_request(
-            payload.message, application.state.clusters
-        )
         if (
             deterministic_intent is not None
             and deterministic_intent.scope_level == "previous_result"
@@ -401,6 +449,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             (forced_namespace_query is not None or forced_entity_message is not None
              or interpreted_namespace_query is not None
              or investigation_followup
+             or analysis_followup
              or (deterministic_intent is not None
                  and deterministic_intent.scope_level in {"cluster", "node", "workload"}))
             and conversation_context.active_cluster_ids
@@ -618,6 +667,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ) if namespace_query is not None
                         else agent_context
                     )
+                    if (
+                        next_context.previous_operational_intent is None
+                        and any(
+                            term in payload.message.casefold()
+                            for term in ("pod", "event")
+                        )
+                        and any(
+                            item.get("status") == "success"
+                            for item in result.tool_calls
+                        )
+                    ):
+                        normalized_operational = payload.message.casefold()
+                        next_context = next_context.with_operational_focus(
+                            None,
+                            "inspect_events" if "event" in normalized_operational
+                            else "inspect_pods" if "pod" in normalized_operational
+                            else "inspect_resource",
+                        )
                     if conversation_context.active_inspection or investigation_followup:
                         normalized_operational = payload.message.casefold()
                         next_context = next_context.with_operational_focus(
@@ -627,6 +694,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             else "inspect_resource",
                         )
                     if result.focus_namespace:
+                        logger.info(
+                            "investigation_focus action=selected cluster_id=%s namespace=%s",
+                            selected.id, result.focus_namespace,
+                        )
                         next_context = next_context.with_operational_focus(
                             result.focus_namespace, "inspect_resource"
                         )

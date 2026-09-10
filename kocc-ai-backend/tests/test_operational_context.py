@@ -23,6 +23,7 @@ def investigation_context(
             inspection_type="pod_health", resource_kind="Pod",
             cluster_id=cluster, pod_count=4, non_ready_count=2,
             problematic_pod_names=("oneagent-a", "csi-b"),
+            problematic_namespaces=("dynatrace", "application-a"),
         ),
         investigation_focus=focus,
         previous_operational_intent="inspect_pods",
@@ -75,11 +76,16 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
         "message": "kkbtest clusterinda problemli olan podları kontrol et ve bana özetle",
     })
     second = client.post("/api/v1/chat", json={
-        "message": "bunlar içinde en kritik olan hangisi , neden ?",
+        "message": "bunlar içinde en kritik olan hagisi , neden ?",
         "recent_turns": history(),
         "conversation_context": first.json()["conversation_context"],
     })
     assert second.json()["conversation_context"]["investigation_focus"] == "dynatrace"
+    second_call = agent_class.return_value.run.call_args_list[1]
+    assert second_call.kwargs["required_fresh_tool"] is None
+    assert second_call.kwargs["focus_candidates"] == (
+        "dynatrace", "application-a",
+    )
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
         "recent_turns": history(),
@@ -270,6 +276,21 @@ def test_pending_namespace_executes_required_fresh_pod_tool(
     assert response.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
 
 
+def test_pending_namespace_rejects_identifier_outside_bounded_candidates() -> None:
+    pending = investigation_context().with_pending_operational(
+        "inspect_pods", "kkbtest"
+    )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={
+            "message": "made-up-prod",
+            "conversation_context": pending.public_dict(),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["answer"] == "Hangi namespace'i kastediyorsun?"
+    assert response.json()["conversation_context"]["pending_operational_intent"] == "inspect_pods"
+
+
 def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
     llm = FakeLLM([{
         "content": "Dynatrace en kritik adaydır.", "tool_calls": None,
@@ -287,6 +308,36 @@ def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
         "hangisi?", focus_candidates=("dynatrace", "app-team"),
     )
     assert ambiguous.focus_namespace is None
+
+
+@patch("app.main.MCPClient")
+def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
+    mcp_class: Mock,
+) -> None:
+    mcp = FakeMCP()
+    mcp_class.return_value = mcp
+    llm = FakeLLM([{
+        "content": "İncelenen adaylar içinde Dynatrace en kritik görünüyor.",
+        "tool_calls": None,
+    }])
+    llm.is_configured = lambda: True
+    application = create_app(settings(token="token"))
+    application.state.llm_client = llm
+    context = ActiveInspection(
+        inspection_type="pod_health", resource_kind="Pod",
+        cluster_id="kkbtest", pod_count=3, non_ready_count=3,
+        problematic_namespaces=("lab-sdlc", "mw-test2", "dynatrace"),
+    )
+    response = TestClient(application).post("/api/v1/chat", json={
+        "message": "bunlar içinde en kritik olan hagisi , neden ?",
+        "conversation_context": ConversationContext(
+            active_cluster_ids=("kkbtest",), active_inspection=context,
+            previous_operational_intent="inspect_pods",
+        ).public_dict(),
+    })
+    assert response.status_code == 200
+    assert response.json()["conversation_context"]["investigation_focus"] == "dynatrace"
+    assert mcp.calls == []
 
 
 def test_required_fresh_tool_failure_does_not_reuse_history() -> None:
@@ -317,12 +368,15 @@ def test_required_fresh_tool_failure_does_not_reuse_history() -> None:
 def test_scheduler_message_cannot_become_cluster_wide_cpu_exhaustion() -> None:
     answer = (
         "0/16 nodes are available: 1 Insufficient cpu. "
-        "Bu, tüm cluster CPU kapasitesinin tükendiğini gösteriyor."
+        "Bu, tüm cluster CPU kapasitesinin tükendiğini gösteriyor. "
+        "Pod CPU isteğini düşürün veya node kapasitesi ekleyin."
     )
     result = AgentLoop(
         configured(), FakeLLM([{"content": answer, "tool_calls": None}]), FakeMCP(),
     ).run("neden schedule olmadı?")
     assert "tükendiğini gösteriyor" not in result.answer
+    assert "isteğini düşürün" not in result.answer
+    assert "kapasitesi ekleyin" not in result.answer
     assert "ek node/request/capacity kanıtı gerekir" in result.answer
 
 
@@ -375,3 +429,24 @@ def test_still_failing_followup_requires_fresh_pods(
     assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
         "pods_list_in_namespace", {"namespace": "dynatrace"},
     )
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_analysis_followup_stays_operational_without_inspection_payload(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult("analysis", [], [])
+    context = ConversationContext(
+        active_cluster_ids=("kkbtest",),
+        previous_operational_intent="inspect_pods",
+    )
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={
+            "message": "bunlar içinde en kritik olan hagisi, neden?",
+            "conversation_context": context.public_dict(),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["cluster"] == "kkbtest"
+    agent_class.return_value.run.assert_called_once()

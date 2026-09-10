@@ -89,12 +89,17 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
         "last_operation": "count",
         "active_entity_kind": "Namespace",
         "active_entity_name": "uat-zauh",
+        "investigation_focus": "dynatrace",
+        "previous_operational_intent": "inspect_pods",
+        "pending_operational_intent": "inspect_pods",
+        "pending_operational_cluster_id": "kkbtest",
         "active_inspection": {
             "inspection_type": "pod_health", "resource_kind": "Pod",
             "cluster_id": "kkbtest", "namespace": "uat-zauh",
             "pod_count": 2, "ready_count": 0, "non_ready_count": 2,
             "total_restarts": 252, "max_restart_count": 237,
             "problematic_pod_names": ["pod-a", "pod-b"],
+            "problematic_namespaces": ["dynatrace", "uat-zauh"],
             "observed_at": "2026-09-03T10:00:00+00:00",
         },
     }

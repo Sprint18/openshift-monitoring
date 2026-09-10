@@ -423,7 +423,7 @@ def operational_history(history: list[SafeTurn]) -> list[SafeTurn]:
 def has_active_investigation_reference(
     message: str, context: ConversationContext,
 ) -> bool:
-    if context.active_inspection is None:
+    if context.active_inspection is None and context.previous_operational_intent is None:
         return False
     normalized = _normalize_message(message)
     references = (
@@ -437,6 +437,41 @@ def has_active_investigation_reference(
     # without an active investigation the same word remains ordinary conversation.
     tokens = normalized.strip(" ?.!'").split()
     return len(tokens) == 1 and _safe_name(tokens[0]) is not None
+
+
+def _one_edit_or_equal(value: str, expected: str) -> bool:
+    if value == expected:
+        return True
+    if abs(len(value) - len(expected)) > 1:
+        return False
+    previous = list(range(len(expected) + 1))
+    for row, left in enumerate(value, 1):
+        current = [row]
+        for column, right in enumerate(expected, 1):
+            current.append(min(
+                current[-1] + 1,
+                previous[column] + 1,
+                previous[column - 1] + (left != right),
+            ))
+        previous = current
+    return previous[-1] <= 1
+
+
+def has_operational_analysis_followup(
+    message: str, context: ConversationContext,
+) -> bool:
+    if not context.active_cluster_ids or not (
+        context.active_inspection or context.previous_operational_intent
+    ):
+        return False
+    tokens = _normalize_message(message).replace("'", " ").split()
+    references_previous = any(
+        token.startswith(("bunlar", "bunlardan", "these")) for token in tokens
+    ) or any(_one_edit_or_equal(token.strip("?,.!"), "hangisi") for token in tokens)
+    analytical = any(token.startswith((
+        "kritik", "oncel", "once", "investigate", "critical",
+    )) for token in tokens)
+    return references_previous and analytical
 
 
 def has_unresolved_anaphora(message: str, context: ConversationContext) -> bool:
