@@ -27,23 +27,41 @@ class ClusterOperatorFacts:
 
 
 def _json_objects(value: Any) -> list[dict[str, Any]]:
+    """Return JSON objects from bounded nested MCP result/content wrappers."""
     objects: list[dict[str, Any]] = []
-    if isinstance(value, dict):
-        objects.append(value)
-        structured = value.get("structuredContent")
-        if isinstance(structured, dict):
-            objects.append(structured)
-        content = value.get("content")
-        if isinstance(content, list):
-            for item in content:
-                if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+    seen: set[int] = set()
+
+    def collect(candidate: Any, depth: int = 0) -> None:
+        if depth > 8 or len(objects) >= 256:
+            return
+        if isinstance(candidate, (dict, list)):
+            identity = id(candidate)
+            if identity in seen:
+                return
+            seen.add(identity)
+        if isinstance(candidate, dict):
+            objects.append(candidate)
+            for nested in candidate.values():
+                collect(nested, depth + 1)
+        elif isinstance(candidate, list):
+            for nested in candidate:
+                collect(nested, depth + 1)
+        elif isinstance(candidate, str):
+            fragments = [candidate.strip()]
+            fragments.extend(
+                line.removeprefix("data:").strip()
+                for line in candidate.splitlines() if line.startswith("data:")
+            )
+            for fragment in fragments:
+                if not fragment.startswith(("{", "[")):
                     continue
                 try:
-                    parsed = json.loads(item["text"])
+                    parsed = json.loads(fragment)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(parsed, dict):
-                    objects.append(parsed)
+                collect(parsed, depth + 1)
+
+    collect(value)
     return objects
 
 
@@ -260,7 +278,7 @@ def deterministic_observation(
             )
             if fully_ready:
                 ready_count += 1
-            else:
+            elif phase.casefold() != "succeeded":
                 name = metadata.get("name") if isinstance(metadata, dict) else None
                 if isinstance(name, str) and name and len(problematic_names) < 10:
                     problematic_names.append(name)

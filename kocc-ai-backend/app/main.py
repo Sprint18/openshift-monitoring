@@ -744,8 +744,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 )
                             )
                             logger.info(
-                                "active_inspection action=set cluster_id=%s inspection_type=pod_health",
-                                selected.id,
+                                "active_inspection action=set cluster_id=%s "
+                                "inspection_type=pod_health problematic_namespaces_count=%s",
+                                selected.id, len(safe_facts.get(
+                                    "problematic_namespaces", []
+                                )),
                             )
                             break
                 evidence = [

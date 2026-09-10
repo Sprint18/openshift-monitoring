@@ -125,6 +125,56 @@ def test_observation_reads_streamable_mcp_text_and_structured_content() -> None:
     assert deterministic_observation("resources_list", {}, structured_result)["resource_count"] == 3
 
 
+def test_pod_observation_unwraps_runtime_content_and_bounds_grounded_namespaces() -> None:
+    pods = []
+    for index, namespace in enumerate([
+        "lab-sdlc", "lab-sdlc", "dynatrace", "mw-test2",
+        *[f"problem-{number}" for number in range(20)],
+    ]):
+        pods.append({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": f"broken-{index}", "namespace": namespace},
+            "status": {"phase": "Pending", "containerStatuses": [{
+                "ready": False, "restartCount": 0,
+                "state": {"waiting": {"reason": "ImagePullBackOff"}},
+            }]},
+        })
+    pods.extend([
+        {
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": "healthy", "namespace": "healthy-app"},
+            "status": {"phase": "Running", "containerStatuses": [{
+                "ready": True, "restartCount": 0,
+            }]},
+        },
+        {
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": "completed", "namespace": "completed-job"},
+            "status": {"phase": "Succeeded", "containerStatuses": [{
+                "ready": False, "restartCount": 0,
+            }]},
+        },
+        {
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": "malformed", "namespace": "NOT/VALID"},
+            "status": {"phase": "Pending", "containerStatuses": []},
+        },
+    ])
+    payload = json.dumps({"apiVersion": "v1", "kind": "PodList", "items": pods})
+    runtime_result = {"structuredContent": {"result": {"content": [{
+        "type": "text", "text": payload,
+    }]}}}
+    facts = deterministic_observation("pods_list", {}, runtime_result, "kkbtest")
+    assert facts["problematic_namespaces"][:3] == [
+        "lab-sdlc", "dynatrace", "mw-test2",
+    ]
+    assert len(facts["problematic_namespaces"]) == 10
+    assert facts["problematic_namespaces"].count("lab-sdlc") == 1
+    assert "healthy-app" not in facts["problematic_namespaces"]
+    assert "completed-job" not in facts["problematic_namespaces"]
+    assert "NOT/VALID" not in facts["problematic_namespaces"]
+
+
 def test_authoritative_facts_are_computed_before_raw_result_truncation() -> None:
     items = [operator(f"operator-{index}") for index in range(34)]
     llm = FakeLLM([

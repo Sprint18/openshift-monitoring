@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
+import json
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
@@ -58,6 +61,129 @@ def pod_evidence(
             "pods_list_in_namespace" if namespace else "pods_list"
         )},
     )
+
+
+def production_proxy_context(value: dict) -> dict:
+    path = Path(__file__).parents[2] / "kocc-v0.4.0/app/ai_client.py"
+    spec = importlib.util.spec_from_file_location("portal_ai_client_contract", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.AIBackendClient._conversation_context(value)
+
+
+def runtime_pod_result(items: list[dict]) -> dict:
+    payload = json.dumps({
+        "apiVersion": "v1", "kind": "PodList", "items": items,
+    })
+    return {"structuredContent": {"result": {"content": [{
+        "type": "text", "text": payload,
+    }]}}}
+
+
+def pod(name: str, namespace: str, phase: str, ready: bool) -> dict:
+    return {
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {"name": name, "namespace": namespace},
+        "status": {"phase": phase, "containerStatuses": [{
+            "ready": ready, "restartCount": 0,
+            "state": ({"running": {}} if ready else {
+                "waiting": {"reason": "ImagePullBackOff"},
+            }),
+        }]},
+    }
+
+
+@patch("app.main.MCPClient")
+def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
+    mcp_class: Mock,
+) -> None:
+    cluster_pods = [
+        pod("sonarqube", "lab-sdlc", "Pending", False),
+        pod("init-failure", "lab-sdlc", "Pending", False),
+        pod("oneagent", "dynatrace", "Pending", False),
+        pod("image-pull", "mw-test2", "Pending", False),
+        pod("healthy", "unrelated-healthy", "Running", True),
+        pod("completed", "completed-job", "Succeeded", False),
+    ]
+    mcp = FakeMCP([
+        runtime_pod_result(cluster_pods),
+        {"content": [{"type": "text", "text": "event evidence"}]},
+        runtime_pod_result([
+            pod("sonarqube", "lab-sdlc", "Pending", False),
+            pod("scanner", "lab-sdlc", "Running", True),
+        ]),
+    ])
+    mcp.list_tools = lambda: [{
+        "name": name, "description": name,
+        "inputSchema": {
+            "type": "object",
+            "properties": ({"namespace": {"type": "string"}}
+                           if name != "pods_list" else {}),
+            **({"required": ["namespace"]}
+               if name == "pods_list_in_namespace" else {}),
+        },
+    } for name in ("pods_list", "events_list", "pods_list_in_namespace")]
+    mcp_class.return_value = mcp
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [tool_call("pods_list")]},
+        {"content": None, "tool_calls": [tool_call("events_list")]},
+        {"content": "Problemli pod özeti.", "tool_calls": None},
+        {"content": (
+            "En kritik lab-sdlc; dynatrace ve mw-test2 de karşılaştırıldı.\n"
+            "[[KOCC_SELECTED_FOCUS:lab-sdlc]]"
+        ), "tool_calls": None},
+        {"content": "lab-sdlc güncel pod durumu.", "tool_calls": None},
+    ])
+    llm.is_configured = lambda: True
+    application = create_app(settings(token="token"))
+    application.state.llm_client = llm
+    client = TestClient(application)
+
+    first = client.post("/api/v1/chat", json={
+        "message": "kkbtest clusterinda problemli olan podları kontrol et ve bana özetle",
+    })
+    assert first.status_code == 200
+    first_context = first.json()["conversation_context"]
+    assert first_context["active_inspection"]["problematic_namespaces"] == [
+        "lab-sdlc", "dynatrace", "mw-test2",
+    ]
+    assert "unrelated-healthy" not in first_context["active_inspection"][
+        "problematic_namespaces"
+    ]
+    assert "completed-job" not in first_context["active_inspection"][
+        "problematic_namespaces"
+    ]
+
+    proxied_context = production_proxy_context(first_context)
+    assert proxied_context["active_cluster_ids"] == ["kkbtest"]
+    assert proxied_context["active_inspection"]["problematic_namespaces"] == [
+        "lab-sdlc", "dynatrace", "mw-test2",
+    ]
+    assert proxied_context["previous_operational_intent"] == "inspect_pods"
+    calls_after_first = list(mcp.calls)
+    second = client.post("/api/v1/chat", json={
+        "message": "bunlar içinde en kritik olan hagisi , neden ?",
+        "conversation_context": proxied_context,
+    })
+    assert second.status_code == 200
+    assert mcp.calls == calls_after_first
+    assert second.json()["conversation_context"]["investigation_focus"] == "lab-sdlc"
+    focus_prompt = llm.calls[3]["messages"][0]["content"]
+    assert "lab-sdlc, dynatrace, mw-test2" in focus_prompt
+
+    third = client.post("/api/v1/chat", json={
+        "message": "onun namespace'indeki diger podların durumuna da bak",
+        "conversation_context": production_proxy_context(
+            second.json()["conversation_context"]
+        ),
+    })
+    assert third.status_code == 200
+    assert third.json()["answer"] != "Hangi namespace'i kastediyorsun?"
+    assert mcp.calls[-1] == (
+        "pods_list_in_namespace", {"namespace": "lab-sdlc"},
+    )
+    assert third.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
 
 
 @patch("app.main.AgentLoop")
@@ -290,6 +416,30 @@ def test_historical_assistant_claim_requires_a_fresh_tool_result() -> None:
     assert mcp.calls == [("pods_list", {})]
     prompt = llm.calls[0]["messages"][0]["content"]
     assert "never live\ncluster evidence" in prompt
+
+
+@patch("app.main.MCPClient")
+def test_failed_cluster_pod_listing_does_not_create_candidates(
+    mcp_class: Mock,
+) -> None:
+    mcp = FakeMCP([{"isError": True}])
+    mcp.list_tools = lambda: [{
+        "name": "pods_list", "description": "List current pods",
+        "inputSchema": {"type": "object", "properties": {}},
+    }]
+    mcp_class.return_value = mcp
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [tool_call("pods_list")]},
+        {"content": "Güncel pod verisi alınamadı.", "tool_calls": None},
+    ])
+    llm.is_configured = lambda: True
+    application = create_app(settings(token="token"))
+    application.state.llm_client = llm
+    response = TestClient(application).post("/api/v1/chat", json={
+        "message": "kkbtest clusterinda problemli olan podları kontrol et ve bana özetle",
+    })
+    assert response.status_code == 200
+    assert response.json()["conversation_context"]["active_inspection"] is None
 
 
 @patch("app.main.MCPClient")
