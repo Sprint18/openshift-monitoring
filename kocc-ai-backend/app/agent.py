@@ -106,6 +106,7 @@ FORBIDDEN_ARGUMENT_KEYS = frozenset({
 })
 TRUNCATION_MARKER = "\n\n[tool output truncated by KOCC]"
 FOCUS_MARKER_PREFIX = "KOCC_SELECTED_FOCUS"
+CLUSTER_IDS = frozenset({"kkbtest", "rmtest"})
 PUBLIC_FACT_KEYS = frozenset({
     "resource_count",
     "degraded_true_count",
@@ -423,40 +424,49 @@ def _tool_context(
     return prefix + _serialize_result(result, limit - len(prefix))
 
 
-def _focus_selection_contract(candidates: tuple[str, ...]) -> str:
-    bounded = ", ".join(candidates[:10])
+def _focus_selection_contract() -> str:
     return (
-        "\nFOCUS SELECTION CONTRACT: This is a comparison/triage turn. Use only "
-        f"these evidence-derived namespace candidates: {bounded}. If you safely "
-        "select exactly one namespace for the next investigation, append exactly "
+        "\nSEMANTIC FOCUS CONTRACT: This is a comparison/triage turn. If the "
+        "grounded conversation history supports selecting exactly one Kubernetes "
+        "namespace for the next investigation, append exactly "
         "one private marker on its own final line in the form "
-        "[[KOCC_SELECTED_FOCUS:namespace]]. Otherwise append no marker. The prose "
-        "may compare every candidate, but the marker must contain only the single "
-        "selected candidate. Never expose or explain the marker."
+        "[[KOCC_SELECTED_FOCUS:namespace]]. Otherwise append no marker. The marker "
+        "is semantic context only, never live cluster evidence, and cannot select "
+        "a cluster. It will be removed before the user response; do not discuss it."
     )
 
 
 def _structured_focus_selection(
-    answer: str, candidates: tuple[str, ...],
+    answer: str, active_cluster_id: str | None,
 ) -> tuple[str, str | None, str]:
-    """Extract one explicit internal focus marker and validate it against evidence."""
-    strict = re.compile(
-        rf"\[\[{FOCUS_MARKER_PREFIX}:([a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\]\]",
+    """Extract one bounded semantic namespace marker from the model response."""
+    marker = re.compile(
+        rf"\[\[{FOCUS_MARKER_PREFIX}:([^\r\n]*?)\]\]",
         re.IGNORECASE,
     )
-    selections = strict.findall(answer)
+    selections = marker.findall(answer)
+    marker_prefixes = re.findall(
+        rf"\[\[{FOCUS_MARKER_PREFIX}:", answer, flags=re.IGNORECASE,
+    )
     visible_answer = re.sub(
         rf"\[\[{FOCUS_MARKER_PREFIX}:[^\r\n]*(?:\]\]|$)", "", answer,
         flags=re.IGNORECASE,
     ).strip()
-    if len(selections) != 1:
+    if len(marker_prefixes) != 1:
         return visible_answer, None, (
-            "absent" if not selections else "multiple"
+            "absent" if not marker_prefixes else "multiple"
         )
-    candidate_map = {item.casefold(): item for item in candidates[:10]}
-    selected = candidate_map.get(selections[0].casefold())
-    if selected is None:
-        return visible_answer, None, "not_in_candidates"
+    if len(selections) != 1:
+        return visible_answer, None, "malformed"
+    if active_cluster_id is None:
+        return visible_answer, None, "no_active_cluster"
+    selected = selections[0].strip().casefold()
+    if len(selected) > 63:
+        return visible_answer, None, "overlong"
+    if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", selected):
+        return visible_answer, None, "malformed"
+    if selected in CLUSTER_IDS:
+        return visible_answer, None, "cluster_switch"
     return visible_answer, selected, "validated"
 
 
@@ -513,7 +523,6 @@ class AgentLoop:
         self, message: str, semantic_history: list[SafeTurn] | None = None,
         investigation_context: str = "",
         required_fresh_tool: tuple[str, dict[str, Any]] | None = None,
-        focus_candidates: tuple[str, ...] = (),
         focus_selection_requested: bool = False,
     ) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
@@ -604,11 +613,10 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         failed_calls: set[tuple[str, str]] = set()
         if focus_selection_requested:
             logger.info(
-                "analysis_focus candidates=%s cluster_id=%s",
-                len(focus_candidates[:10]), self.target_cluster_id or "unspecified",
+                "semantic_focus action=selection_requested cluster_id=%s",
+                self.target_cluster_id or "unspecified",
             )
-        if focus_selection_requested and focus_candidates:
-            messages[0]["content"] += _focus_selection_contract(focus_candidates)
+            messages[0]["content"] += _focus_selection_contract()
 
         if required_fresh_tool is not None:
             required_name, required_arguments = required_fresh_tool
@@ -681,10 +689,10 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 focus_reason = "not_requested"
                 if focus_selection_requested:
                     content, selected_focus, focus_reason = _structured_focus_selection(
-                        content, focus_candidates,
+                        content, self.target_cluster_id,
                     )
                     logger.info(
-                        "analysis_focus selected=%s reason=%s",
+                        "semantic_focus selected=%s source=analysis reason=%s",
                         selected_focus or "none", focus_reason,
                     )
                 return AgentResult(

@@ -170,7 +170,7 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
     assert mcp.calls == calls_after_first
     assert second.json()["conversation_context"]["investigation_focus"] == "lab-sdlc"
     focus_prompt = llm.calls[3]["messages"][0]["content"]
-    assert "lab-sdlc, dynatrace, mw-test2" in focus_prompt
+    assert "SEMANTIC FOCUS CONTRACT" in focus_prompt
 
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
@@ -184,6 +184,101 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
         "pods_list_in_namespace", {"namespace": "lab-sdlc"},
     )
     assert third.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
+
+
+@patch("app.main.MCPClient")
+def test_semantic_focus_drives_fresh_followups_without_active_inspection(
+    mcp_class: Mock,
+) -> None:
+    mcp = FakeMCP([
+        {"content": [{"type": "text", "text": "grounded pod output"}]},
+        {"content": [{"type": "text", "text": "grounded event output"}]},
+        runtime_pod_result([
+            pod("python-app", "uat-greendeks", "Pending", False),
+        ]),
+        {"content": [{"type": "text", "text": "fresh namespace events"}]},
+    ])
+    mcp.list_tools = lambda: [{
+        "name": name, "description": name,
+        "inputSchema": {
+            "type": "object",
+            "properties": ({"namespace": {"type": "string"}}
+                           if name != "pods_list" else {}),
+            **({"required": ["namespace"]}
+               if name == "pods_list_in_namespace" else {}),
+        },
+    } for name in ("pods_list", "events_list", "pods_list_in_namespace")]
+    mcp_class.return_value = mcp
+    llm = FakeLLM([
+        {"content": None, "tool_calls": [tool_call("pods_list")]},
+        {"content": None, "tool_calls": [tool_call("events_list")]},
+        {"content": (
+            "Problemli namespace'ler: lab-sdlc, dynatrace, uat-greendeks, "
+            "openshift-storage."
+        ), "tool_calls": None},
+        {"content": (
+            "En kritik: uat-greendeks/python-app-56f8b78f84-dxm5f; "
+            "diğer namespace'lerle karşılaştırıldığında önce incelenmeli.\n"
+            "[[KOCC_SELECTED_FOCUS:uat-greendeks]]"
+        ), "tool_calls": None},
+        {"content": "uat-greendeks için fresh pod sonucu.", "tool_calls": None},
+        {"content": "uat-greendeks için fresh event sonucu.", "tool_calls": None},
+    ])
+    llm.is_configured = lambda: True
+    application = create_app(settings(token="token"))
+    application.state.llm_client = llm
+    client = TestClient(application)
+
+    first = client.post("/api/v1/chat", json={
+        "message": "kkbtest clusterinda problemli olan podları kontrol et ve bana özetle",
+    })
+    assert first.status_code == 200
+    assert first.json()["conversation_context"]["active_inspection"] is None
+    assert first.json()["conversation_context"][
+        "previous_operational_intent"
+    ] == "inspect_pods"
+    calls_after_first = list(mcp.calls)
+
+    second = client.post("/api/v1/chat", json={
+        "message": "bunlar içinde en kritik olan hangisi , neden ?",
+        "recent_turns": [{
+            "role": "assistant", "content": first.json()["answer"],
+        }],
+        "conversation_context": production_proxy_context(
+            first.json()["conversation_context"]
+        ),
+    })
+    assert second.status_code == 200
+    assert mcp.calls == calls_after_first
+    assert "KOCC_SELECTED_FOCUS" not in second.json()["answer"]
+    assert second.json()["conversation_context"][
+        "investigation_focus"
+    ] == "uat-greendeks"
+
+    third = client.post("/api/v1/chat", json={
+        "message": "onun namespace'indeki diğer podları da kontrol eder misin",
+        "conversation_context": production_proxy_context(
+            second.json()["conversation_context"]
+        ),
+    })
+    assert third.status_code == 200
+    assert third.json()["answer"] != "Hangi namespace'i kastediyorsun?"
+    assert mcp.calls[-1] == (
+        "pods_list_in_namespace", {"namespace": "uat-greendeks"},
+    )
+    assert third.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
+
+    fourth = client.post("/api/v1/chat", json={
+        "message": "onunla ilgili eventlere de bak",
+        "conversation_context": production_proxy_context(
+            third.json()["conversation_context"]
+        ),
+    })
+    assert fourth.status_code == 200
+    assert mcp.calls[-1] == (
+        "events_list", {"namespace": "uat-greendeks"},
+    )
+    assert fourth.json()["evidence"][0]["tool"] == "events_list"
 
 
 @patch("app.main.AgentLoop")
@@ -222,9 +317,6 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
     assert second.json()["conversation_context"]["investigation_focus"] == "dynatrace"
     second_call = agent_class.return_value.run.call_args_list[1]
     assert second_call.kwargs["required_fresh_tool"] is None
-    assert second_call.kwargs["focus_candidates"] == (
-        "lab-sdlc", "dynatrace", "mw-test2",
-    )
     assert second_call.kwargs["focus_selection_requested"] is True
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
@@ -472,7 +564,12 @@ def test_pending_namespace_executes_required_fresh_pod_tool(
     assert response.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
 
 
-def test_pending_namespace_rejects_identifier_outside_bounded_candidates() -> None:
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_pending_explicit_namespace_uses_fresh_evidence_without_candidate_gate(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult("fresh", [], [])
     pending = investigation_context().with_pending_operational(
         "inspect_pods", "kkbtest"
     )
@@ -483,11 +580,12 @@ def test_pending_namespace_rejects_identifier_outside_bounded_candidates() -> No
         },
     )
     assert response.status_code == 200
-    assert response.json()["answer"] == "Hangi namespace'i kastediyorsun?"
-    assert response.json()["conversation_context"]["pending_operational_intent"] == "inspect_pods"
+    assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
+        "pods_list_in_namespace", {"namespace": "made-up-prod"},
+    )
 
 
-def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
+def test_assistant_semantic_focus_is_validated_without_evidence_candidates() -> None:
     llm = FakeLLM([{
         "content": (
             "Dynatrace en kritik adaydır; app-team ile karşılaştırıldı.\n"
@@ -495,9 +593,8 @@ def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
         ), "tool_calls": None,
     }])
     mcp = FakeMCP()
-    result = AgentLoop(configured(), llm, mcp).run(
+    result = AgentLoop(configured(), llm, mcp, "kkbtest", "KKB TEST").run(
         "bunlar içinde en kritik olan hangisi?",
-        focus_candidates=("dynatrace", "app-team"),
         focus_selection_requested=True,
     )
     assert result.focus_namespace == "dynatrace"
@@ -506,7 +603,9 @@ def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
 
     invalid_answers = (
         "Dynatrace en kritik, app-team de incelendi.",
-        "Seçim. [[KOCC_SELECTED_FOCUS:made-up-prod]]",
+        "Seçim. [[KOCC_SELECTED_FOCUS:made_up_prod]]",
+        "Seçim. [[KOCC_SELECTED_FOCUS:rmtest]]",
+        "Seçim. [[KOCC_SELECTED_FOCUS:" + "a" * 64 + "]]",
         "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace]] "
         "[[KOCC_SELECTED_FOCUS:app-team]]",
         "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace",
@@ -514,12 +613,19 @@ def test_assistant_focus_is_accepted_only_from_bounded_candidates() -> None:
     for answer in invalid_answers:
         invalid = AgentLoop(configured(), FakeLLM([{
             "content": answer, "tool_calls": None,
-        }]), FakeMCP()).run(
-            "hangisi?", focus_candidates=("dynatrace", "app-team"),
+        }]), FakeMCP(), "kkbtest", "KKB TEST").run(
+            "hangisi?",
             focus_selection_requested=True,
         )
         assert invalid.focus_namespace is None
         assert "KOCC_SELECTED_FOCUS" not in invalid.answer
+
+    no_cluster = AgentLoop(configured(), FakeLLM([{
+        "content": "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace]]",
+        "tool_calls": None,
+    }]), FakeMCP()).run("hangisi?", focus_selection_requested=True)
+    assert no_cluster.focus_namespace is None
+    assert "KOCC_SELECTED_FOCUS" not in no_cluster.answer
 
 
 @patch("app.main.MCPClient")
@@ -538,15 +644,10 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     llm.is_configured = lambda: True
     application = create_app(settings(token="token"))
     application.state.llm_client = llm
-    context = ActiveInspection(
-        inspection_type="pod_health", resource_kind="Pod",
-        cluster_id="kkbtest", pod_count=3, non_ready_count=3,
-        problematic_namespaces=("lab-sdlc", "mw-test2", "dynatrace"),
-    )
     response = TestClient(application).post("/api/v1/chat", json={
         "message": "bunlar içinde en kritik olan hagisi , neden ?",
         "conversation_context": ConversationContext(
-            active_cluster_ids=("kkbtest",), active_inspection=context,
+            active_cluster_ids=("kkbtest",), active_inspection=None,
             previous_operational_intent="inspect_pods",
         ).public_dict(),
     })

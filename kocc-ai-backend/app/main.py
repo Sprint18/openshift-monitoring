@@ -208,16 +208,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and references_selected_focus(payload.message)
         ):
             pending_focus = conversation_context.investigation_focus
-        pending_candidates = (
-            conversation_context.active_inspection.problematic_namespaces
-            if conversation_context.active_inspection else ()
-        )
         if (
             conversation_context.pending_operational_intent
             and conversation_context.pending_operational_cluster_id
             and pending_focus
             and pending_focus not in application.state.clusters
-            and (not pending_candidates or pending_focus in pending_candidates)
         ):
             required_fresh_intent = conversation_context.pending_operational_intent
             required_fresh_namespace = pending_focus
@@ -650,6 +645,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ) if (
                         semantic_history or agent_context.active_inspection
                         or agent_context.investigation_focus
+                        or agent_context.previous_operational_intent
                     ) else ""
                     result = (
                         agent_loop.run(
@@ -663,11 +659,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "namespace": required_fresh_namespace,
                                 }) if required_fresh_intent == "inspect_pods" else None
                             ),
-                            focus_candidates=(
-                                agent_context.active_inspection.problematic_namespaces
-                                if agent_context.active_inspection else ()
+                            focus_selection_requested=(
+                                analysis_followup
+                                and len(agent_context.active_cluster_ids) == 1
                             ),
-                            focus_selection_requested=analysis_followup,
                         )
                         if semantic_history or active_investigation_context
                         else agent_loop.run(agent_message)
@@ -707,8 +702,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
                     if result.focus_namespace:
                         logger.info(
-                            "investigation_focus action=selected cluster_id=%s namespace=%s",
-                            selected.id, result.focus_namespace,
+                            "semantic_focus selected=%s source=analysis cluster_id=%s",
+                            result.focus_namespace, selected.id,
                         )
                         next_context = next_context.with_operational_focus(
                             result.focus_namespace, "inspect_resource"
