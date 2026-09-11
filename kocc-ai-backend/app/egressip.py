@@ -21,6 +21,7 @@ def egressip_namespace(message: str) -> str | None:
         rf"\b({_DNS_LABEL})(?:'?(?:ye|ya|e|a))?\s+(?:ait\s+)?egress\s*ip\b",
         rf"\b(?:namespace|proje)\s+({_DNS_LABEL})(?:'?(?:nin|nın|nun|nün))?.*?\begress\s*ip\b",
         rf"\begress\s*ip\b.*?\b(?:namespace|proje)\s+({_DNS_LABEL})\b",
+        rf"\b({_DNS_LABEL})\s+hangi\s+egress\s*ip(?:'?(?:yi|yi|i))?\b",
     )
     excluded = {
         "hangi", "mevcut", "atanmış", "atanmis", "kullandığı", "kullandigi",
@@ -34,7 +35,92 @@ def egressip_namespace(message: str) -> str | None:
 
 
 def is_egressip_intent(message: str) -> bool:
-    return re.search(r"\begress\s*ip\b", message.casefold()) is not None
+    return re.search(
+        r"\begress\s*ip(?:'?[a-zçğıöşü]+)?\b", message.casefold()
+    ) is not None
+
+
+def egressip_query_mode(message: str) -> str:
+    """Classify direct EgressIP requests without involving the LLM."""
+    if egressip_namespace(message) is not None:
+        return "namespace"
+    normalized = " ".join(message.casefold().replace("ı", "i").split())
+    inventory_markers = (
+        "tum", "tüm", "hepsi", "listele", "listesi", "liste",
+        "cluster'daki", "clusterdaki", "all", "inventory", "show",
+    )
+    inventory = any(marker in normalized for marker in inventory_markers) or bool(
+        re.search(r"\bhangi\b.*\b(?:var|mevcut)\b", normalized)
+    )
+    return "inventory" if inventory else "ambiguous"
+
+
+def selector_summary(selector: Any) -> str:
+    if selector in (None, {}):
+        return "tüm namespace'ler"
+    if not isinstance(selector, dict):
+        return "selector yapılandırılmış"
+    parts: list[str] = []
+    labels = selector.get("matchLabels")
+    if isinstance(labels, dict):
+        parts.extend(
+            f"{key}={value}" for key, value in list(labels.items())[:5]
+            if isinstance(key, str) and isinstance(value, str)
+        )
+    expressions = selector.get("matchExpressions")
+    if isinstance(expressions, list):
+        for expression in expressions[:3]:
+            if not isinstance(expression, dict):
+                continue
+            key, operator, values = (
+                expression.get("key"), expression.get("operator"),
+                expression.get("values"),
+            )
+            if not isinstance(key, str) or not isinstance(operator, str):
+                continue
+            rendered_values = ",".join(
+                str(value) for value in values[:5]
+            ) if isinstance(values, list) else ""
+            parts.append(
+                f"{key} {operator} ({rendered_values})"
+                if rendered_values else f"{key} {operator}"
+            )
+    return ", ".join(parts) if parts else "selector yapılandırılmış"
+
+
+def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
+    if item.get("apiVersion") != "k8s.ovn.org/v1" or item.get("kind") != "EgressIP":
+        return None
+    metadata, spec = item.get("metadata"), item.get("spec")
+    if not isinstance(metadata, dict) or not isinstance(spec, dict):
+        return None
+    name = metadata.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    assignments: list[dict[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
+    status = item.get("status")
+    status_items = status.get("items") if isinstance(status, dict) else None
+    if isinstance(status_items, list):
+        for assignment in status_items[:20]:
+            if not isinstance(assignment, dict):
+                continue
+            address = assignment.get("egressIP")
+            node = assignment.get("node")
+            if not isinstance(address, str):
+                continue
+            safe_node = node if isinstance(node, str) else None
+            identity = (address, safe_node)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            assignments.append({"ip": address, "node": safe_node})
+    return {
+        "name": name,
+        "assignments": assignments,
+        "namespace_selector": selector_summary(spec.get("namespaceSelector")),
+        "pod_selector": spec.get("podSelector") not in (None, {}),
+    }
 
 
 def _decoded_json(value: str) -> Any:

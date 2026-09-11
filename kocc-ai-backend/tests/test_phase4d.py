@@ -6,12 +6,12 @@ from unittest.mock import Mock, patch
 import json
 from dataclasses import replace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agent import AgentLoop, AgentResult
 from app.clusters import cluster_registry, validated_cluster_selection
-from app.egressip import selector_matches
-from app.egressip import egressip_namespace
+from app.egressip import egressip_namespace, egressip_query_mode, selector_matches
 from app.main import create_app
 from tests.test_ai_backend import settings
 
@@ -126,6 +126,91 @@ def test_egressip_namespace_intent_forms_are_narrowly_parsed() -> None:
         "test-webmethods-gw namespace'inin EgressIP'i nedir?"
     ) == "test-webmethods-gw"
     assert egressip_namespace("hangi egress ip kullanıyor") is None
+    assert egressip_namespace(
+        "dynatrace hangi egress ip'yi kullanıyor?"
+    ) == "dynatrace"
+
+
+@pytest.mark.parametrize("message", [
+    "Bünyendeki tüm egress ipleri bana sıralar mısın?",
+    "tüm egress ipleri listele",
+    "cluster'daki egress ipleri göster",
+    "egress ip listesini getir",
+    "hangi egress ipler var",
+    "show all egress IPs",
+])
+def test_egressip_inventory_intent_is_deterministic(message: str) -> None:
+    assert egressip_query_mode(message) == "inventory"
+
+
+def test_egressip_query_without_inventory_or_namespace_remains_ambiguous() -> None:
+    assert egressip_query_mode("hangi egress ip kullanıyor") == "ambiguous"
+
+
+def test_cluster_wide_egressip_inventory_uses_one_call_and_no_llm() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.return_value = {"items": [{
+        "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+        "metadata": {"name": "test-egress"},
+        "spec": {
+            "namespaceSelector": {"matchLabels": {"environment": "test"}},
+            "podSelector": {},
+        },
+        "status": {"items": [{
+            "egressIP": "10.10.10.20", "node": "worker-a",
+        }]},
+    }]}
+    llm = Mock()
+    result = AgentLoop(
+        settings(token="token"), llm, mcp, "kkbtest", "KKB TEST"
+    ).run("Bünyendeki tüm egress ipleri bana sıralar mısın?")
+    assert "## EgressIP Envanteri" in result.answer
+    assert "test-egress" in result.answer
+    assert "10.10.10.20" in result.answer
+    assert "worker-a" in result.answer
+    assert "environment=test" in result.answer
+    assert "tüm podlar" in result.answer
+    assert "namespace adını belirtin" not in result.answer
+    assert mcp.call_tool.call_args_list[0].args == (
+        "resources_list", {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"},
+    )
+    assert mcp.call_tool.call_count == 1
+    llm.chat_completion.assert_not_called()
+
+
+def test_egressip_inventory_empty_unassigned_and_failure_are_controlled() -> None:
+    empty = Mock()
+    empty.list_tools.return_value = [_resource_tool()]
+    empty.call_tool.return_value = {"items": []}
+    empty_result = AgentLoop(
+        settings(token=None), Mock(), empty, "kkbtest", "KKB TEST"
+    ).run("tüm egress ipleri listele")
+    assert "EgressIP nesnesi bulunamadı" in empty_result.answer
+
+    unassigned = Mock()
+    unassigned.list_tools.return_value = [_resource_tool()]
+    unassigned.call_tool.return_value = {"items": [{
+        "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+        "metadata": {"name": "waiting-egress"},
+        "spec": {"namespaceSelector": {}, "podSelector": {}},
+        "status": {"items": []},
+    }]}
+    unassigned_result = AgentLoop(
+        settings(token=None), Mock(), unassigned, "kkbtest", "KKB TEST"
+    ).run("egress ip listesini getir")
+    assert "Atanmış EgressIP adresi yok." in unassigned_result.answer
+
+    from app.mcp_client import MCPUnavailable
+    failed = Mock()
+    failed.list_tools.return_value = [_resource_tool()]
+    failed.call_tool.side_effect = MCPUnavailable("private detail")
+    failed_result = AgentLoop(
+        settings(token=None), Mock(), failed, "kkbtest", "KKB TEST"
+    ).run("cluster'daki egress ipleri göster")
+    assert "KKB TEST cluster'ındaki OVN EgressIP envanteri" in failed_result.answer
+    assert "doğrulanamadı" in failed_result.answer
+    assert "private detail" not in failed_result.answer
 
 
 def _resource_tool() -> dict:
@@ -207,6 +292,40 @@ def test_egressip_uses_namespace_selector_and_status_assignment() -> None:
         "resources_list", {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"}
     )
     assert all(call.args[0] != "resources_get" for call in mcp.call_tool.call_args_list)
+
+
+def test_exact_namespace_egressip_lookup_uses_selectors_without_llm() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {
+                "name": "test-yapayzekarag", "labels": {"team": "ai"},
+            },
+        }]},
+        {"items": [{
+            "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+            "metadata": {"name": "egress-ai"},
+            "spec": {
+                "namespaceSelector": {"matchLabels": {"team": "ai"}},
+                "podSelector": {},
+            },
+            "status": {"items": [{
+                "egressIP": "10.60.1.222", "node": "worker-ai",
+            }]},
+        }]},
+    ]
+    llm = Mock()
+    result = AgentLoop(
+        settings(token=None), llm, mcp, "kkbtest", "KKB TEST"
+    ).run("test-yapayzekarag namespace'inin egress ip'si ne?")
+    assert "test-yapayzekarag" in result.answer
+    assert "10.60.1.222" in result.answer
+    assert egressip_query_mode(
+        "test-yapayzekarag namespace'inin egress ip'si ne?"
+    ) == "namespace"
+    llm.chat_completion.assert_not_called()
 
 
 def test_egressip_table_list_uses_get_for_full_runtime_fixture() -> None:

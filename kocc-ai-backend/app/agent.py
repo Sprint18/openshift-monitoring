@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from app.config import Settings
 from app.egressip import (
-    egressip_has_full_detail, egressip_namespace, evaluate_egressips,
-    is_egressip_intent, namespace_labels, resource_items, resource_names,
-    resource_object,
+    egressip_has_full_detail, egressip_inventory_record, egressip_namespace,
+    egressip_query_mode, evaluate_egressips, is_egressip_intent,
+    namespace_labels, resource_items, resource_names, resource_object,
 )
 from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.llm_client import LLMClient, LLMUnavailable
@@ -935,7 +935,15 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         self, message: str, available_names: set[str],
         tool_schemas: dict[str, dict[str, Any]],
     ) -> AgentResult:
+        mode = egressip_query_mode(message)
         namespace = egressip_namespace(message)
+        logger.info(
+            "egressip_query mode=%s cluster_id=%s%s",
+            mode, self.target_cluster_id or "unspecified",
+            f" namespace={namespace}" if namespace else "",
+        )
+        if mode == "inventory":
+            return self._egressip_inventory(available_names, tool_schemas)
         if namespace is None:
             return AgentResult(
                 "EgressIP sorgusu için namespace adını belirtin.", [], [], 0
@@ -964,6 +972,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         )
         labels = namespace_labels(namespace_items or [], namespace)
         if namespace_items is None or labels is None:
+            logger.info("egressip_result status=unavailable")
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 [namespace_summary], [], 0,
@@ -978,6 +987,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         )
         summaries = [namespace_summary, egress_summary]
         if egress_result is None:
+            logger.info("egressip_result status=unavailable")
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
@@ -988,6 +998,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         else:
             names = resource_names(egress_result, "EgressIP")
             if names is None:
+                logger.info("egressip_result status=unavailable")
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                     summaries, [], 0,
@@ -1003,6 +1014,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             ]
             detail_call_budget = max(0, self.settings.agent_max_tool_calls - 2)
             if len(detail_names) > detail_call_budget:
+                logger.info("egressip_result status=unavailable")
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                     summaries, [], 0,
@@ -1017,6 +1029,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     tool_schemas.get("resources_get"),
                 )
                 if arguments is None:
+                    logger.info("egressip_result status=unavailable")
                     return AgentResult(
                         f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                         summaries, [], 0,
@@ -1028,6 +1041,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 summaries.append(detail_summary)
                 item = resource_object(detail) if detail is not None else None
                 if item is None or not egressip_has_full_detail(item):
+                    logger.info("egressip_result status=unavailable")
                     return AgentResult(
                         f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                         summaries, [], 0,
@@ -1035,12 +1049,14 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 detailed_items.append(item)
         matches, verified = evaluate_egressips(detailed_items, labels)
         if not verified:
+            logger.info("egressip_result status=unavailable")
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
             )
         evidence = [{"tool": "resources_list", "status": "success"}]
         if not matches:
+            logger.info("egressip_result status=success objects=0 assignments=0")
             return AgentResult(
                 f"**Namespace:** {namespace}\n\n"
                 "Bu namespace ile eşleşen bir EgressIP bulunamadı.",
@@ -1062,7 +1078,125 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     "- Not: Nesne ayrıca bir podSelector içeriyor; yalnız eşleşen "
                     "pod'lar bu EgressIP kapsamındadır."
                 )
+        logger.info(
+            "egressip_result status=success objects=%s assignments=%s",
+            len(matches), sum(len(match["assignments"]) for match in matches),
+        )
         return AgentResult("\n".join(lines), summaries, evidence, 0)
+
+    def _egressip_inventory(
+        self, available_names: set[str],
+        tool_schemas: dict[str, dict[str, Any]],
+    ) -> AgentResult:
+        result, summary = self._call_backend_tool(
+            "resources_list",
+            {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"},
+            available_names, tool_schemas, resource="EgressIP",
+        )
+        summaries = [summary]
+        cluster_name = self.target_cluster_name or self.target_cluster_id or "Cluster"
+        if result is None:
+            logger.info("egressip_result status=unavailable")
+            return AgentResult(
+                f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
+                "doğrulanamadı.", summaries, [], 0,
+            )
+        listed_items = resource_items(result)
+        if listed_items == []:
+            logger.info("egressip_result status=success objects=0 assignments=0")
+            return AgentResult(
+                "## EgressIP Envanteri\n\nCluster'da EgressIP nesnesi bulunamadı.",
+                summaries, [{"tool": "resources_list", "status": "success"}], 0,
+            )
+        names = resource_names(result, "EgressIP")
+        if names is None:
+            logger.info("egressip_result status=unavailable")
+            return AgentResult(
+                f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
+                "doğrulanamadı.", summaries, [], 0,
+            )
+        listed_by_name = {
+            item["metadata"]["name"]: item for item in (listed_items or [])
+            if isinstance(item.get("metadata"), dict)
+            and isinstance(item["metadata"].get("name"), str)
+        }
+        detail_names = [
+            name for name in names
+            if not egressip_has_full_detail(listed_by_name.get(name, {}))
+        ]
+        if len(detail_names) > max(0, self.settings.agent_max_tool_calls - 1):
+            logger.info("egressip_result status=unavailable")
+            return AgentResult(
+                f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
+                "doğrulanamadı.", summaries, [], 0,
+            )
+        detailed_items = [
+            item for name, item in listed_by_name.items() if name not in detail_names
+        ]
+        for name in detail_names:
+            arguments = self._resource_get_arguments(
+                "k8s.ovn.org/v1", "EgressIP", name,
+                tool_schemas.get("resources_get"),
+            )
+            if arguments is None:
+                logger.info("egressip_result status=unavailable")
+                return AgentResult(
+                    f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu "
+                    "anda doğrulanamadı.", summaries, [], 0,
+                )
+            detail, detail_summary = self._call_backend_tool(
+                "resources_get", arguments, available_names, tool_schemas,
+                resource="EgressIP",
+            )
+            summaries.append(detail_summary)
+            item = resource_object(detail) if detail is not None else None
+            if item is None or not egressip_has_full_detail(item):
+                logger.info("egressip_result status=unavailable")
+                return AgentResult(
+                    f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu "
+                    "anda doğrulanamadı.", summaries, [], 0,
+                )
+            detailed_items.append(item)
+        records = [
+            record for item in detailed_items
+            if (record := egressip_inventory_record(item)) is not None
+        ]
+        if len(records) != len(names):
+            logger.info("egressip_result status=unavailable")
+            return AgentResult(
+                f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
+                "doğrulanamadı.", summaries, [], 0,
+            )
+        lines = ["## EgressIP Envanteri"]
+        assignment_count = 0
+        for record in records[:50]:
+            lines.append(f"\n### {record['name']}")
+            assignments = record["assignments"]
+            assignment_count += len(assignments)
+            if assignments:
+                for assignment in assignments:
+                    lines.append(f"- EgressIP: `{assignment['ip']}`")
+                    if assignment["node"]:
+                        lines.append(f"- Node: `{assignment['node']}`")
+            else:
+                lines.append("- Atanmış EgressIP adresi yok.")
+            lines.append(
+                f"- Namespace Selector: `{record['namespace_selector']}`"
+            )
+            lines.append(
+                "- Pod Selector: "
+                + ("yapılandırılmış" if record["pod_selector"] else "tüm podlar")
+            )
+        if len(records) > 50:
+            lines.append(f"\n- Ek {len(records) - 50} nesne gösterilmedi.")
+        logger.info(
+            "egressip_result status=success objects=%s assignments=%s",
+            len(records), assignment_count,
+        )
+        return AgentResult(
+            "\n".join(lines), summaries,
+            [{"tool": "resources_list", "status": "success"}], 0,
+        )
 
     @staticmethod
     def _resource_get_arguments(
