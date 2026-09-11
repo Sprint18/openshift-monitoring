@@ -6,6 +6,7 @@ from typing import Any
 
 
 _DNS_LABEL = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+_HYPHENATED_DNS_LABEL = r"[a-z0-9]+(?:-[a-z0-9]+)+"
 _WRAPPER_KEYS = frozenset({
     "content", "structuredContent", "result", "data", "resource", "object",
     "response", "items",
@@ -18,7 +19,8 @@ def egressip_namespace(message: str) -> str | None:
         return None
     patterns = (
         rf"\b({_DNS_LABEL})\s+namespace(?:'?(?:inin|ının|unun|ünün|in|ın|un|ün))?\s+egress\s*ip\b",
-        rf"\b({_DNS_LABEL})(?:'?(?:ye|ya|e|a))?\s+(?:ait\s+)?egress\s*ip\b",
+        rf"\b({_DNS_LABEL})'?(?:ye|ya|e|a)\s+ait\s+egress\s*ip\b",
+        rf"\b({_HYPHENATED_DNS_LABEL})\s+egress\s*ip\b",
         rf"\b(?:namespace|proje)\s+({_DNS_LABEL})(?:'?(?:nin|nın|nun|nün))?.*?\begress\s*ip\b",
         rf"\begress\s*ip\b.*?\b(?:namespace|proje)\s+({_DNS_LABEL})\b",
         rf"\b({_DNS_LABEL})\s+hangi\s+egress\s*ip(?:'?(?:yi|yi|i))?\b",

@@ -50,10 +50,14 @@ def classify_conversation(message: str) -> ConversationClassification:
     token_set = set(tokens)
     if not tokens:
         return ConversationClassification("operational", "operational")
+    has_spaced_egress_ip = any(
+        left == "egress" and right.startswith("ip")
+        for left, right in zip(tokens, tokens[1:])
+    )
     has_operational_signal = any(
         token.startswith(OPERATIONAL_TOKEN_PREFIXES + OPERATIONAL_ASSESSMENT_PREFIXES)
         for token in tokens
-    ) or "co" in token_set
+    ) or "co" in token_set or has_spaced_egress_ip
 
     identity_families = (
         {"sen", "kimsin"},

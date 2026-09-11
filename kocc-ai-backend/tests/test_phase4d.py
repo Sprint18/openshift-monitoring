@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import io
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 import json
 from dataclasses import replace
 
@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent import AgentLoop, AgentResult
+from app.classification import classify_conversation
 from app.clusters import cluster_registry, validated_cluster_selection
 from app.egressip import egressip_namespace, egressip_query_mode, selector_matches
 from app.main import create_app
@@ -132,19 +133,37 @@ def test_egressip_namespace_intent_forms_are_narrowly_parsed() -> None:
 
 
 @pytest.mark.parametrize("message", [
-    "Bünyendeki tüm egress ipleri bana sıralar mısın?",
+    "Bünyendeki tüm egress ip'leri bana sıralar mısın?",
+    "bünyendeki tüm egress ipleri",
     "tüm egress ipleri listele",
     "cluster'daki egress ipleri göster",
     "egress ip listesini getir",
     "hangi egress ipler var",
     "show all egress IPs",
+    "cluster'daki bütün egress ipleri göster",
 ])
 def test_egressip_inventory_intent_is_deterministic(message: str) -> None:
+    assert egressip_namespace(message) is None
     assert egressip_query_mode(message) == "inventory"
 
 
 def test_egressip_query_without_inventory_or_namespace_remains_ambiguous() -> None:
     assert egressip_query_mode("hangi egress ip kullanıyor") == "ambiguous"
+
+
+@pytest.mark.parametrize("message", [
+    "tüm egress ipleri listele",
+    "Bünyendeki tüm egress ip'leri bana sıralar mısın?",
+    "hangi egress ipler var",
+    "test-yapayzekarag egress ip'si ne?",
+    "show all egress ips",
+])
+def test_spaced_egress_ip_is_classified_operational(message: str) -> None:
+    assert classify_conversation(message).conversation_class == "operational"
+
+
+def test_normal_smalltalk_remains_conversational() -> None:
+    assert classify_conversation("bugün nasılsın?").conversation_class == "conversational"
 
 
 def test_cluster_wide_egressip_inventory_uses_one_call_and_no_llm() -> None:
@@ -164,7 +183,7 @@ def test_cluster_wide_egressip_inventory_uses_one_call_and_no_llm() -> None:
     llm = Mock()
     result = AgentLoop(
         settings(token="token"), llm, mcp, "kkbtest", "KKB TEST"
-    ).run("Bünyendeki tüm egress ipleri bana sıralar mısın?")
+    ).run("Bünyendeki tüm egress ip'leri bana sıralar mısın?")
     assert "## EgressIP Envanteri" in result.answer
     assert "test-egress" in result.answer
     assert "10.10.10.20" in result.answer
@@ -177,6 +196,40 @@ def test_cluster_wide_egressip_inventory_uses_one_call_and_no_llm() -> None:
     )
     assert mcp.call_tool.call_count == 1
     llm.chat_completion.assert_not_called()
+
+
+@patch("app.main.MCPClient")
+def test_exact_live_egressip_phrase_routes_end_to_end_without_llm(
+    mcp_class: Mock,
+) -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.return_value = {"items": [{
+        "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
+        "metadata": {"name": "live-egress"},
+        "spec": {"namespaceSelector": {}, "podSelector": {}},
+        "status": {"items": [{
+            "egressIP": "10.60.1.210", "node": "worker-live",
+        }]},
+    }]}
+    mcp_class.return_value = mcp
+    application = create_app(settings(token="token"))
+    application.state.llm_client = Mock()
+    response = TestClient(application).post("/api/v1/chat", json={
+        "message": "Bünyendeki tüm egress ip'leri bana sıralar mısın?",
+        "conversation_scope": "kkbtest",
+    })
+    assert response.status_code == 200
+    assert "10.60.1.210" in response.json()["answer"]
+    assert "worker-live" in response.json()["answer"]
+    assert all(call.args[0] != "resources_get" for call in mcp.call_tool.call_args_list)
+    assert mcp.call_tool.call_args_list == [
+        call(
+            "resources_list",
+            {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"},
+        )
+    ]
+    application.state.llm_client.chat_completion.assert_not_called()
 
 
 def test_egressip_inventory_empty_unassigned_and_failure_are_controlled() -> None:
