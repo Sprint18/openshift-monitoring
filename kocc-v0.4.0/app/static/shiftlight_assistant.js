@@ -81,6 +81,15 @@
             });
             if (Array.isArray(inspection.problematic_pod_names)) safeInspection.problematic_pod_names = inspection.problematic_pod_names.filter((item) => typeof item === "string").slice(0, 10);
             if (Array.isArray(inspection.problematic_namespaces)) safeInspection.problematic_namespaces = inspection.problematic_namespaces.filter((item) => typeof item === "string").slice(0, 10);
+            if (Array.isArray(inspection.triage_candidates)) safeInspection.triage_candidates = inspection.triage_candidates.slice(0, 10).flatMap((candidate) => {
+                if (!candidate || typeof candidate !== "object" || typeof candidate.namespace !== "string" || !Array.isArray(candidate.resources)) return [];
+                const resources = candidate.resources.slice(0, 10).flatMap((resource) => {
+                    if (!resource || typeof resource !== "object" || resource.kind !== "Pod" || typeof resource.name !== "string" || typeof resource.state !== "string" || typeof resource.ready !== "boolean" || !isSafeInteger(resource.restart_count)) return [];
+                    const reasons = Array.isArray(resource.reasons) ? resource.reasons.filter((reason) => typeof reason === "string" && reason.length <= 80).slice(0, 5) : [];
+                    return [{kind: "Pod", name: resource.name.slice(0, 253), state: resource.state.slice(0, 40), ready: resource.ready, restart_count: resource.restart_count, reasons}];
+                });
+                return [{namespace: candidate.namespace.slice(0, 63), resources}];
+            });
             if (Object.keys(safeInspection).length) result.active_inspection = safeInspection;
         }
         return result;

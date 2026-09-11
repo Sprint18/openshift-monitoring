@@ -173,4 +173,5 @@ def test_pod_observation_contains_only_bounded_canonical_facts() -> None:
         "resource_count", "pod_count", "ready_count", "non_ready_count",
             "total_restarts", "max_restart_count", "problematic_pod_names",
             "problematic_namespaces", "phase_counts",
+            "triage_candidates",
         }

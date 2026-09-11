@@ -100,6 +100,14 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
             "total_restarts": 252, "max_restart_count": 237,
             "problematic_pod_names": ["pod-a", "pod-b"],
             "problematic_namespaces": ["lab-sdlc", "dynatrace", "mw-test2"],
+            "triage_candidates": [{
+                "namespace": "dynatrace",
+                "resources": [{
+                    "kind": "Pod", "name": "oneagent-a", "state": "Pending",
+                    "ready": False, "restart_count": 0,
+                    "reasons": ["FailedMount"],
+                }],
+            }],
             "observed_at": "2026-09-03T10:00:00+00:00",
         },
     }
@@ -119,6 +127,9 @@ def test_ai_chat_proxy_round_trips_safe_conversation_context(
     assert response.json()["conversation_context"]["active_inspection"][
         "problematic_namespaces"
     ] == ["lab-sdlc", "dynatrace", "mw-test2"]
+    assert response.json()["conversation_context"]["active_inspection"][
+        "triage_candidates"
+    ][0]["namespace"] == "dynatrace"
     assert ai_client.chat.call_args.kwargs["conversation_context"] == context
     assert ai_client.chat.call_args.kwargs["recent_turns"] == [
         {"role": "user", "content": "önceki soru"}

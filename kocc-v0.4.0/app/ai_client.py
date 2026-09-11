@@ -299,6 +299,54 @@ class AIBackendClient:
                     item[:63] for item in namespaces[:10]
                     if isinstance(item, str)
                 ]
+            candidates = inspection.get("triage_candidates")
+            if isinstance(candidates, list):
+                safe_candidates = []
+                for candidate in candidates[:10]:
+                    if not isinstance(candidate, dict):
+                        continue
+                    namespace = candidate.get("namespace")
+                    resources = candidate.get("resources")
+                    if (
+                        not isinstance(namespace, str)
+                        or len(namespace) > 63
+                        or re.fullmatch(
+                            r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace
+                        ) is None
+                        or not isinstance(resources, list)
+                    ):
+                        continue
+                    safe_resources = []
+                    for resource in resources[:10]:
+                        if not isinstance(resource, dict):
+                            continue
+                        name, state = resource.get("name"), resource.get("state")
+                        ready, restarts = (
+                            resource.get("ready"), resource.get("restart_count")
+                        )
+                        if (
+                            resource.get("kind") != "Pod"
+                            or not isinstance(name, str) or len(name) > 253
+                            or not isinstance(state, str) or len(state) > 40
+                            or not isinstance(ready, bool)
+                            or not isinstance(restarts, int)
+                            or isinstance(restarts, bool) or restarts < 0
+                        ):
+                            continue
+                        raw_reasons = resource.get("reasons", [])
+                        reasons = [
+                            reason for reason in raw_reasons[:5]
+                            if isinstance(reason, str) and len(reason) <= 80
+                        ] if isinstance(raw_reasons, list) else []
+                        safe_resources.append({
+                            "kind": "Pod", "name": name, "state": state,
+                            "ready": ready, "restart_count": restarts,
+                            "reasons": reasons,
+                        })
+                    safe_candidates.append({
+                        "namespace": namespace[:63], "resources": safe_resources,
+                    })
+                safe_inspection["triage_candidates"] = safe_candidates
             if safe_inspection:
                 result["active_inspection"] = safe_inspection
         return result

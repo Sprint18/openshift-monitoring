@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.agent import AgentLimitReached, AgentLoop, can_run_without_llm
+from app.agent import AgentLimitReached, AgentLoop, AgentResult, can_run_without_llm
 from app.classification import ConversationClassification, classify_conversation
 from app.clusters import (
     ClusterScope, UnknownClusterError, cluster_registry,
@@ -20,7 +20,8 @@ from app.clusters import (
 )
 from app.config import Settings, load_settings
 from app.conversation import (
-    ActiveInspection, ConversationContext, bounded_history, confirmation_value,
+    ActiveInspection, ConversationContext, TriageCandidate, bounded_history,
+    confirmation_value,
     context_for_namespace_result, contextual_namespace_query,
     contextual_entity_message, conversational_response,
     namespace_query_from_context, namespace_query_message,
@@ -33,7 +34,6 @@ from app.conversation import (
     safe_conversation_summary,
 )
 from app.evidence import EvidenceEnvelope
-from app.focus_resolver import resolve_semantic_focus
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
 from app.intent import (
@@ -44,6 +44,7 @@ from app.mcp_client import MCPClient, MCPUnavailable
 from app.namespace_inventory import (
     NamespaceQuery, execute_namespace_query, parse_namespace_query,
 )
+from app.triage import TriageInvalid, candidates_from_inspection, decide_triage
 
 
 logger = logging.getLogger("kocc_ai")
@@ -648,30 +649,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         or agent_context.investigation_focus
                         or agent_context.previous_operational_intent
                     ) else ""
-                    result = (
-                        agent_loop.run(
-                            agent_message,
-                            semantic_history=semantic_history,
-                            investigation_context=active_investigation_context,
-                            required_fresh_tool=(
-                                ("events_list", {"namespace": required_fresh_namespace})
-                                if required_fresh_intent == "inspect_events" else
-                                ("pods_list_in_namespace", {
-                                    "namespace": required_fresh_namespace,
-                                }) if required_fresh_intent == "inspect_pods" else None
-                            ),
-                            allow_tools=not analysis_followup,
+                    if analysis_followup:
+                        try:
+                            decision = decide_triage(
+                                application.state.llm_client,
+                                question=payload.message,
+                                cluster_id=selected.id,
+                                candidates=candidates_from_inspection(
+                                    agent_context.active_inspection
+                                ),
+                                semantic_history=semantic_history,
+                            )
+                            result = AgentResult(
+                                decision.render_answer(), [], [], 1,
+                            )
+                            next_context = replace(
+                                agent_context,
+                                investigation_focus=decision.selected_namespace,
+                                previous_operational_intent="inspect_resource",
+                                pending_operational_intent=None,
+                                pending_operational_cluster_id=None,
+                            )
+                        except (LLMUnavailable, TriageInvalid):
+                            result = AgentResult(
+                                "Teknik karşılaştırma şu anda güvenilir biçimde "
+                                "tamamlanamadı. Yeni bir öncelik seçilmedi.",
+                                [], [], 1,
+                            )
+                            next_context = agent_context
+                    else:
+                        result = (
+                            agent_loop.run(
+                                agent_message,
+                                semantic_history=semantic_history,
+                                investigation_context=active_investigation_context,
+                                required_fresh_tool=(
+                                    ("events_list", {
+                                        "namespace": required_fresh_namespace,
+                                    }) if required_fresh_intent == "inspect_events" else
+                                    ("pods_list_in_namespace", {
+                                        "namespace": required_fresh_namespace,
+                                    }) if required_fresh_intent == "inspect_pods" else None
+                                ),
+                            )
+                            if semantic_history or active_investigation_context
+                            else agent_loop.run(agent_message)
                         )
-                        if semantic_history or active_investigation_context
-                        else agent_loop.run(agent_message)
-                    )
-                    next_context = (
-                        context_for_namespace_result(
-                            conversation_context, (selected.id,),
-                            namespace_query, {},
-                        ) if namespace_query is not None
-                        else agent_context
-                    )
+                        next_context = (
+                            context_for_namespace_result(
+                                conversation_context, (selected.id,),
+                                namespace_query, {},
+                            ) if namespace_query is not None
+                            else agent_context
+                        )
                     if (
                         next_context.previous_operational_intent is None
                         and any(
@@ -697,26 +727,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             "inspect_events" if "event" in normalized_operational
                             else "inspect_pods" if "pod" in normalized_operational
                             else "inspect_resource",
-                        )
-                    resolved_focus = (
-                        resolve_semantic_focus(
-                            application.state.llm_client,
-                            question=payload.message,
-                            answer=result.answer,
-                            cluster_id=selected.id,
-                            cluster_name=selected.name,
-                        )
-                        if analysis_followup
-                        and len(conversation_context.active_cluster_ids) == 1
-                        else None
-                    )
-                    if resolved_focus:
-                        logger.info(
-                            "semantic_focus selected=%s source=analysis cluster_id=%s",
-                            resolved_focus, selected.id,
-                        )
-                        next_context = next_context.with_operational_focus(
-                            resolved_focus, "inspect_resource"
                         )
                     for item in result.evidence_items:
                         if (
@@ -744,6 +754,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     ),
                                     problematic_namespaces=tuple(
                                         safe_facts.get("problematic_namespaces", [])[:10]
+                                    ),
+                                    triage_candidates=tuple(
+                                        candidate for value in safe_facts.get(
+                                            "triage_candidates", []
+                                        )[:10]
+                                        if (candidate := TriageCandidate.from_payload(
+                                            value
+                                        )) is not None
                                     ),
                                     observed_at=item.observed_at,
                                 )

@@ -35,6 +35,73 @@ class SafeTurn:
 
 
 @dataclass(frozen=True)
+class TriageResource:
+    kind: str
+    name: str
+    state: str
+    ready: bool
+    restart_count: int
+    reasons: tuple[str, ...] = ()
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "TriageResource | None":
+        if not isinstance(value, dict) or set(value) - {
+            "kind", "name", "state", "ready", "restart_count", "reasons",
+        }:
+            return None
+        kind = value.get("kind")
+        name = _safe_name(value.get("name"))
+        state = value.get("state")
+        ready = value.get("ready")
+        restarts = _safe_count(value.get("restart_count"))
+        if (
+            kind != "Pod" or name is None or not isinstance(state, str)
+            or len(state) > 40 or not isinstance(ready, bool) or restarts is None
+        ):
+            return None
+        raw_reasons = value.get("reasons", [])
+        reasons = tuple(
+            item.strip() for item in raw_reasons[:5]
+            if isinstance(item, str) and item.strip() and len(item.strip()) <= 80
+        ) if isinstance(raw_reasons, list) else ()
+        return cls(kind, name, state, ready, restarts, reasons)
+
+    def public_dict(self) -> dict[str, Any]:
+        payload = {
+            "kind": self.kind, "name": self.name, "state": self.state,
+            "ready": self.ready, "restart_count": self.restart_count,
+            "reasons": list(self.reasons),
+        }
+        return payload
+
+
+@dataclass(frozen=True)
+class TriageCandidate:
+    namespace: str
+    resources: tuple[TriageResource, ...]
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "TriageCandidate | None":
+        if not isinstance(value, dict) or set(value) != {"namespace", "resources"}:
+            return None
+        namespace = _safe_name(value.get("namespace"))
+        raw_resources = value.get("resources")
+        if namespace is None or not isinstance(raw_resources, list):
+            return None
+        resources = tuple(
+            resource for item in raw_resources[:10]
+            if (resource := TriageResource.from_payload(item)) is not None
+        )
+        return cls(namespace, resources)
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "namespace": self.namespace,
+            "resources": [item.public_dict() for item in self.resources],
+        }
+
+
+@dataclass(frozen=True)
 class ActiveInspection:
     inspection_type: Literal["pod_health", "node_summary", "cluster_health"]
     resource_kind: Literal["Pod", "Node", "Cluster"]
@@ -47,6 +114,7 @@ class ActiveInspection:
     max_restart_count: int | None = None
     problematic_pod_names: tuple[str, ...] = ()
     problematic_namespaces: tuple[str, ...] = ()
+    triage_candidates: tuple[TriageCandidate, ...] = ()
     observed_at: str = ""
 
     @classmethod
@@ -75,6 +143,12 @@ class ActiveInspection:
             name for item in namespaces[:10]
             if (name := _safe_name(item)) is not None
         )) if isinstance(namespaces, list) else ()
+        raw_candidates = value.get("triage_candidates")
+        safe_candidates = tuple(
+            candidate for item in raw_candidates[:10]
+            if (candidate := TriageCandidate.from_payload(item)) is not None
+            and candidate.namespace not in ALLOWED_CLUSTERS
+        ) if isinstance(raw_candidates, list) else ()
         return cls(
             inspection_type=inspection_type,
             resource_kind=resource_kind,
@@ -87,6 +161,7 @@ class ActiveInspection:
             max_restart_count=_safe_count(value.get("max_restart_count")),
             problematic_pod_names=safe_names,
             problematic_namespaces=safe_namespaces,
+            triage_candidates=safe_candidates,
             observed_at=(
                 value["observed_at"][:40]
                 if isinstance(value.get("observed_at"), str) else ""
@@ -94,7 +169,7 @@ class ActiveInspection:
         )
 
     def public_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "inspection_type": self.inspection_type,
             "resource_kind": self.resource_kind,
             "cluster_id": self.cluster_id,
@@ -108,6 +183,11 @@ class ActiveInspection:
             "problematic_namespaces": list(self.problematic_namespaces),
             "observed_at": self.observed_at,
         }
+        if self.triage_candidates:
+            payload["triage_candidates"] = [
+                candidate.public_dict() for candidate in self.triage_candidates
+            ]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -423,12 +503,17 @@ def operational_history(history: list[SafeTurn]) -> list[SafeTurn]:
 def has_active_investigation_reference(
     message: str, context: ConversationContext,
 ) -> bool:
-    if context.active_inspection is None and context.previous_operational_intent is None:
+    if (
+        context.active_inspection is None
+        and context.previous_operational_intent is None
+        and context.investigation_focus is None
+    ):
         return False
     normalized = _normalize_message(message)
     references = (
         "onun", "bunlar", "bunlarin", "oradaki", "orada", "bunun",
-        "ilk baktigimiz", "az onceki", "ayni pod", "bu problem", "bu sorun",
+        "ilk baktigimiz", "az onceki", "ayni pod", "bu namespace",
+        "bu problem", "bu sorun",
         "hala",
     )
     if any(reference in normalized for reference in references):

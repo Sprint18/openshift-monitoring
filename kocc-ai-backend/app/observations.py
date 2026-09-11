@@ -260,6 +260,7 @@ def deterministic_observation(
         max_restart_count = 0
         problematic_names: list[str] = []
         problematic_namespaces: list[str] = []
+        candidate_resources: dict[str, list[dict[str, Any]]] = {}
         phase_counts: dict[str, int] = {}
         for item in items:
             if not isinstance(item, dict):
@@ -293,6 +294,42 @@ def deterministic_observation(
                     and len(problematic_namespaces) < 10
                 ):
                     problematic_namespaces.append(namespace)
+                if (
+                    isinstance(namespace, str)
+                    and namespace in problematic_namespaces
+                    and isinstance(name, str)
+                    and len(candidate_resources.get(namespace, [])) < 10
+                ):
+                    reasons: list[str] = []
+                    for container in container_rows:
+                        if not isinstance(container, dict):
+                            continue
+                        state = container.get("state")
+                        if not isinstance(state, dict):
+                            continue
+                        for state_value in state.values():
+                            reason = (
+                                state_value.get("reason")
+                                if isinstance(state_value, dict) else None
+                            )
+                            if (
+                                isinstance(reason, str) and reason
+                                and reason not in reasons and len(reasons) < 5
+                            ):
+                                reasons.append(reason[:80])
+                    candidate_resources.setdefault(namespace, []).append({
+                        "kind": "Pod", "name": name[:253], "state": phase[:40],
+                        "ready": fully_ready,
+                        "restart_count": sum(
+                            value for container in container_rows
+                            if isinstance(container, dict)
+                            and isinstance(
+                                (value := container.get("restartCount")), int
+                            )
+                            and not isinstance(value, bool) and value >= 0
+                        ),
+                        "reasons": reasons,
+                    })
             pod_restarts = sum(
                 value for container in container_rows
                 if isinstance(container, dict)
@@ -309,6 +346,10 @@ def deterministic_observation(
             "max_restart_count": max_restart_count,
             "problematic_pod_names": problematic_names,
             "problematic_namespaces": problematic_namespaces,
+            "triage_candidates": [
+                {"namespace": namespace, "resources": resources}
+                for namespace, resources in candidate_resources.items()
+            ],
             "phase_counts": phase_counts,
         })
     return facts

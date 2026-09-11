@@ -14,6 +14,7 @@ from app.conversation import (
 from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.llm_client import LLMUnavailable
 from app.main import create_app
+from app.triage import TriageDecision
 from tests.test_agent import FakeLLM, FakeMCP, configured, tool_call
 from tests.test_ai_backend import settings
 
@@ -114,6 +115,7 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
             pod("sonarqube", "lab-sdlc", "Pending", False),
             pod("scanner", "lab-sdlc", "Running", True),
         ]),
+        {"content": [{"type": "text", "text": "fresh lab-sdlc events"}]},
     ])
     mcp.list_tools = lambda: [{
         "name": name, "description": name,
@@ -130,11 +132,15 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
         {"content": None, "tool_calls": [tool_call("pods_list")]},
         {"content": None, "tool_calls": [tool_call("events_list")]},
         {"content": "Problemli pod özeti.", "tool_calls": None},
-        {"content": (
-            "En kritik lab-sdlc; dynatrace ve mw-test2 de karşılaştırıldı."
-        ), "tool_calls": None},
-        {"content": '{"namespace":"lab-sdlc"}', "tool_calls": None},
+        {"content": json.dumps({
+            "assessment": "highest", "selected_namespace": "lab-sdlc",
+            "tied_namespaces": [],
+            "selected_resources": ["sonarqube", "init-failure"],
+            "confidence": "medium",
+            "reasons": ["İki güncel problemli pod gözlemlendi."],
+        }), "tool_calls": None},
         {"content": "lab-sdlc güncel pod durumu.", "tool_calls": None},
+        {"content": "lab-sdlc güncel event durumu.", "tool_calls": None},
     ])
     llm.is_configured = lambda: True
     application = create_app(settings(token="token"))
@@ -170,7 +176,9 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
     assert second.status_code == 200
     assert mcp.calls == calls_after_first
     assert second.json()["conversation_context"]["investigation_focus"] == "lab-sdlc"
-    assert llm.calls[4]["tools"] is None
+    assert len(llm.calls) == 4
+    assert llm.calls[3]["tools"] is None
+    assert "`lab-sdlc` seçildi" in second.json()["answer"]
 
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
@@ -185,13 +193,26 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
     )
     assert third.json()["evidence"][0]["tool"] == "pods_list_in_namespace"
 
+    fourth = client.post("/api/v1/chat", json={
+        "message": "onunla ilgili eventlere de bak",
+        "conversation_context": production_proxy_context(
+            third.json()["conversation_context"]
+        ),
+    })
+    assert fourth.status_code == 200
+    assert mcp.calls[-1] == ("events_list", {"namespace": "lab-sdlc"})
+    assert fourth.json()["evidence"][0]["tool"] == "events_list"
+
 
 @patch("app.main.MCPClient")
 def test_semantic_focus_drives_fresh_followups_without_active_inspection(
     mcp_class: Mock,
 ) -> None:
     mcp = FakeMCP([
-        {"content": [{"type": "text", "text": "grounded pod output"}]},
+        runtime_pod_result([
+            pod("python-app", "uat-greendeks", "Pending", False),
+            pod("sonarqube", "lab-sdlc", "Pending", False),
+        ]),
         {"content": [{"type": "text", "text": "grounded event output"}]},
         runtime_pod_result([
             pod("python-app", "uat-greendeks", "Pending", False),
@@ -216,11 +237,12 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
             "Problemli namespace'ler: lab-sdlc, dynatrace, uat-greendeks, "
             "openshift-storage."
         ), "tool_calls": None},
-        {"content": (
-            "En kritik: uat-greendeks/python-app-56f8b78f84-dxm5f; "
-            "diğer namespace'lerle karşılaştırıldığında önce incelenmeli."
-        ), "tool_calls": None},
-        {"content": '{"namespace":"uat-greendeks"}', "tool_calls": None},
+        {"content": json.dumps({
+            "assessment": "highest", "selected_namespace": "uat-greendeks",
+            "tied_namespaces": [], "selected_resources": ["python-app"],
+            "confidence": "medium",
+            "reasons": ["Güncel Pending pod kanıtı mevcut."],
+        }), "tool_calls": None},
         {"content": "uat-greendeks için fresh pod sonucu.", "tool_calls": None},
         {"content": "uat-greendeks için fresh event sonucu.", "tool_calls": None},
     ])
@@ -233,7 +255,7 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
         "message": "kkbtest clusterinda problemli olan podları kontrol et ve bana özetle",
     })
     assert first.status_code == 200
-    assert first.json()["conversation_context"]["active_inspection"] is None
+    assert first.json()["conversation_context"]["active_inspection"] is not None
     assert first.json()["conversation_context"][
         "previous_operational_intent"
     ] == "inspect_pods"
@@ -250,9 +272,7 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
     })
     assert second.status_code == 200
     assert mcp.calls == calls_after_first
-    assert second.json()["answer"].endswith(
-        "diğer namespace'lerle karşılaştırıldığında önce incelenmeli."
-    )
+    assert "`uat-greendeks` seçildi" in second.json()["answer"]
     assert second.json()["conversation_context"][
         "investigation_focus"
     ] == "uat-greendeks"
@@ -283,20 +303,18 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
     assert fourth.json()["evidence"][0]["tool"] == "events_list"
 
 
-@patch("app.main.resolve_semantic_focus", return_value="dynatrace")
+@patch("app.main.decide_triage", return_value=TriageDecision(
+    "highest", "dynatrace", (), (), "medium", ("Observed failure chain.",),
+))
 @patch("app.main.AgentLoop")
 @patch("app.main.MCPClient")
 def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
-    mcp_class: Mock, agent_class: Mock, focus_resolver: Mock,
+    mcp_class: Mock, agent_class: Mock, triage: Mock,
 ) -> None:
     agent_class.return_value.run.side_effect = [
         AgentResult("Sorunlu podlar", [], [pod_evidence(
             problematic_namespaces=["lab-sdlc", "dynatrace", "mw-test2"],
         )]),
-        AgentResult(
-            "En kritik Dynatrace. lab-sdlc ve mw-test2 daha düşük öncelikli.",
-            [], [], 1,
-        ),
         AgentResult(
             "Güncel Dynatrace podları", [{
                 "name": "pods_list_in_namespace", "status": "success",
@@ -318,10 +336,8 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
         "conversation_context": first.json()["conversation_context"],
     })
     assert second.json()["conversation_context"]["investigation_focus"] == "dynatrace"
-    second_call = agent_class.return_value.run.call_args_list[1]
-    assert second_call.kwargs["required_fresh_tool"] is None
-    assert second_call.kwargs["allow_tools"] is False
-    focus_resolver.assert_called_once()
+    triage.assert_called_once()
+    assert agent_class.return_value.run.call_count == 1
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
         "recent_turns": history(),
@@ -595,19 +611,19 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
 ) -> None:
     mcp = FakeMCP()
     mcp_class.return_value = mcp
-    llm = FakeLLM([{
-        "content": (
-            "En kritik Dynatrace; lab-sdlc ve mw-test2 ile karşılaştırıldı."
-        ),
-        "tool_calls": None,
-    }, {"content": '{"namespace":"dynatrace"}', "tool_calls": None}])
+    llm = FakeLLM([{"content": json.dumps({
+        "assessment": "highest", "selected_namespace": "dynatrace",
+        "tied_namespaces": [], "selected_resources": [],
+        "confidence": "medium", "reasons": ["Observed scope is broader."],
+    }), "tool_calls": None}])
     llm.is_configured = lambda: True
     application = create_app(settings(token="token"))
     application.state.llm_client = llm
     response = TestClient(application).post("/api/v1/chat", json={
         "message": "bunlar içinde en kritik olan hagisi , neden ?",
         "conversation_context": ConversationContext(
-            active_cluster_ids=("kkbtest",), active_inspection=None,
+            active_cluster_ids=("kkbtest",),
+            active_inspection=investigation_context().active_inspection,
             previous_operational_intent="inspect_pods",
         ).public_dict(),
     })
@@ -615,19 +631,16 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     assert response.json()["conversation_context"]["investigation_focus"] == "dynatrace"
     assert mcp.calls == []
     assert mcp.list_count == 0
-    assert "KOCC_SELECTED_FOCUS" not in response.json()["answer"]
+    assert "`dynatrace` seçildi" in response.json()["answer"]
+    assert len(llm.calls) == 1
 
 
 @patch("app.main.MCPClient")
-def test_focus_resolver_failure_keeps_analysis_answer_and_no_focus(
+def test_triage_failure_returns_controlled_answer_and_no_focus(
     mcp_class: Mock,
 ) -> None:
     mcp_class.return_value = FakeMCP()
-    visible_answer = "Yorum: En kritik görünen openshift-storage."
-    llm = FakeLLM([
-        {"content": visible_answer, "tool_calls": None},
-        LLMUnavailable("timeout"),
-    ])
+    llm = FakeLLM([LLMUnavailable("timeout")])
     llm.is_configured = lambda: True
     application = create_app(settings(token="token"))
     application.state.llm_client = llm
@@ -636,11 +649,12 @@ def test_focus_resolver_failure_keeps_analysis_answer_and_no_focus(
         "message": "bunlar içinde en kritik olan hangisi, neden?",
         "conversation_context": ConversationContext(
             active_cluster_ids=("kkbtest",),
+            active_inspection=investigation_context().active_inspection,
             previous_operational_intent="inspect_pods",
         ).public_dict(),
     })
     assert response.status_code == 200
-    assert response.json()["answer"].endswith(visible_answer)
+    assert "güvenilir biçimde tamamlanamadı" in response.json()["answer"]
     assert response.json()["conversation_context"].get("investigation_focus") is None
 
     clarification = client.post("/api/v1/chat", json={
@@ -648,7 +662,55 @@ def test_focus_resolver_failure_keeps_analysis_answer_and_no_focus(
         "conversation_context": response.json()["conversation_context"],
     })
     assert clarification.status_code == 200
-    assert "kastettiğini netleştir" in clarification.json()["answer"]
+    assert "Hangi namespace'i kastediyorsun?" == clarification.json()["answer"]
+
+
+@patch("app.main.decide_triage", return_value=TriageDecision(
+    "tie", None, ("dynatrace", "lab-sdlc"), (), "low",
+    ("Doğrudan kanıtlar teknik ayrım için yetersiz.",),
+))
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_tie_allows_explicit_focus_then_fresh_followup(
+    mcp_class: Mock, agent_class: Mock, triage: Mock,
+) -> None:
+    agent_class.return_value.run.side_effect = [
+        AgentResult("Dynatrace odağı seçildi.", [], []),
+        AgentResult(
+            "Güncel Dynatrace podları", [{
+                "name": "pods_list_in_namespace", "status": "success",
+            }], [pod_evidence(namespace="dynatrace")],
+        ),
+    ]
+    client = TestClient(create_app(settings(token="token")))
+    context = investigation_context(focus="application-a")
+    compared = client.post("/api/v1/chat", json={
+        "message": "bunlar içinde en kritik olan hangisi, neden?",
+        "conversation_context": context.public_dict(),
+    })
+    assert compared.status_code == 200
+    assert "birbirine yakın" in compared.json()["answer"]
+    assert compared.json()["conversation_context"].get(
+        "investigation_focus"
+    ) is None
+
+    selected = client.post("/api/v1/chat", json={
+        "message": "dynatrace",
+        "conversation_context": compared.json()["conversation_context"],
+    })
+    assert selected.status_code == 200
+    assert selected.json()["conversation_context"][
+        "investigation_focus"
+    ] == "dynatrace"
+
+    fresh = client.post("/api/v1/chat", json={
+        "message": "bu namespacedeki diğer podların durumu ne",
+        "conversation_context": selected.json()["conversation_context"],
+    })
+    assert fresh.status_code == 200
+    assert agent_class.return_value.run.call_args.kwargs["required_fresh_tool"] == (
+        "pods_list_in_namespace", {"namespace": "dynatrace"},
+    )
 
 
 def test_required_fresh_tool_failure_does_not_reuse_history() -> None:
@@ -760,4 +822,5 @@ def test_analysis_followup_stays_operational_without_inspection_payload(
     )
     assert response.status_code == 200
     assert response.json()["cluster"] == "kkbtest"
-    agent_class.return_value.run.assert_called_once()
+    agent_class.return_value.run.assert_not_called()
+    assert "güvenilir biçimde tamamlanamadı" in response.json()["answer"]
