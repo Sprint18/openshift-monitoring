@@ -118,8 +118,6 @@ FORBIDDEN_ARGUMENT_KEYS = frozenset({
     "cluster", "context", "kubeconfig", "apiserver", "mcp_url"
 })
 TRUNCATION_MARKER = "\n\n[tool output truncated by KOCC]"
-FOCUS_MARKER_PREFIX = "KOCC_SELECTED_FOCUS"
-CLUSTER_IDS = frozenset({"kkbtest", "rmtest"})
 PUBLIC_FACT_KEYS = frozenset({
     "resource_count",
     "degraded_true_count",
@@ -138,7 +136,6 @@ class AgentResult:
     tool_calls: list[dict[str, str]]
     evidence_items: list[dict[str, Any] | EvidenceEnvelope] = field(default_factory=list)
     iterations: int = 0
-    focus_namespace: str | None = None
 
     @property
     def evidence(self) -> list[dict[str, Any]]:
@@ -437,52 +434,6 @@ def _tool_context(
     return prefix + _serialize_result(result, limit - len(prefix))
 
 
-def _focus_selection_contract() -> str:
-    return (
-        "\nSEMANTIC FOCUS CONTRACT: This is a comparison/triage turn. If the "
-        "grounded conversation history supports selecting exactly one Kubernetes "
-        "namespace for the next investigation, append exactly "
-        "one private marker on its own final line in the form "
-        "[[KOCC_SELECTED_FOCUS:namespace]]. Otherwise append no marker. The marker "
-        "is semantic context only, never live cluster evidence, and cannot select "
-        "a cluster. It will be removed before the user response; do not discuss it."
-    )
-
-
-def _structured_focus_selection(
-    answer: str, active_cluster_id: str | None,
-) -> tuple[str, str | None, str]:
-    """Extract one bounded semantic namespace marker from the model response."""
-    marker = re.compile(
-        rf"\[\[{FOCUS_MARKER_PREFIX}:([^\r\n]*?)\]\]",
-        re.IGNORECASE,
-    )
-    selections = marker.findall(answer)
-    marker_prefixes = re.findall(
-        rf"\[\[{FOCUS_MARKER_PREFIX}:", answer, flags=re.IGNORECASE,
-    )
-    visible_answer = re.sub(
-        rf"\[\[{FOCUS_MARKER_PREFIX}:[^\r\n]*(?:\]\]|$)", "", answer,
-        flags=re.IGNORECASE,
-    ).strip()
-    if len(marker_prefixes) != 1:
-        return visible_answer, None, (
-            "absent" if not marker_prefixes else "multiple"
-        )
-    if len(selections) != 1:
-        return visible_answer, None, "malformed"
-    if active_cluster_id is None:
-        return visible_answer, None, "no_active_cluster"
-    selected = selections[0].strip().casefold()
-    if len(selected) > 63:
-        return visible_answer, None, "overlong"
-    if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", selected):
-        return visible_answer, None, "malformed"
-    if selected in CLUSTER_IDS:
-        return visible_answer, None, "cluster_switch"
-    return visible_answer, selected, "validated"
-
-
 def _guard_scheduler_inference(
     answer: str, evidence: list[dict[str, Any] | EvidenceEnvelope],
 ) -> str:
@@ -591,7 +542,7 @@ class AgentLoop:
         self, message: str, semantic_history: list[SafeTurn] | None = None,
         investigation_context: str = "",
         required_fresh_tool: tuple[str, dict[str, Any]] | None = None,
-        focus_selection_requested: bool = False,
+        allow_tools: bool = True,
     ) -> AgentResult:
         direct_identity = _direct_resource_identity(message)
         egress_intent = direct_identity is None and is_egressip_intent(message)
@@ -601,9 +552,7 @@ class AgentLoop:
             and _general_health_intent(message)
         )
         node_metrics = direct_identity is None and _node_metrics_intent(message)
-        available_tools = (
-            [] if focus_selection_requested else openai_tools(self.mcp.list_tools())
-        )
+        available_tools = openai_tools(self.mcp.list_tools()) if allow_tools else []
         if direct_identity is not None:
             available_tools = [
                 item for item in available_tools
@@ -679,13 +628,6 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         audit: list[dict[str, str]] = []
         evidence_audit: list[dict[str, Any] | EvidenceEnvelope] = []
         failed_calls: set[tuple[str, str]] = set()
-        if focus_selection_requested:
-            logger.info(
-                "semantic_focus action=selection_requested cluster_id=%s",
-                self.target_cluster_id or "unspecified",
-            )
-            messages[0]["content"] += _focus_selection_contract()
-
         if required_fresh_tool is not None:
             required_name, required_arguments = required_fresh_tool
             logger.info(
@@ -753,16 +695,6 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 content = assistant.get("content")
                 if not isinstance(content, str):
                     raise LLMUnavailable("LLM returned an invalid response")
-                selected_focus = None
-                focus_reason = "not_requested"
-                if focus_selection_requested:
-                    content, selected_focus, focus_reason = _structured_focus_selection(
-                        content, self.target_cluster_id,
-                    )
-                    logger.info(
-                        "semantic_focus selected=%s source=analysis reason=%s",
-                        selected_focus or "none", focus_reason,
-                    )
                 return AgentResult(
                     _guard_operational_claims(
                         _guard_scheduler_inference(
@@ -770,7 +702,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                             evidence_audit,
                         )
                     ),
-                    audit, evidence_audit, iteration, selected_focus,
+                    audit, evidence_audit, iteration,
                 )
 
             messages.append({

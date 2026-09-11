@@ -12,6 +12,7 @@ from app.conversation import (
     ActiveInspection, ConversationContext, SafeTurn, operational_history,
 )
 from app.evidence import EvidenceEnvelope, EvidenceResource
+from app.llm_client import LLMUnavailable
 from app.main import create_app
 from tests.test_agent import FakeLLM, FakeMCP, configured, tool_call
 from tests.test_ai_backend import settings
@@ -130,9 +131,9 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
         {"content": None, "tool_calls": [tool_call("events_list")]},
         {"content": "Problemli pod özeti.", "tool_calls": None},
         {"content": (
-            "En kritik lab-sdlc; dynatrace ve mw-test2 de karşılaştırıldı.\n"
-            "[[KOCC_SELECTED_FOCUS:lab-sdlc]]"
+            "En kritik lab-sdlc; dynatrace ve mw-test2 de karşılaştırıldı."
         ), "tool_calls": None},
+        {"content": '{"namespace":"lab-sdlc"}', "tool_calls": None},
         {"content": "lab-sdlc güncel pod durumu.", "tool_calls": None},
     ])
     llm.is_configured = lambda: True
@@ -169,8 +170,7 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
     assert second.status_code == 200
     assert mcp.calls == calls_after_first
     assert second.json()["conversation_context"]["investigation_focus"] == "lab-sdlc"
-    focus_prompt = llm.calls[3]["messages"][0]["content"]
-    assert "SEMANTIC FOCUS CONTRACT" in focus_prompt
+    assert llm.calls[4]["tools"] is None
 
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
@@ -218,9 +218,9 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
         ), "tool_calls": None},
         {"content": (
             "En kritik: uat-greendeks/python-app-56f8b78f84-dxm5f; "
-            "diğer namespace'lerle karşılaştırıldığında önce incelenmeli.\n"
-            "[[KOCC_SELECTED_FOCUS:uat-greendeks]]"
+            "diğer namespace'lerle karşılaştırıldığında önce incelenmeli."
         ), "tool_calls": None},
+        {"content": '{"namespace":"uat-greendeks"}', "tool_calls": None},
         {"content": "uat-greendeks için fresh pod sonucu.", "tool_calls": None},
         {"content": "uat-greendeks için fresh event sonucu.", "tool_calls": None},
     ])
@@ -250,7 +250,9 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
     })
     assert second.status_code == 200
     assert mcp.calls == calls_after_first
-    assert "KOCC_SELECTED_FOCUS" not in second.json()["answer"]
+    assert second.json()["answer"].endswith(
+        "diğer namespace'lerle karşılaştırıldığında önce incelenmeli."
+    )
     assert second.json()["conversation_context"][
         "investigation_focus"
     ] == "uat-greendeks"
@@ -281,10 +283,11 @@ def test_semantic_focus_drives_fresh_followups_without_active_inspection(
     assert fourth.json()["evidence"][0]["tool"] == "events_list"
 
 
+@patch("app.main.resolve_semantic_focus", return_value="dynatrace")
 @patch("app.main.AgentLoop")
 @patch("app.main.MCPClient")
 def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
-    mcp_class: Mock, agent_class: Mock,
+    mcp_class: Mock, agent_class: Mock, focus_resolver: Mock,
 ) -> None:
     agent_class.return_value.run.side_effect = [
         AgentResult("Sorunlu podlar", [], [pod_evidence(
@@ -292,7 +295,7 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
         )]),
         AgentResult(
             "En kritik Dynatrace. lab-sdlc ve mw-test2 daha düşük öncelikli.",
-            [], [], 1, "dynatrace",
+            [], [], 1,
         ),
         AgentResult(
             "Güncel Dynatrace podları", [{
@@ -317,7 +320,8 @@ def test_exact_operational_chain_preserves_selected_focus_and_fresh_path(
     assert second.json()["conversation_context"]["investigation_focus"] == "dynatrace"
     second_call = agent_class.return_value.run.call_args_list[1]
     assert second_call.kwargs["required_fresh_tool"] is None
-    assert second_call.kwargs["focus_selection_requested"] is True
+    assert second_call.kwargs["allow_tools"] is False
+    focus_resolver.assert_called_once()
     third = client.post("/api/v1/chat", json={
         "message": "onun namespace'indeki diger podların durumuna da bak",
         "recent_turns": history(),
@@ -585,49 +589,6 @@ def test_pending_explicit_namespace_uses_fresh_evidence_without_candidate_gate(
     )
 
 
-def test_assistant_semantic_focus_is_validated_without_evidence_candidates() -> None:
-    llm = FakeLLM([{
-        "content": (
-            "Dynatrace en kritik adaydır; app-team ile karşılaştırıldı.\n"
-            "[[KOCC_SELECTED_FOCUS:dynatrace]]"
-        ), "tool_calls": None,
-    }])
-    mcp = FakeMCP()
-    result = AgentLoop(configured(), llm, mcp, "kkbtest", "KKB TEST").run(
-        "bunlar içinde en kritik olan hangisi?",
-        focus_selection_requested=True,
-    )
-    assert result.focus_namespace == "dynatrace"
-    assert "KOCC_SELECTED_FOCUS" not in result.answer
-    assert "app-team" in result.answer
-
-    invalid_answers = (
-        "Dynatrace en kritik, app-team de incelendi.",
-        "Seçim. [[KOCC_SELECTED_FOCUS:made_up_prod]]",
-        "Seçim. [[KOCC_SELECTED_FOCUS:rmtest]]",
-        "Seçim. [[KOCC_SELECTED_FOCUS:" + "a" * 64 + "]]",
-        "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace]] "
-        "[[KOCC_SELECTED_FOCUS:app-team]]",
-        "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace",
-    )
-    for answer in invalid_answers:
-        invalid = AgentLoop(configured(), FakeLLM([{
-            "content": answer, "tool_calls": None,
-        }]), FakeMCP(), "kkbtest", "KKB TEST").run(
-            "hangisi?",
-            focus_selection_requested=True,
-        )
-        assert invalid.focus_namespace is None
-        assert "KOCC_SELECTED_FOCUS" not in invalid.answer
-
-    no_cluster = AgentLoop(configured(), FakeLLM([{
-        "content": "Seçim. [[KOCC_SELECTED_FOCUS:dynatrace]]",
-        "tool_calls": None,
-    }]), FakeMCP()).run("hangisi?", focus_selection_requested=True)
-    assert no_cluster.focus_namespace is None
-    assert "KOCC_SELECTED_FOCUS" not in no_cluster.answer
-
-
 @patch("app.main.MCPClient")
 def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     mcp_class: Mock,
@@ -636,11 +597,10 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     mcp_class.return_value = mcp
     llm = FakeLLM([{
         "content": (
-            "En kritik Dynatrace; lab-sdlc ve mw-test2 ile karşılaştırıldı.\n"
-            "[[KOCC_SELECTED_FOCUS:dynatrace]]"
+            "En kritik Dynatrace; lab-sdlc ve mw-test2 ile karşılaştırıldı."
         ),
         "tool_calls": None,
-    }])
+    }, {"content": '{"namespace":"dynatrace"}', "tool_calls": None}])
     llm.is_configured = lambda: True
     application = create_app(settings(token="token"))
     application.state.llm_client = llm
@@ -656,6 +616,39 @@ def test_api_analysis_followup_sets_focus_without_unnecessary_tool_call(
     assert mcp.calls == []
     assert mcp.list_count == 0
     assert "KOCC_SELECTED_FOCUS" not in response.json()["answer"]
+
+
+@patch("app.main.MCPClient")
+def test_focus_resolver_failure_keeps_analysis_answer_and_no_focus(
+    mcp_class: Mock,
+) -> None:
+    mcp_class.return_value = FakeMCP()
+    visible_answer = "Yorum: En kritik görünen openshift-storage."
+    llm = FakeLLM([
+        {"content": visible_answer, "tool_calls": None},
+        LLMUnavailable("timeout"),
+    ])
+    llm.is_configured = lambda: True
+    application = create_app(settings(token="token"))
+    application.state.llm_client = llm
+    client = TestClient(application)
+    response = client.post("/api/v1/chat", json={
+        "message": "bunlar içinde en kritik olan hangisi, neden?",
+        "conversation_context": ConversationContext(
+            active_cluster_ids=("kkbtest",),
+            previous_operational_intent="inspect_pods",
+        ).public_dict(),
+    })
+    assert response.status_code == 200
+    assert response.json()["answer"].endswith(visible_answer)
+    assert response.json()["conversation_context"].get("investigation_focus") is None
+
+    clarification = client.post("/api/v1/chat", json={
+        "message": "bu namespacedeki diğer podları da kontrol eder misin",
+        "conversation_context": response.json()["conversation_context"],
+    })
+    assert clarification.status_code == 200
+    assert "kastettiğini netleştir" in clarification.json()["answer"]
 
 
 def test_required_fresh_tool_failure_does_not_reuse_history() -> None:

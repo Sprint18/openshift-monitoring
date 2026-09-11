@@ -33,6 +33,7 @@ from app.conversation import (
     safe_conversation_summary,
 )
 from app.evidence import EvidenceEnvelope
+from app.focus_resolver import resolve_semantic_focus
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
 from app.intent import (
@@ -659,10 +660,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                     "namespace": required_fresh_namespace,
                                 }) if required_fresh_intent == "inspect_pods" else None
                             ),
-                            focus_selection_requested=(
-                                analysis_followup
-                                and len(agent_context.active_cluster_ids) == 1
-                            ),
+                            allow_tools=not analysis_followup,
                         )
                         if semantic_history or active_investigation_context
                         else agent_loop.run(agent_message)
@@ -700,13 +698,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             else "inspect_pods" if "pod" in normalized_operational
                             else "inspect_resource",
                         )
-                    if result.focus_namespace:
+                    resolved_focus = (
+                        resolve_semantic_focus(
+                            application.state.llm_client,
+                            question=payload.message,
+                            answer=result.answer,
+                            cluster_id=selected.id,
+                            cluster_name=selected.name,
+                        )
+                        if analysis_followup
+                        and len(conversation_context.active_cluster_ids) == 1
+                        else None
+                    )
+                    if resolved_focus:
                         logger.info(
                             "semantic_focus selected=%s source=analysis cluster_id=%s",
-                            result.focus_namespace, selected.id,
+                            resolved_focus, selected.id,
                         )
                         next_context = next_context.with_operational_focus(
-                            result.focus_namespace, "inspect_resource"
+                            resolved_focus, "inspect_resource"
                         )
                     for item in result.evidence_items:
                         if (
