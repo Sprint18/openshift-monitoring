@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import io
 import logging
+import subprocess
+import sys
 from unittest.mock import Mock, call, patch
 
 import pytest
@@ -56,21 +58,39 @@ def rpc_result(result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": 1, "result": result}
 
 
-def test_serialized_transport_content_text_yaml_reaches_egressip_renderer() -> None:
-    yaml_text = """apiVersion: k8s.ovn.org/v1
-kind: EgressIP
-metadata:
-    name: egress-ai
-spec:
-    egressIPs: [10.60.1.222]
-    namespaceSelector:
-      matchLabels: {team: ai}
-    podSelector: {}
-status:
-    items:
-      - egressIP: 10.60.1.222
-        node: worker-ai
+def test_imports_succeed_when_yaml_package_is_unavailable() -> None:
+    script = """
+import builtins
+real_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if name == 'yaml' or name.startswith('yaml.'):
+        raise ModuleNotFoundError("No module named 'yaml'")
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = guarded_import
+import app.mcp_normalization
+import app.agent
+import app.main
 """
+    completed = subprocess.run(
+        [sys.executable, "-c", script], check=False, capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_serialized_transport_content_text_json_reaches_egressip_renderer() -> None:
+    object_text = json.dumps({
+        "apiVersion": "k8s.ovn.org/v1",
+        "kind": "EgressIP",
+        "metadata": {"name": "egress-ai"},
+        "spec": {
+            "egressIPs": ["10.60.1.222"],
+            "namespaceSelector": {"matchLabels": {"team": "ai"}},
+            "podSelector": {},
+        },
+        "status": {
+            "items": [{"egressIP": "10.60.1.222", "node": "worker-ai"}],
+        },
+    })
     mcp = SerializedMCPClient([
         rpc_result({"protocolVersion": "2025-03-26"}), {},
         rpc_result({"tools": [_resource_tool(), _resource_get_tool()]}),
@@ -78,7 +98,7 @@ status:
             "APIVERSION KIND NAME AGE\n"
             "k8s.ovn.org/v1 EgressIP egress-ai 1d\n"
         )}]}),
-        rpc_result({"content": [{"type": "text", "text": yaml_text}]}),
+        rpc_result({"content": [{"type": "text", "text": object_text}]}),
     ])
     llm = Mock()
     result = AgentLoop(
@@ -105,18 +125,36 @@ def test_content_text_table_and_safe_shape_are_normalized_without_value_logging(
     assert "confidential-egress" not in shape
 
 
+def test_unsupported_text_is_safe_and_distinct_from_malformed() -> None:
+    result = {"content": [{
+        "type": "text", "text": "apiVersion: v1\nkind: Secret\nmetadata: hidden",
+    }]}
+    normalized = normalize_mcp_result(result)
+    assert normalized.status == "unsupported"
+    shape = mcp_result_shape(result)
+    assert "status=unsupported" in shape
+    assert "plain=true" in shape
+    assert "metadata: hidden" not in shape
+
+
 @patch("app.main.MCPClient")
 def test_explicit_kkbtest_inventory_phrase_uses_only_cluster_list(
     mcp_class: Mock,
 ) -> None:
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_tool()]
-    mcp.call_tool.return_value = {"content": [{"type": "text", "text": """
-- apiVersion: k8s.ovn.org/v1
-  kind: EgressIP
-  metadata: {name: egress-ai}
-  spec: {egressIPs: [10.60.1.222], namespaceSelector: {}, podSelector: {}}
-"""}]}
+    mcp.call_tool.return_value = {"content": [{
+        "type": "text", "text": json.dumps([{
+            "apiVersion": "k8s.ovn.org/v1",
+            "kind": "EgressIP",
+            "metadata": {"name": "egress-ai"},
+            "spec": {
+                "egressIPs": ["10.60.1.222"],
+                "namespaceSelector": {},
+                "podSelector": {},
+            },
+        }]),
+    }]}
     mcp_class.return_value = mcp
     application = create_app(settings(token="token"))
     application.state.llm_client = Mock()
@@ -281,12 +319,13 @@ def test_pending_operation_survives_cluster_as_a_separate_turn(
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_tool()]
     mcp.call_tool.side_effect = [
-        {"content": [{"type": "text", "text": """apiVersion: v1
-kind: Namespace
-metadata:
-  name: test-yapayzekarag
-  labels: {team: ai}
-"""}]},
+        {"content": [{"type": "text", "text": json.dumps({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+                "name": "test-yapayzekarag", "labels": {"team": "ai"},
+            },
+        })}]},
         {"structuredContent": {"items": [_egress("egress-ai")]}},
     ]
     mcp_class.return_value = mcp

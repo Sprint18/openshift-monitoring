@@ -5,13 +5,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import yaml
-
 
 NormalizationStatus = Literal[
     "success", "empty", "tool_error", "malformed", "unsupported",
 ]
-MAX_TEXT_PAYLOAD_CHARS = 2_000_000
 _KNOWN_WRAPPERS = ("structuredContent", "result", "resource", "object", "data")
 
 
@@ -43,16 +40,6 @@ def _decoded_json(text: str) -> Any:
         return json.loads(candidate)
     except json.JSONDecodeError:
         return None
-
-
-def _decoded_yaml(text: str) -> Any:
-    if not text.strip() or len(text) > MAX_TEXT_PAYLOAD_CHARS:
-        return None
-    try:
-        value = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return None
-    return value if isinstance(value, (dict, list)) else None
 
 
 def _table_rows(text: str) -> list[dict[str, Any]] | None:
@@ -175,10 +162,6 @@ def normalize_mcp_result(result: Any) -> NormalizedMCPResult:
         if decoded is not None:
             if normalized := _canonical_payload(decoded, "content_text_json"):
                 return normalized
-        decoded_yaml = _decoded_yaml(text)
-        if decoded_yaml is not None:
-            if normalized := _canonical_payload(decoded_yaml, "content_text_yaml"):
-                return normalized
         rows = _table_rows(text)
         if rows is None:
             rows = _bare_resource_rows(text)
@@ -216,8 +199,7 @@ def mcp_result_shape(result: Any) -> str:
             if isinstance(text, str):
                 stripped = text.lstrip()
                 parsed_json = _decoded_json(text)
-                parsed_yaml = _decoded_yaml(text) if parsed_json is None else None
-                parsed = parsed_json if parsed_json is not None else parsed_yaml
+                parsed = parsed_json
                 parsed_mapping = parsed if isinstance(parsed, dict) else {}
                 parts.extend((
                     f"text_length={len(text)}",
@@ -234,7 +216,6 @@ def mcp_result_shape(result: Any) -> str:
                     "known_wrappers=" + ",".join(
                         key for key in _KNOWN_WRAPPERS if key in parsed_mapping
                     ),
-                    f"yaml={str(parsed_yaml is not None).lower()}",
                     f"table={str(_table_rows(text) is not None).lower()}",
                     f"plain={str(parsed is None and _table_rows(text) is None).lower()}",
                 ))
