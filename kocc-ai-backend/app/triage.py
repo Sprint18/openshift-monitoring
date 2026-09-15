@@ -225,6 +225,10 @@ def decide_triage(
         max(1, len(candidate.resources)) for candidate in bounded_candidates
     )
     if comparable_entities < 2:
+        logger.info(
+            "triage_result status=insufficient_evidence cluster_id=%s candidates=%s",
+            cluster_id, len(bounded_candidates),
+        )
         raise TriageInvalid("insufficient_candidates")
     request = {
         "active_cluster_id": cluster_id,
@@ -254,25 +258,36 @@ def decide_triage(
         decision = _validate_decision(response.get("content"), bounded_candidates)
     except LLMUnavailable:
         logger.warning(
-            "triage_decision cluster_id=%s result=llm_unavailable duration_ms=%s",
+            "triage_result status=llm_unavailable cluster_id=%s duration_ms=%s",
             cluster_id, round((time.perf_counter() - started) * 1000),
         )
         raise
-    except TriageInvalid:
+    except TriageInvalid as exc:
+        code = str(exc)
+        status = (
+            "invalid_candidate"
+            if code in {
+                "invalid_selection", "invalid_tie", "invalid_tie_membership",
+                "invalid_resource", "invalid_resource_membership",
+            }
+            else "invalid_schema"
+        )
         logger.warning(
-            "triage_decision cluster_id=%s result=invalid_response duration_ms=%s",
-            cluster_id, round((time.perf_counter() - started) * 1000),
+            "triage_result status=%s cluster_id=%s reason=%s duration_ms=%s",
+            status, cluster_id, code,
+            round((time.perf_counter() - started) * 1000),
         )
         raise
     if decision.assessment == "tie":
         logger.info(
-            "triage_decision cluster_id=%s result=tie candidates=%s confidence=%s duration_ms=%s",
+            "triage_result status=tie cluster_id=%s candidates=%s confidence=%s duration_ms=%s",
             cluster_id, len(bounded_candidates), decision.confidence,
             round((time.perf_counter() - started) * 1000),
         )
     else:
         logger.info(
-            "triage_decision cluster_id=%s selected_namespace=%s confidence=%s candidates=%s duration_ms=%s",
+            "triage_result status=accepted cluster_id=%s winner_namespace=%s "
+            "confidence=%s candidates=%s duration_ms=%s",
             cluster_id, decision.selected_namespace, decision.confidence,
             len(bounded_candidates), round((time.perf_counter() - started) * 1000),
         )

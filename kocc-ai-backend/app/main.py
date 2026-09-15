@@ -34,6 +34,9 @@ from app.conversation import (
     safe_conversation_summary,
 )
 from app.evidence import EvidenceEnvelope
+from app.egressip import (
+    egressip_namespace, egressip_query_mode, is_egressip_intent,
+)
 from app.llm_client import LLMClient, LLMUnavailable
 from app.k8s_client import KubernetesAPIAdapter
 from app.intent import (
@@ -195,6 +198,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
+        direct_egress_mode = (
+            egressip_query_mode(payload.message)
+            if is_egressip_intent(payload.message) else None
+        )
         forced_namespace_query = contextual_namespace_query(
             payload.message, conversation_context
         )
@@ -210,7 +217,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and references_selected_focus(payload.message)
         ):
             pending_focus = conversation_context.investigation_focus
-        if (
+        explicit_cluster_only = bool(
+            resolved is not None
+            and resolved.operational_message.strip().casefold().strip(" ?.!")
+            in {"", "peki"}
+        )
+        if conversation_context.pending_operational_intent and explicit_cluster_only:
+            logger.info(
+                "pending_operational action=cleared reason=explicit_cluster_switch"
+            )
+            conversation_context = conversation_context.without_pending_operational()
+        elif (
+            conversation_context.pending_operational_intent
+            and direct_egress_mode in {"inventory", "namespace"}
+        ):
+            logger.info(
+                "pending_operational action=cleared reason=explicit_new_operation"
+            )
+            conversation_context = conversation_context.without_pending_operational()
+        elif (
             conversation_context.pending_operational_intent
             and conversation_context.pending_operational_cluster_id
             and pending_focus
@@ -458,6 +483,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              or interpreted_namespace_query is not None
              or investigation_followup
              or analysis_followup
+             or direct_egress_mode is not None
              or (deterministic_intent is not None
                  and deterministic_intent.scope_level in {"cluster", "node", "workload"}))
             and conversation_context.active_cluster_ids
@@ -527,7 +553,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         explicit_cluster_scope = bool(
             deterministic_intent is not None
             and deterministic_intent.scope_level == "cluster"
-        )
+        ) or direct_egress_mode == "inventory"
         if explicit_cluster_scope:
             previous_scope = (
                 "namespace" if conversation_context.investigation_focus
@@ -554,6 +580,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "reason=explicit_current_message",
                     previous_scope,
                 )
+        elif direct_egress_mode == "namespace":
+            namespace = egressip_namespace(operational_message)
+            if namespace is not None:
+                conversation_context = (
+                    conversation_context.for_explicit_cluster_scope(scope.cluster_ids)
+                    .with_operational_focus(namespace, "inspect_resource")
+                )
+                logger.info(
+                    "scope_resolution cluster_id=%s scope_level=namespace "
+                    "source=explicit_current_message",
+                    ",".join(scope.cluster_ids),
+                )
+        if direct_egress_mode == "ambiguous" and scope.kind == "single":
+            pending = (
+                conversation_context.for_explicit_cluster_scope(scope.cluster_ids)
+                .with_pending_operational("egressip_lookup", scope.cluster_ids[0])
+            )
+            logger.info(
+                "pending_operational action=created cluster_id=%s "
+                "intent=egressip_lookup parameter=namespace",
+                scope.cluster_ids[0],
+            )
+            return JSONResponse({
+                "answer": "EgressIP sorgusu için namespace adını belirtin.",
+                "clusters": [], "tool_calls": [], "evidence": [],
+                "conversation_context": pending.public_dict(),
+            })
         resolved_namespace_query = (
             forced_namespace_query
             or parse_namespace_query(operational_message)

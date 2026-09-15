@@ -4,7 +4,7 @@ import logging
 import re
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from app.classification import ConversationClassification, conversational_answer
@@ -208,6 +208,8 @@ class ConversationContext:
     previous_operational_intent: str | None = None
     pending_operational_intent: str | None = None
     pending_operational_cluster_id: str | None = None
+    pending_operational_parameter: str | None = None
+    pending_operational_scope: str | None = None
 
     @classmethod
     def from_payload(cls, value: Any) -> "ConversationContext":
@@ -228,6 +230,27 @@ class ConversationContext:
         safe_pending_cluster = (
             pending_cluster if pending_cluster in ALLOWED_CLUSTERS else None
         )
+        pending_intent = value.get("pending_operational_intent")
+        if pending_intent not in {
+            "inspect_pods", "inspect_events", "egressip_lookup",
+        }:
+            pending_intent = None
+        pending_parameter = (
+            "namespace" if value.get("pending_operational_parameter") == "namespace"
+            else None
+        )
+        pending_scope = (
+            "namespace" if value.get("pending_operational_scope") == "namespace"
+            else None
+        )
+        if safe_pending_cluster is None or (
+            pending_intent == "egressip_lookup"
+            and (pending_parameter != "namespace" or pending_scope != "namespace")
+        ):
+            pending_intent = None
+            safe_pending_cluster = None
+            pending_parameter = None
+            pending_scope = None
         return cls(
             active_cluster_ids=safe_clusters,
             last_resource_kind="Namespace" if resource == "Namespace" else None,
@@ -267,13 +290,11 @@ class ConversationContext:
                 } else None
             ),
             pending_operational_intent=(
-                value.get("pending_operational_intent")
-                if safe_pending_cluster is not None
-                and value.get("pending_operational_intent") in {
-                    "inspect_pods", "inspect_events",
-                } else None
+                pending_intent if safe_pending_cluster is not None else None
             ),
             pending_operational_cluster_id=safe_pending_cluster,
+            pending_operational_parameter=pending_parameter,
+            pending_operational_scope=pending_scope,
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -303,6 +324,10 @@ class ConversationContext:
             payload["pending_operational_intent"] = self.pending_operational_intent
         if self.pending_operational_cluster_id is not None:
             payload["pending_operational_cluster_id"] = self.pending_operational_cluster_id
+        if self.pending_operational_parameter is not None:
+            payload["pending_operational_parameter"] = self.pending_operational_parameter
+        if self.pending_operational_scope is not None:
+            payload["pending_operational_scope"] = self.pending_operational_scope
         return payload
 
     def without_pending_suggestion(self) -> "ConversationContext":
@@ -321,6 +346,8 @@ class ConversationContext:
             previous_operational_intent=self.previous_operational_intent,
             pending_operational_intent=self.pending_operational_intent,
             pending_operational_cluster_id=self.pending_operational_cluster_id,
+            pending_operational_parameter=self.pending_operational_parameter,
+            pending_operational_scope=self.pending_operational_scope,
         )
 
     def with_active_clusters(self, cluster_ids: tuple[str, ...]) -> "ConversationContext":
@@ -363,6 +390,16 @@ class ConversationContext:
                 if self.pending_operational_cluster_id in {None, *cluster_ids}
                 else None
             ),
+            pending_operational_parameter=(
+                self.pending_operational_parameter
+                if self.pending_operational_cluster_id in {None, *cluster_ids}
+                else None
+            ),
+            pending_operational_scope=(
+                self.pending_operational_scope
+                if self.pending_operational_cluster_id in {None, *cluster_ids}
+                else None
+            ),
         )
 
     def for_explicit_cluster_scope(
@@ -401,6 +438,8 @@ class ConversationContext:
             previous_operational_intent="inspect_pods",
             pending_operational_intent=self.pending_operational_intent,
             pending_operational_cluster_id=self.pending_operational_cluster_id,
+            pending_operational_parameter=self.pending_operational_parameter,
+            pending_operational_scope=self.pending_operational_scope,
         )
 
     def with_operational_focus(
@@ -427,12 +466,14 @@ class ConversationContext:
             ),
             pending_operational_intent=None,
             pending_operational_cluster_id=None,
+            pending_operational_parameter=None,
+            pending_operational_scope=None,
         )
 
     def with_pending_operational(
         self, intent: str, cluster_id: str,
     ) -> "ConversationContext":
-        if intent not in {"inspect_pods", "inspect_events"}:
+        if intent not in {"inspect_pods", "inspect_events", "egressip_lookup"}:
             return self
         return ConversationContext(
             active_cluster_ids=(cluster_id,),
@@ -451,6 +492,17 @@ class ConversationContext:
             previous_operational_intent=self.previous_operational_intent,
             pending_operational_intent=intent,
             pending_operational_cluster_id=cluster_id,
+            pending_operational_parameter="namespace",
+            pending_operational_scope="namespace",
+        )
+
+    def without_pending_operational(self) -> "ConversationContext":
+        return replace(
+            self,
+            pending_operational_intent=None,
+            pending_operational_cluster_id=None,
+            pending_operational_parameter=None,
+            pending_operational_scope=None,
         )
 
 
@@ -620,6 +672,8 @@ def namespace_followup_intent(message: str) -> str | None:
 def operational_request_message(intent: str, namespace: str) -> str:
     if intent == "inspect_events":
         return f"{namespace} namespace eventlerini güncel olarak kontrol et"
+    if intent == "egressip_lookup":
+        return f"{namespace} namespace'indeki egress ip nedir"
     return f"{namespace} namespace podlarını güncel olarak kontrol et"
 
 

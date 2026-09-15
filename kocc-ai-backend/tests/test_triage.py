@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import io
+import logging
 
 import pytest
 
@@ -140,3 +142,38 @@ def test_valid_tie_has_no_selected_focus() -> None:
     assert result.selected_namespace is None
     assert result.tied_namespaces == ("dynatrace", "lab-sdlc")
     assert "birbirine yakın" in result.render_answer()
+
+
+def test_triage_logs_bounded_machine_readable_outcomes() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    triage_logger = logging.getLogger("kocc_ai.triage")
+    triage_logger.addHandler(handler)
+    try:
+        decide_triage(
+            FakeLLM([{"content": decision(), "tool_calls": None}]),
+            question="hangisi?", cluster_id="kkbtest", candidates=candidates(),
+        )
+        assert "triage_result status=accepted" in stream.getvalue()
+        assert "winner_namespace=dynatrace" in stream.getvalue()
+
+        stream.seek(0)
+        stream.truncate(0)
+        with pytest.raises(TriageInvalid):
+            decide_triage(
+                FakeLLM([{"content": "not-json", "tool_calls": None}]),
+                question="hangisi?", cluster_id="kkbtest", candidates=candidates(),
+            )
+        assert "triage_result status=invalid_schema" in stream.getvalue()
+        assert "reason=invalid_json" in stream.getvalue()
+
+        stream.seek(0)
+        stream.truncate(0)
+        with pytest.raises(TriageInvalid):
+            decide_triage(
+                FakeLLM([]), question="hangisi?", cluster_id="kkbtest",
+                candidates=(TriageCandidate("only-one", ()),),
+            )
+        assert "triage_result status=insufficient_evidence" in stream.getvalue()
+    finally:
+        triage_logger.removeHandler(handler)

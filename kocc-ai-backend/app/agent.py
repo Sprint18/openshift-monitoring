@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from app.config import Settings
 from app.egressip import (
     egressip_has_full_detail, egressip_inventory_record, egressip_namespace,
-    egressip_query_mode, evaluate_egressips, is_egressip_intent,
+    egressip_query_mode, evaluate_egressips, is_egressip_intent, result_shape,
     namespace_labels, resource_items, resource_names, resource_object,
 )
 from app.evidence import EvidenceEnvelope, EvidenceResource
@@ -1001,7 +1001,10 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         else:
             names = resource_names(egress_result, "EgressIP")
             if names is None:
-                logger.info("egressip_result status=parse_error")
+                logger.info(
+                    "egressip_result status=parse_error stage=list shape=%s",
+                    result_shape(egress_result),
+                )
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                     summaries, [], 0,
@@ -1127,64 +1130,24 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 "bulunamadı.",
                 summaries, [{"tool": "resources_list", "status": "success"}], 0,
             )
-        names = resource_names(result, "EgressIP")
-        if names is None:
-            logger.info("egressip_result status=parse_error")
+        if listed_items is None:
+            logger.info(
+                "egressip_result status=parse_error stage=list shape=%s",
+                result_shape(result),
+            )
             return AgentResult(
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
                 "doğrulanamadı.", summaries, [], 0,
             )
-        listed_by_name = {
-            item["metadata"]["name"]: item for item in (listed_items or [])
-            if isinstance(item.get("metadata"), dict)
-            and isinstance(item["metadata"].get("name"), str)
-        }
-        detail_names = [
-            name for name in names
-            if not egressip_has_full_detail(listed_by_name.get(name, {}))
-        ]
-        if len(detail_names) > max(0, self.settings.agent_max_tool_calls - 1):
-            logger.info("egressip_result status=parse_error")
-            return AgentResult(
-                f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
-                "doğrulanamadı.", summaries, [], 0,
-            )
-        detailed_items = [
-            item for name, item in listed_by_name.items() if name not in detail_names
-        ]
-        for name in detail_names:
-            arguments = self._resource_get_arguments(
-                "k8s.ovn.org/v1", "EgressIP", name,
-                tool_schemas.get("resources_get"),
-            )
-            if arguments is None:
-                logger.info("egressip_result status=parse_error")
-                return AgentResult(
-                    f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu "
-                    "anda doğrulanamadı.", summaries, [], 0,
-                )
-            detail, detail_summary = self._call_backend_tool(
-                "resources_get", arguments, available_names, tool_schemas,
-                resource="EgressIP",
-            )
-            summaries.append(detail_summary)
-            item = resource_object(detail) if detail is not None else None
-            if item is None or not egressip_has_full_detail(item):
-                logger.info(
-                    "egressip_result status=%s",
-                    "tool_error" if detail is None else "parse_error",
-                )
-                return AgentResult(
-                    f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu "
-                    "anda doğrulanamadı.", summaries, [], 0,
-                )
-            detailed_items.append(item)
         records = [
-            record for item in detailed_items
+            record for item in listed_items
             if (record := egressip_inventory_record(item)) is not None
         ]
-        if len(records) != len(names):
-            logger.info("egressip_result status=parse_error")
+        if len(records) != len(listed_items):
+            logger.info(
+                "egressip_result status=parse_error stage=items shape=%s",
+                result_shape(result),
+            )
             return AgentResult(
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
                 "doğrulanamadı.", summaries, [], 0,
@@ -1216,7 +1179,12 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             )
             lines.append(
                 "- Pod Selector: "
-                + ("yapılandırılmış" if record["pod_selector"] else "tüm podlar")
+                + (
+                    "liste yanıtında sunulmadı"
+                    if record["pod_selector"] is None
+                    else "yapılandırılmış" if record["pod_selector"]
+                    else "tüm podlar"
+                )
             )
         if len(records) > 50:
             lines.append(f"\n- Ek {len(records) - 50} nesne gösterilmedi.")

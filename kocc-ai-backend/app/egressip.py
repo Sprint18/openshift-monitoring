@@ -18,6 +18,7 @@ def egressip_namespace(message: str) -> str | None:
     if not re.search(r"\begress\s*ip\b", normalized):
         return None
     patterns = (
+        rf"\b({_DNS_LABEL})\s+namespace'?(?:indeki|indeki|ndeki)\s+egress\s*ip\b",
         rf"\b({_DNS_LABEL})\s+namespace(?:'?(?:inin|ının|unun|ünün|in|ın|un|ün))?\s+egress\s*ip\b",
         rf"\b({_DNS_LABEL})'?(?:ye|ya|e|a)\s+ait\s+egress\s*ip\b",
         rf"\b({_HYPHENATED_DNS_LABEL})\s+egress\s*ip\b",
@@ -91,6 +92,21 @@ def selector_summary(selector: Any) -> str:
 
 
 def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
+    # The official OpenShift MCP server's default table output exposes rows as
+    # structuredContent.items with Kubernetes column names. A Name-only row is
+    # still a valid result for this fixed-kind query; unavailable detail stays
+    # explicit instead of triggering speculative resources_get calls.
+    if not {"apiVersion", "kind", "metadata", "spec"} & set(item):
+        table_name = item.get("Name")
+        if isinstance(table_name, str) and table_name:
+            return {
+                "name": table_name,
+                "configured_ips": [],
+                "assignments": [],
+                "namespace_selector": "liste yanıtında sunulmadı",
+                "pod_selector": None,
+            }
+        return None
     if item.get("apiVersion") != "k8s.ovn.org/v1" or item.get("kind") != "EgressIP":
         return None
     metadata, spec = item.get("metadata"), item.get("spec")
@@ -125,7 +141,10 @@ def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
         )) if isinstance(spec.get("egressIPs"), list) else [],
         "assignments": assignments,
         "namespace_selector": selector_summary(spec.get("namespaceSelector")),
-        "pod_selector": spec.get("podSelector") not in (None, {}),
+        "pod_selector": (
+            None if "podSelector" not in spec
+            else spec.get("podSelector") not in (None, {})
+        ),
     }
 
 
@@ -192,6 +211,34 @@ def resource_items(result: dict[str, Any]) -> list[dict[str, Any]] | None:
         if isinstance(candidate, dict) and isinstance(candidate.get("items"), list):
             return [item for item in candidate["items"] if isinstance(item, dict)]
     return None
+
+
+def result_shape(result: Any) -> str:
+    """Describe an MCP result structure without exposing resource values."""
+    if not isinstance(result, dict):
+        return f"root={type(result).__name__}"
+    parts = ["root_keys=" + ",".join(sorted(str(key) for key in result)[:12])]
+    structured = result.get("structuredContent")
+    parts.append(f"structured={type(structured).__name__}")
+    if isinstance(structured, dict):
+        parts.append(
+            "structured_keys="
+            + ",".join(sorted(str(key) for key in structured)[:12])
+        )
+        items = structured.get("items")
+        if isinstance(items, list):
+            parts.append(f"items={len(items)}")
+            if items and isinstance(items[0], dict):
+                parts.append(
+                    "item_keys="
+                    + ",".join(sorted(str(key) for key in items[0])[:12])
+                )
+    content = result.get("content")
+    if isinstance(content, list):
+        parts.append(f"content={len(content)}")
+    else:
+        parts.append(f"content={type(content).__name__}")
+    return " ".join(parts)
 
 
 def resource_object(result: dict[str, Any]) -> dict[str, Any] | None:
@@ -283,10 +330,10 @@ def selector_is_valid(selector: Any) -> bool:
 def egressip_has_full_detail(item: dict[str, Any]) -> bool:
     spec = item.get("spec")
     return (
-        isinstance(item.get("metadata"), dict)
+        item.get("apiVersion") == "k8s.ovn.org/v1"
+        and item.get("kind") == "EgressIP"
+        and isinstance(item.get("metadata"), dict)
         and isinstance(spec, dict)
-        and "namespaceSelector" in spec
-        and "podSelector" in spec
     )
 
 
