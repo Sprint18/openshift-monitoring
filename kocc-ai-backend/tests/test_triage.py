@@ -69,18 +69,18 @@ def test_structured_triage_uses_fixed_rubric_and_normalized_schema() -> None:
     assert llm.calls[0]["messages"][0]["content"] == TRIAGE_SYSTEM_PROMPT
     prompt = json.loads(llm.calls[0]["messages"][1]["content"])
     assert set(prompt) == {
-        "active_cluster_id", "question", "recent_semantic_context",
-        "comparison_candidates",
+        "active_cluster_id", "question", "comparison_candidates",
     }
+    assert "Önceki grounded özet" not in llm.calls[0]["messages"][1]["content"]
     assert prompt["comparison_candidates"][0] == {
         "namespace": "dynatrace",
         "resources": [{
-            "kind": "Pod", "name": "oneagent-a", "state": "Pending",
-            "ready": False, "restart_count": 0, "reasons": ["FailedMount"],
-        }, {
             "kind": "Pod", "name": "csi-driver-b", "state": "Pending",
             "ready": False, "restart_count": 0,
             "reasons": ["FailedScheduling"],
+        }, {
+            "kind": "Pod", "name": "oneagent-a", "state": "Pending",
+            "ready": False, "restart_count": 0, "reasons": ["FailedMount"],
         }],
     }
     assert "namespace naming" in TRIAGE_SYSTEM_PROMPT

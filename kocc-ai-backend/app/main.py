@@ -524,6 +524,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "multi" if scope.kind == "multiple" else scope.kind,
                 ",".join(scope.cluster_ids), route_source,
             )
+        explicit_cluster_scope = bool(
+            deterministic_intent is not None
+            and deterministic_intent.scope_level == "cluster"
+        )
+        if explicit_cluster_scope:
+            previous_scope = (
+                "namespace" if conversation_context.investigation_focus
+                or (conversation_context.active_inspection is not None
+                    and conversation_context.active_inspection.namespace)
+                else "cluster"
+            )
+            conversation_context = conversation_context.for_explicit_cluster_scope(
+                scope.cluster_ids
+            )
+            forced_namespace_query = None
+            interpreted_namespace_query = None
+            forced_entity_message = None
+            required_fresh_intent = None
+            required_fresh_namespace = None
+            logger.info(
+                "scope_resolution cluster_id=%s scope_level=cluster "
+                "source=explicit_current_message",
+                ",".join(scope.cluster_ids),
+            )
+            if previous_scope != "cluster":
+                logger.info(
+                    "context_transition previous_scope=%s current_scope=cluster "
+                    "reason=explicit_current_message",
+                    previous_scope,
+                )
         resolved_namespace_query = (
             forced_namespace_query
             or parse_namespace_query(operational_message)
@@ -772,6 +802,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 selected.id, len(safe_facts.get(
                                     "problematic_namespaces", []
                                 )),
+                            )
+                            logger.info(
+                                "operational_evidence cluster_id=%s scope_level=%s "
+                                "candidates=%s",
+                                selected.id,
+                                "namespace" if item.resource.namespace else "cluster",
+                                len(safe_facts.get("triage_candidates", [])),
                             )
                             break
                 evidence = [

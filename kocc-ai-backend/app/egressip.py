@@ -119,6 +119,10 @@ def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
             assignments.append({"ip": address, "node": safe_node})
     return {
         "name": name,
+        "configured_ips": list(dict.fromkeys(
+            address for address in spec.get("egressIPs", [])[:20]
+            if isinstance(address, str) and address
+        )) if isinstance(spec.get("egressIPs"), list) else [],
         "assignments": assignments,
         "namespace_selector": selector_summary(spec.get("namespaceSelector")),
         "pod_selector": spec.get("podSelector") not in (None, {}),
@@ -140,7 +144,11 @@ def _decoded_json(value: str) -> Any:
         return None
 
 
-def _payloads(value: Any, seen: set[int] | None = None) -> list[Any]:
+def _payloads(
+    value: Any, seen: set[int] | None = None, depth: int = 0,
+) -> list[Any]:
+    if depth > 8:
+        return []
     visited = seen or set()
     if isinstance(value, (dict, list)):
         identity = id(value)
@@ -151,15 +159,15 @@ def _payloads(value: Any, seen: set[int] | None = None) -> list[Any]:
     if isinstance(value, dict):
         text = value.get("text")
         if isinstance(text, str) and (decoded := _decoded_json(text)) is not None:
-            values.extend(_payloads(decoded, visited))
+            values.extend(_payloads(decoded, visited, depth + 1))
         for key, nested in value.items():
             if key in _WRAPPER_KEYS:
-                values.extend(_payloads(nested, visited))
+                values.extend(_payloads(nested, visited, depth + 1))
     elif isinstance(value, list):
         for nested in value:
-            values.extend(_payloads(nested, visited))
+            values.extend(_payloads(nested, visited, depth + 1))
     elif isinstance(value, str) and (decoded := _decoded_json(value)) is not None:
-        values.extend(_payloads(decoded, visited))
+        values.extend(_payloads(decoded, visited, depth + 1))
     return values
 
 
@@ -279,7 +287,6 @@ def egressip_has_full_detail(item: dict[str, Any]) -> bool:
         and isinstance(spec, dict)
         and "namespaceSelector" in spec
         and "podSelector" in spec
-        and isinstance(item.get("status"), dict)
     )
 
 
@@ -326,7 +333,12 @@ def matching_egressips(
                     assignments.append({"ip": assignment["egressIP"], "node": node})
         matches.append({
             "name": str(metadata.get("name") or "EgressIP"),
+            "configured_ips": list(dict.fromkeys(
+                address for address in spec.get("egressIPs", [])[:20]
+                if isinstance(address, str) and address
+            )) if isinstance(spec.get("egressIPs"), list) else [],
             "assignments": assignments,
+            "namespace_selector": selector_summary(spec.get("namespaceSelector")),
             "pod_selector": spec.get("podSelector") not in (None, {}),
         })
     return matches

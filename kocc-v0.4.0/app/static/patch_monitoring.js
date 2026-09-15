@@ -130,13 +130,30 @@
     const renderDesigns = designs => {
         state.designs = designs || [];
         const output = byId("patch-designs");
-        output.innerHTML = state.designs.length ? state.designs.map((design, index) => `<button type="button" class="patch-design-card" data-design="${index}"><strong>${esc(design.name)}</strong><small>${esc(design.description || "Kayıtlı patch akışı")}</small><small>Hedef ${esc(design.settings?.target_tag || "—")} · ${esc(design.settings?.namespace_glob || "*")}</small><span>Bu akışı kullan →</span></button>`).join("") : '<div class="patch-empty">Henüz kayıtlı akış yok. Aşağıdan yeni bir akış oluşturabilirsiniz.</div>';
+        output.innerHTML = state.designs.length ? state.designs.map((design, index) => `<div class="patch-design-item"><button type="button" class="patch-design-card" data-design="${index}"><strong>${esc(design.name)}</strong><small>${esc(design.description || "Kayıtlı patch akışı")}</small><small>Hedef ${esc(design.settings?.target_tag || "—")} · ${esc(design.settings?.namespace_glob || "*")}</small><span>Bu akışı kullan →</span></button><button type="button" class="patch-design-delete" data-delete-design="${index}" aria-label="${esc(design.name)} akışını sil">Sil</button></div>`).join("") : '<div class="patch-empty">Henüz kayıtlı akış yok. Aşağıdan yeni bir akış oluşturabilirsiniz.</div>';
         output.querySelectorAll("[data-design]").forEach(button => {
             button.onclick = () => {
                 output.querySelectorAll("[data-design]").forEach(item => item.classList.remove("selected"));
                 button.classList.add("selected");
                 state.selectedDesign = Number(button.dataset.design);
                 applySettings(state.designs[state.selectedDesign].settings);
+            };
+        });
+        output.querySelectorAll("[data-delete-design]").forEach(button => {
+            button.onclick = async () => {
+                const index = Number(button.dataset.deleteDesign);
+                const design = state.designs[index];
+                if (!design || !confirm(`“${design.name}” akışı silinsin mi? Mevcut oturum ve baseline kayıtları korunur.`)) return;
+                button.disabled = true;
+                try {
+                    await api(`/api/patch/flows/designs/${encodeURIComponent(design.name)}`, {method:"DELETE"});
+                    const updated = await api("/api/patch/flows");
+                    state.selectedDesign = null;
+                    renderDesigns(updated.designs);
+                } catch (error) {
+                    button.disabled = false;
+                    showError(error.message);
+                }
             };
         });
     };
@@ -194,12 +211,16 @@
             const selected = state.selectedDesign == null ? null : state.designs[state.selectedDesign];
             const name = prompt("Akış tasarımı adı", selected?.name || "");
             if (!name) return;
+            const saveButton = byId("patch-save");
+            saveButton.disabled = true;
             try {
                 await api("/api/patch/flows/designs", {method:"POST",body:JSON.stringify({name,description:selected?.description || "KOCC patch akışı",settings:currentSettings()})});
                 const updated = await api("/api/patch/flows");
-                state.selectedDesign = null;
                 renderDesigns(updated.designs);
+                state.selectedDesign = state.designs.findIndex(design => design.name === name);
+                byId("patch-designs").querySelector(`[data-design="${state.selectedDesign}"]`)?.classList.add("selected");
             } catch (error) { showError(error.message); }
+            finally { saveButton.disabled = false; }
         };
         byId("patch-create").onclick = async () => {
             try {

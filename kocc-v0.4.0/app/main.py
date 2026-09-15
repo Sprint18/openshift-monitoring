@@ -1653,6 +1653,11 @@ def api_patch_flow_design(payload: dict[str, Any]) -> JSONResponse:
     return patch_call(patch_backend_client.save_design, payload)
 
 
+@app.delete("/api/patch/flows/designs/{name:path}")
+def api_patch_delete_flow_design(name: str) -> JSONResponse:
+    return patch_call(patch_backend_client.delete_design, name)
+
+
 @app.get("/api/patch/sessions")
 def api_patch_sessions() -> JSONResponse:
     return patch_call(patch_backend_client.sessions)

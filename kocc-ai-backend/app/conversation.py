@@ -365,6 +365,22 @@ class ConversationContext:
             ),
         )
 
+    def for_explicit_cluster_scope(
+        self, cluster_ids: tuple[str, ...],
+    ) -> "ConversationContext":
+        """Start a fresh cluster-wide operation without stale namespace scope."""
+        return ConversationContext(
+            active_cluster_ids=cluster_ids,
+            last_resource_kind=self.last_resource_kind,
+            last_namespace=self.last_namespace,
+            last_query_operation=self.last_query_operation,
+            last_operation=self.last_operation,
+            last_filter_type=self.last_filter_type,
+            last_filter_value=self.last_filter_value,
+            pending_suggestion_original=self.pending_suggestion_original,
+            pending_suggestion_name=self.pending_suggestion_name,
+        )
+
     def with_active_inspection(
         self, inspection: ActiveInspection,
     ) -> "ConversationContext":

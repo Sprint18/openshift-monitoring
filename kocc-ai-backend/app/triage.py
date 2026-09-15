@@ -47,8 +47,9 @@ Do not use namespace naming (lab/test/uat/prod/openshift), object age, raw
 cumulative restart count, assumed traffic, assumed business importance,
 guessed dependencies, or guessed customer impact as standalone priority proof.
 Pod age is not outage duration and restart count is not continuous outage.
-Select a namespace only from comparison_candidates. Use assessment=highest for
-one defensible technical priority. Use assessment=tie only when evidence cannot
+Select a namespace only from comparison_candidates and selected_resources only
+from that candidate. A single namespace may still contain multiple comparable
+resources. Use assessment=highest for one defensible technical priority. Use assessment=tie only when evidence cannot
 reasonably distinguish candidates; then selected_namespace must be null and at
 least two tied_namespaces are required. This is technical priority, not business
 criticality. Do not output Markdown, explanations outside JSON, extra keys, or
@@ -80,9 +81,14 @@ class TriageDecision:
                 f"{names} birbirine yakın değerlendirildi."
             )
         else:
+            resources = (
+                ", ".join(f"`{item}`" for item in self.selected_resources)
+                if self.selected_resources else ""
+            )
             heading = (
                 "Yorum: Teknik operasyonel inceleme önceliği olarak "
-                f"`{self.selected_namespace}` seçildi."
+                f"`{self.selected_namespace}` seçildi"
+                + (f"; öne çıkan kaynak: {resources}." if resources else ".")
             )
         return (
             f"{heading}\n\n**Gerekçeler:**\n{reasons}\n\n"
@@ -212,19 +218,26 @@ def decide_triage(
     candidates: tuple[TriageCandidate, ...],
     semantic_history: Iterable[SafeTurn] = (),
 ) -> TriageDecision:
-    bounded_candidates = candidates[:MAX_CANDIDATES]
-    if len(bounded_candidates) < 2:
+    bounded_candidates = tuple(sorted(
+        candidates[:MAX_CANDIDATES], key=lambda item: item.namespace,
+    ))
+    comparable_entities = sum(
+        max(1, len(candidate.resources)) for candidate in bounded_candidates
+    )
+    if comparable_entities < 2:
         raise TriageInvalid("insufficient_candidates")
     request = {
         "active_cluster_id": cluster_id,
         "question": question.strip()[:MAX_QUESTION_CHARS],
-        "recent_semantic_context": _bounded_history(semantic_history),
         "comparison_candidates": [
             {
                 "namespace": item.namespace,
                 "resources": [
                     resource.public_dict()
-                    for resource in item.resources[:MAX_RESOURCES]
+                    for resource in sorted(
+                        item.resources[:MAX_RESOURCES],
+                        key=lambda value: (value.kind, value.name),
+                    )
                 ],
             }
             for item in bounded_candidates

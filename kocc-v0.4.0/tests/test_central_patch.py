@@ -38,6 +38,11 @@ def test_native_central_patch_ui_contract() -> None:
     assert 'window.addEventListener("pagehide"' in script
     assert "PAGE_SIZE = 50" in script
     assert "flows.designs" in script
+    assert "data-delete-design" in script
+    assert 'method:"DELETE"' in script
+    assert "Mevcut oturum ve baseline kayıtları korunur" in script
+    assert "saveButton.disabled = true" in script
+    assert "saveButton.disabled = false" in script
     assert "summary.counts" in script and "summaryTotals" in script
     assert "patch-target-table" in template
     assert "next_cursor" in script and "patch-images-pagination" in template
@@ -164,6 +169,7 @@ def test_patch_proxy_routes_are_explicit_and_no_arbitrary_fetch_exists() -> None
     expected = {
         "/api/patch/config", "/api/patch/clusters", "/api/patch/flows",
         "/api/patch/flows/preview", "/api/patch/flows/designs",
+        "/api/patch/flows/designs/{name:path}",
         "/api/patch/sessions", "/api/patch/sessions/{session_id}",
         "/api/patch/sessions/{session_id}/baseline",
         "/api/patch/sessions/{session_id}/start",
@@ -207,6 +213,29 @@ def test_central_patch_database_ownership_remains_external() -> None:
         assert f"create table {table}" not in schema
     assert "sqlite" not in patch_client
     assert "/data/patch.db" not in patch_client
+
+
+@patch("app.patch_client.urllib.request.urlopen")
+def test_delete_saved_design_uses_encoded_allowlisted_upstream_path(
+    urlopen: Mock,
+) -> None:
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = b'{"name":"A/B akisi","deleted":true}'
+    urlopen.return_value = response
+    client = CentralPatchClient("http://patch-monitor:8080", 4, "token")
+    assert client.delete_design("A/B akisi")["deleted"] is True
+    request = urlopen.call_args.args[0]
+    assert request.method == "DELETE"
+    assert request.full_url.endswith("/api/v1/flows/designs/A%2FB%20akisi")
+
+
+def test_delete_saved_design_rejects_invalid_names_without_network() -> None:
+    client = CentralPatchClient("http://patch-monitor:8080", 4, "token")
+    with pytest.raises(PatchBackendError) as caught:
+        client.delete_design("")
+    assert caught.value.code == "invalid_resource"
 
 
 @patch("app.patch_client.urllib.request.urlopen")

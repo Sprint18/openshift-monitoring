@@ -54,6 +54,13 @@ class CentralPatchClient:
     def save_design(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", "/api/v1/flows/designs", payload)
 
+    def delete_design(self, name: str) -> dict[str, Any]:
+        if not isinstance(name, str) or not 1 <= len(name) <= 80:
+            raise PatchBackendError("invalid_resource")
+        return self._request(
+            "DELETE", "/api/v1/flows/designs/" + urllib.parse.quote(name, safe="")
+        )
+
     def sessions(self) -> dict[str, Any]:
         return self._request("GET", "/api/v1/sessions")
 
