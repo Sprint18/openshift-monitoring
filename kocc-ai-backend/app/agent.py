@@ -10,8 +10,12 @@ from typing import TYPE_CHECKING, Any
 from app.config import Settings
 from app.egressip import (
     egressip_has_full_detail, egressip_inventory_record, egressip_namespace,
-    egressip_query_mode, evaluate_egressips, is_egressip_intent, result_shape,
-    namespace_labels, resource_items, resource_names, resource_object,
+    egressip_query_mode, evaluate_egressips, is_egressip_intent,
+    namespace_labels,
+)
+from app.mcp_normalization import (
+    mcp_result_shape, normalize_mcp_result, resource_items, resource_names,
+    resource_object,
 )
 from app.evidence import EvidenceEnvelope, EvidenceResource
 from app.llm_client import LLMClient, LLMUnavailable
@@ -1003,7 +1007,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             if names is None:
                 logger.info(
                     "egressip_result status=malformed stage=list shape=%s",
-                    result_shape(egress_result),
+                    mcp_result_shape(egress_result),
                 )
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
@@ -1057,6 +1061,12 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     )
                 detailed_items.append(item)
         matches, verified = evaluate_egressips(detailed_items, labels)
+        logger.info(
+            "egressip_namespace_match namespace=%s resources_scanned=%s "
+            "resources_matched=%s status=%s",
+            namespace, len(detailed_items), len(matches),
+            "success" if verified else "malformed",
+        )
         if not verified:
             logger.info("egressip_result status=malformed")
             return AgentResult(
@@ -1126,7 +1136,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if listed_items == []:
             logger.info(
                 "egressip_result status=empty shape=%s normalized_count=0",
-                result_shape(result),
+                mcp_result_shape(result),
             )
             return AgentResult(
                 f"## EgressIP Envanteri\n\n{cluster_name} için EgressIP nesnesi "
@@ -1136,12 +1146,43 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if listed_items is None:
             logger.info(
                 "egressip_result status=malformed stage=list shape=%s normalized_count=0",
-                result_shape(result),
+                mcp_result_shape(result),
             )
             return AgentResult(
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
                 "doğrulanamadı.", summaries, [], 0,
             )
+        # Older MCP servers expose list output only as a kubectl table in
+        # content[].text. When resources_get is available, enrich bounded table
+        # rows with the canonical YAML object so selectors/status are rendered.
+        detail_budget = max(0, self.settings.agent_max_tool_calls - 1)
+        detail_calls = 0
+        enriched_items: list[dict[str, Any]] = []
+        for item in listed_items:
+            if egressip_has_full_detail(item) or detail_calls >= detail_budget:
+                enriched_items.append(item)
+                continue
+            name = item.get("Name")
+            arguments = self._resource_get_arguments(
+                "k8s.ovn.org/v1", "EgressIP", name,
+                tool_schemas.get("resources_get"),
+            ) if isinstance(name, str) else None
+            if "resources_get" not in available_names or arguments is None:
+                enriched_items.append(item)
+                continue
+            detail, detail_summary = self._call_backend_tool(
+                "resources_get", arguments, available_names, tool_schemas,
+                resource="EgressIP",
+            )
+            detail_calls += 1
+            summaries.append(detail_summary)
+            detail_object = resource_object(detail) if detail is not None else None
+            enriched_items.append(
+                detail_object
+                if detail_object is not None and egressip_has_full_detail(detail_object)
+                else item
+            )
+        listed_items = enriched_items
         records = [
             record for item in listed_items
             if (record := egressip_inventory_record(item)) is not None
@@ -1149,7 +1190,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if len(records) != len(listed_items):
             logger.info(
                 "egressip_result status=malformed stage=items shape=%s normalized_count=%s",
-                result_shape(result), len(records),
+                mcp_result_shape(result), len(records),
             )
             return AgentResult(
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
@@ -1194,7 +1235,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         logger.info(
             "egressip_result status=success shape=%s objects=%s assigned=%s "
             "normalized_count=%s",
-            result_shape(result), len(records), assignment_count, len(records),
+            mcp_result_shape(result), len(records), assignment_count, len(records),
         )
         return AgentResult(
             "\n".join(lines), summaries,
@@ -1226,6 +1267,16 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         started = time.perf_counter()
         try:
             result = self.mcp.call_tool(name, arguments)
+            if name in {"resources_list", "resources_get"}:
+                normalized = normalize_mcp_result(result)
+                logger.info(
+                    "mcp_normalization tool=%s resource=%s source=%s "
+                    "raw_item_count=%s normalized_count=%s status=%s shape=%s",
+                    name, resource or "unspecified", normalized.source,
+                    normalized.raw_item_count,
+                    len(normalized.objects or normalized.table_rows),
+                    normalized.status, mcp_result_shape(result),
+                )
             if result.get("isError"):
                 return None, summary
             summary["status"] = "success"

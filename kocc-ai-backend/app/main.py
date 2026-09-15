@@ -198,6 +198,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
+        pending_resume_message: str | None = None
+        if (
+            resolved is not None
+            and conversation_context.pending_operational_intent == "egressip_lookup"
+            and conversation_context.pending_operational_parameter == "cluster"
+        ):
+            pending_namespace = conversation_context.pending_operational_namespace
+            pending_resume_message = (
+                operational_request_message("egressip_lookup", pending_namespace)
+                if pending_namespace else (
+                    "tüm egress ipleri listele"
+                    if conversation_context.pending_operational_scope == "inventory"
+                    else "egressip"
+                )
+            )
+            logger.info(
+                "operation=egressip_lookup resolution_source=pending "
+                "cluster_id=%s namespace_present=%s pending_parameter=cluster "
+                "context_cleared=true",
+                ",".join(resolved.scope.cluster_ids),
+                str(pending_namespace is not None).lower(),
+            )
+            conversation_context = (
+                conversation_context.without_pending_operational()
+                .with_active_clusters(resolved.scope.cluster_ids)
+            )
         explicit_repeat_query = (
             namespace_query_from_context(conversation_context)
             if resolved is not None
@@ -222,8 +248,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 resolved.scope.cluster_ids
             )
         direct_egress_mode = (
-            egressip_query_mode(payload.message)
-            if is_egressip_intent(payload.message) else None
+            egressip_query_mode(pending_resume_message or payload.message)
+            if is_egressip_intent(pending_resume_message or payload.message) else None
         )
         forced_namespace_query = contextual_namespace_query(
             payload.message, conversation_context
@@ -486,7 +512,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if resolved is not None:
             scope = resolved.scope
             route_source = "explicit"
-            operational_message = resolved.operational_message or payload.message
+            operational_message = (
+                pending_resume_message
+                or resolved.operational_message
+                or payload.message
+            )
             if (
                 forced_namespace_query is None
                 and resolved.operational_message.strip().casefold().strip(" ?.!")
@@ -509,6 +539,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              or investigation_followup
              or analysis_followup
              or direct_egress_mode is not None
+             or classification.conversation_class == "operational"
              or (deterministic_intent is not None
                  and deterministic_intent.scope_level in {"cluster", "node", "workload"}))
             and conversation_context.active_cluster_ids
@@ -546,6 +577,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ) if interpreted_namespace_query is not None
                 else conversation_context
             )
+            if direct_egress_mode is not None:
+                pending_scope = (
+                    direct_egress_mode
+                    if direct_egress_mode in {"inventory", "namespace"}
+                    else "namespace"
+                )
+                pending_context = conversation_context.with_pending_operational(
+                    "egressip_lookup", None, parameter="cluster",
+                    scope=pending_scope,
+                    namespace=egressip_namespace(payload.message),
+                )
+                logger.info(
+                    "pending_operational action=created intent=egressip_lookup "
+                    "parameter=cluster scope=%s namespace_present=%s",
+                    pending_scope,
+                    str(pending_context.pending_operational_namespace is not None).lower(),
+                )
             if interpreted_namespace_query is not None:
                 logger.info(
                     "context_state action=pending resource=Namespace query_type=%s operation=%s",
@@ -578,7 +626,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         explicit_cluster_scope = bool(
             deterministic_intent is not None
             and deterministic_intent.scope_level == "cluster"
-        ) or direct_egress_mode == "inventory"
+        ) or direct_egress_mode == "inventory" or bool(
+            classification.conversation_class == "operational"
+            and not investigation_followup
+            and forced_namespace_query is None
+            and forced_entity_message is None
+            and interpreted_namespace_query is None
+            and direct_egress_mode is None
+        )
         if explicit_cluster_scope:
             previous_scope = (
                 "namespace" if conversation_context.investigation_focus

@@ -749,6 +749,7 @@ def test_shiftlight_sends_bounded_safe_history_and_structured_context() -> None:
     assert '"investigation_focus", "previous_operational_intent"' in source
     assert '"pending_operational_intent", "pending_operational_cluster_id"' in source
     assert '"pending_operational_parameter", "pending_operational_scope"' in source
+    assert '"pending_operational_scope", "pending_operational_namespace"' in source
     assert "inspection.problematic_namespaces" in source
     assert "context: {}" in source[source.index("const emptyConversation"):source.index("const emptyStore")]
     assert 'summary: ""' in source[source.index("const emptyConversation"):source.index("const emptyStore")]
