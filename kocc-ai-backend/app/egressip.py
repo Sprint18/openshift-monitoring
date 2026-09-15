@@ -103,10 +103,11 @@ def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(table_name, str) and table_name:
             return {
                 "name": table_name,
-                "configured_ips": [],
-                "assignments": [],
-                "namespace_selector": "liste yanıtında sunulmadı",
+                "configured_ips": None,
+                "assignments": None,
+                "namespace_selector": None,
                 "pod_selector": None,
+                "details_authoritative": False,
             }
         return None
     if item.get("apiVersion") != "k8s.ovn.org/v1" or item.get("kind") != "EgressIP":
@@ -147,6 +148,7 @@ def egressip_inventory_record(item: dict[str, Any]) -> dict[str, Any] | None:
             None if "podSelector" not in spec
             else spec.get("podSelector") not in (None, {})
         ),
+        "details_authoritative": True,
     }
 
 

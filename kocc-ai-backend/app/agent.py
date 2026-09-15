@@ -1152,37 +1152,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
                 "doğrulanamadı.", summaries, [], 0,
             )
-        # Older MCP servers expose list output only as a kubectl table in
-        # content[].text. When resources_get is available, enrich bounded table
-        # rows with the canonical YAML object so selectors/status are rendered.
-        detail_budget = max(0, self.settings.agent_max_tool_calls - 1)
-        detail_calls = 0
-        enriched_items: list[dict[str, Any]] = []
-        for item in listed_items:
-            if egressip_has_full_detail(item) or detail_calls >= detail_budget:
-                enriched_items.append(item)
-                continue
-            name = item.get("Name")
-            arguments = self._resource_get_arguments(
-                "k8s.ovn.org/v1", "EgressIP", name,
-                tool_schemas.get("resources_get"),
-            ) if isinstance(name, str) else None
-            if "resources_get" not in available_names or arguments is None:
-                enriched_items.append(item)
-                continue
-            detail, detail_summary = self._call_backend_tool(
-                "resources_get", arguments, available_names, tool_schemas,
-                resource="EgressIP",
-            )
-            detail_calls += 1
-            summaries.append(detail_summary)
-            detail_object = resource_object(detail) if detail is not None else None
-            enriched_items.append(
-                detail_object
-                if detail_object is not None and egressip_has_full_detail(detail_object)
-                else item
-            )
-        listed_items = enriched_items
+        normalized = normalize_mcp_result(result)
         records = [
             record for item in listed_items
             if (record := egressip_inventory_record(item)) is not None
@@ -1201,8 +1171,11 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         for record in records[:50]:
             lines.append(f"\n### {record['name']}")
             assignments = record["assignments"]
-            assignment_count += len(assignments)
-            if assignments:
+            assignment_count += len(assignments or [])
+            if assignments is None:
+                lines.append("- EgressIP adresi: liste yanıtında sunulmadı")
+                lines.append("- Node ataması: liste yanıtında sunulmadı")
+            elif assignments:
                 for assignment in assignments:
                     lines.append(f"- EgressIP: `{assignment['ip']}`")
                     if assignment["node"]:
@@ -1218,9 +1191,11 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     "- Atanmış EgressIP adresi yok. Henüz bir node ataması "
                     "gözlemlenmedi."
                 )
-            lines.append(
-                f"- Namespace Selector: `{record['namespace_selector']}`"
-            )
+            lines.append("- Namespace Selector: " + (
+                "liste yanıtında sunulmadı"
+                if record["namespace_selector"] is None
+                else f"`{record['namespace_selector']}`"
+            ))
             lines.append(
                 "- Pod Selector: "
                 + (
@@ -1233,9 +1208,13 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if len(records) > 50:
             lines.append(f"\n- Ek {len(records) - 50} nesne gösterilmedi.")
         logger.info(
-            "egressip_result status=success shape=%s objects=%s assigned=%s "
-            "normalized_count=%s",
-            mcp_result_shape(result), len(records), assignment_count, len(records),
+            "egressip_result status=%s shape=%s objects=%s assigned=%s "
+            "normalized_count=%s detail_enrichment_attempted=0 "
+            "detail_enrichment_success=0 completeness=%s",
+            "partial" if normalized.completeness != "full" else "success",
+            mcp_result_shape(result), len(records),
+            "unknown" if normalized.completeness != "full" else assignment_count,
+            len(records), normalized.completeness,
         )
         return AgentResult(
             "\n".join(lines), summaries,

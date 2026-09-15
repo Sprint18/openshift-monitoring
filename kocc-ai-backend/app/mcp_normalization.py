@@ -19,6 +19,9 @@ class NormalizedMCPResult:
     objects: tuple[dict[str, Any], ...] = ()
     table_rows: tuple[dict[str, Any], ...] = ()
     raw_item_count: int = 0
+    representation: str = "unknown"
+    completeness: str = "unknown"
+    authoritative_fields: tuple[str, ...] = ()
 
     @property
     def items(self) -> list[dict[str, Any]] | None:
@@ -88,13 +91,31 @@ def _bare_resource_rows(text: str) -> list[dict[str, Any]] | None:
     return rows or None
 
 
+def _table_collection(items: list[dict[str, Any]], source: str) -> NormalizedMCPResult | None:
+    if not items or not all(
+        isinstance(item.get("Name"), str)
+        and not isinstance(item.get("metadata"), dict)
+        for item in items
+    ):
+        return None
+    return NormalizedMCPResult(
+        "success", source, table_rows=tuple(items), raw_item_count=len(items),
+        representation="kubectl_table", completeness="names_only",
+        authoritative_fields=("apiVersion", "kind", "metadata.name"),
+    )
+
+
 def _canonical_payload(value: Any, source: str) -> NormalizedMCPResult | None:
     if isinstance(value, list):
         if not all(isinstance(item, dict) for item in value):
             return NormalizedMCPResult("malformed", source)
+        if table := _table_collection(value, source):
+            return table
         status: NormalizationStatus = "success" if value else "empty"
         return NormalizedMCPResult(
             status, source, tuple(value), raw_item_count=len(value),
+            representation="kubernetes_objects", completeness="full",
+            authoritative_fields=("*",),
         )
     if not isinstance(value, dict):
         return None
@@ -102,12 +123,20 @@ def _canonical_payload(value: Any, source: str) -> NormalizedMCPResult | None:
     if isinstance(items, list):
         if not all(isinstance(item, dict) for item in items):
             return NormalizedMCPResult("malformed", source)
+        if table := _table_collection(items, source):
+            return table
         status = "success" if items else "empty"
         return NormalizedMCPResult(
             status, source, tuple(items), raw_item_count=len(items),
+            representation="kubernetes_list", completeness="full",
+            authoritative_fields=("*",),
         )
     if isinstance(value.get("metadata"), dict) or isinstance(value.get("spec"), dict):
-        return NormalizedMCPResult("success", source, (value,), raw_item_count=1)
+        return NormalizedMCPResult(
+            "success", source, (value,), raw_item_count=1,
+            representation="kubernetes_object", completeness="full",
+            authoritative_fields=("*",),
+        )
     return None
 
 
@@ -169,7 +198,9 @@ def normalize_mcp_result(result: Any) -> NormalizedMCPResult:
             status: NormalizationStatus = "success" if rows else "empty"
             return NormalizedMCPResult(
                 status, "content_text_table", table_rows=tuple(rows),
-                raw_item_count=len(rows),
+                raw_item_count=len(rows), representation="kubectl_table",
+                completeness="names_only",
+                authoritative_fields=("apiVersion", "kind", "metadata.name"),
             )
     return NormalizedMCPResult(
         "malformed" if saw_malformed else "unsupported",
@@ -222,6 +253,8 @@ def mcp_result_shape(result: Any) -> str:
     normalized = normalize_mcp_result(result)
     parts.extend((
         f"source={normalized.source}", f"status={normalized.status}",
+        f"representation={normalized.representation}",
+        f"completeness={normalized.completeness}",
         f"raw_item_count={normalized.raw_item_count}",
         f"normalized_count={len(normalized.objects or normalized.table_rows)}",
     ))

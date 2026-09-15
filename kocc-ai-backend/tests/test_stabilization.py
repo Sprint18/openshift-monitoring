@@ -34,9 +34,9 @@ def _egress(name: str, *, assigned: bool = True) -> dict:
             "namespaceSelector": {"matchLabels": {"team": "ai"}},
             "podSelector": {},
         },
-        **({"status": {"items": [{
+        "status": {"items": ([{
             "egressIP": "10.60.1.222", "node": "worker-a",
-        }]}} if assigned else {}),
+        }] if assigned else [])},
     }
 
 
@@ -93,12 +93,8 @@ def test_serialized_transport_content_text_json_reaches_egressip_renderer() -> N
     })
     mcp = SerializedMCPClient([
         rpc_result({"protocolVersion": "2025-03-26"}), {},
-        rpc_result({"tools": [_resource_tool(), _resource_get_tool()]}),
-        rpc_result({"content": [{"type": "text", "text": (
-            "APIVERSION KIND NAME AGE\n"
-            "k8s.ovn.org/v1 EgressIP egress-ai 1d\n"
-        )}]}),
-        rpc_result({"content": [{"type": "text", "text": object_text}]}),
+        rpc_result({"tools": [_resource_tool()]}),
+        rpc_result({"content": [{"type": "text", "text": f"[{object_text}]"}]}),
     ])
     llm = Mock()
     result = AgentLoop(
@@ -135,6 +131,44 @@ def test_unsupported_text_is_safe_and_distinct_from_malformed() -> None:
     assert "status=unsupported" in shape
     assert "plain=true" in shape
     assert "metadata: hidden" not in shape
+
+
+def test_production_table_inventory_is_names_only_and_never_claims_unassigned() -> None:
+    rows = "\n".join(
+        f"k8s.ovn.org/v1 EgressIP egress-{index:03d} 1d"
+        for index in range(203)
+    )
+    payload = {"content": [{
+        "type": "text", "text": "APIVERSION KIND NAME AGE\n" + rows,
+    }]}
+    normalized = normalize_mcp_result(payload)
+    assert normalized.status == "success"
+    assert normalized.representation == "kubectl_table"
+    assert normalized.completeness == "names_only"
+    assert normalized.raw_item_count == 203
+
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool(), _resource_get_tool()]
+    mcp.call_tool.return_value = payload
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("kkbtest ortamındaki tüm egress ip'leri listele")
+    assert "egress-000" in result.answer
+    assert "EgressIP adresi: liste yanıtında sunulmadı" in result.answer
+    assert "Node ataması: liste yanıtında sunulmadı" in result.answer
+    assert "Atanmış EgressIP adresi yok" not in result.answer
+    assert mcp.call_tool.call_count == 1
+
+
+def test_production_plain_get_is_unsupported_not_resource_absence() -> None:
+    payload = {"content": [{
+        "type": "text",
+        "text": "apiVersion: k8s.ovn.org/v1\nkind: EgressIP\nmetadata: opaque",
+    }]}
+    normalized = normalize_mcp_result(payload)
+    assert normalized.status == "unsupported"
+    assert normalized.completeness == "unknown"
+    assert normalized.items is None
 
 
 @patch("app.main.MCPClient")
