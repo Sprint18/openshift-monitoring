@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import io
 import logging
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agent import AgentLoop, AgentResult
 from app.conversation import ActiveInspection, ConversationContext, SafeTurn, TriageCandidate, TriageResource
-from app.egressip import egressip_namespace, egressip_query_mode, result_shape
+from app.egressip import (
+    egressip_namespace, egressip_query_mode, resource_items, result_shape,
+)
 from app.main import create_app
 from app.triage import decide_triage
 from tests.test_ai_backend import settings
@@ -81,6 +84,62 @@ def test_egressip_intent_exact_production_phrases() -> None:
         assert egressip_namespace(message) == "test-yapayzekarag"
 
 
+@pytest.mark.parametrize("message", (
+    "test-yapayzekarag egressip'si nedir",
+    "test-yapayzekarag egress ip nedir",
+    "test-yapayzekarag namespace'indeki egress ip nedir",
+    "test-yapayzekarag namespace'ine ait egressip nedir",
+    "test-yapayzekarag namespace'inin egress ip'si nedir",
+    "kkbtest ortamındaki test-yapayzekarag namespace'ine ait egressip nedir",
+    "kkbtest clusterındaki test-yapayzekarag namespace egress ip nedir",
+    "test-yapayzekarag hangi egress ip'yi kullanıyor",
+))
+@patch("app.main.MCPClient")
+def test_turkish_namespace_variants_reach_exact_operational_tool_arguments(
+    mcp_class: Mock, message: str,
+) -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"structuredContent": {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-yapayzekarag", "labels": {"team": "ai"}},
+        }]}},
+        {"structuredContent": {"items": [_egress("egress-ai")]}},
+    ]
+    mcp_class.return_value = mcp
+    application = create_app(settings(token="token"))
+    application.state.llm_client = Mock()
+    response = TestClient(application).post("/api/v1/chat", json={
+        "message": message, "conversation_scope": "kkbtest",
+    })
+    assert response.status_code == 200
+    assert response.json()["cluster"] == "kkbtest"
+    assert "test-yapayzekarag" in response.json()["answer"]
+    assert mcp.call_tool.call_args_list[0].args == (
+        "resources_list", {"apiVersion": "v1", "kind": "Namespace"},
+    )
+    assert mcp.call_tool.call_args_list[1].args == (
+        "resources_list", {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"},
+    )
+    application.state.llm_client.chat_completion.assert_not_called()
+
+
+@pytest.mark.parametrize("candidate", (
+    "in", "nin", "nın", "un", "ün", "ait", "e", "a", "ip", "egressip",
+    "namespace", "ortamındaki", "nedir", "hangisi", "tüm", "hepsi",
+))
+def test_turkish_grammar_tokens_never_become_egressip_namespaces(candidate: str) -> None:
+    assert egressip_namespace(f"{candidate} egressip nedir") is None
+    assert egressip_namespace(f"{candidate} namespace egressip nedir") is None
+
+
+def test_mcp_normalization_does_not_crawl_unrelated_nested_items() -> None:
+    assert resource_items({
+        "structuredContent": {"audit": {"items": [_egress("not-a-result")]}}
+    }) is None
+
+
 @patch("app.main.MCPClient")
 def test_pending_egressip_namespace_reply_resumes_without_llm(
     mcp_class: Mock,
@@ -104,12 +163,67 @@ def test_pending_egressip_namespace_reply_resumes_without_llm(
     context = first.json()["conversation_context"]
     assert context["pending_operational_intent"] == "egressip_lookup"
     assert context["pending_operational_parameter"] == "namespace"
+    from tests.test_operational_context import production_proxy_context
+    context = production_proxy_context(context)
+    assert context["pending_operational_parameter"] == "namespace"
+    assert context["pending_operational_scope"] == "namespace"
     second = TestClient(application).post("/api/v1/chat", json={
         "message": "test-yapayzekarag", "conversation_context": context,
     })
     assert second.status_code == 200
     assert "egress-ai" in second.json()["answer"]
     assert "pending_operational_intent" not in second.json()["conversation_context"]
+    application.state.llm_client.chat_completion.assert_not_called()
+
+
+@patch("app.main.MCPClient")
+def test_inventory_cluster_selection_and_pending_namespace_complete_end_to_end(
+    mcp_class: Mock,
+) -> None:
+    from tests.test_operational_context import production_proxy_context
+
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"content": [{"type": "text", "text": "NAME AGE"}],
+         "structuredContent": {"items": [_egress("egress-ai")]}},
+        {"structuredContent": {"items": [{
+            "apiVersion": "v1", "kind": "Namespace",
+            "metadata": {"name": "test-yapayzekarag", "labels": {"team": "ai"}},
+        }]}},
+        {"structuredContent": {"items": [_egress("egress-ai")]}},
+    ]
+    mcp_class.return_value = mcp
+    application = create_app(settings(token="token"))
+    application.state.llm_client = Mock()
+    client = TestClient(application)
+
+    inventory_message = "bünyendeki tüm egress ip'leri sıralar mısın"
+    clarification = client.post("/api/v1/chat", json={"message": inventory_message})
+    assert clarification.json()["needs_cluster_selection"] is True
+    inventory = client.post("/api/v1/chat", json={
+        "message": inventory_message, "target_cluster_ids": ["kkbtest"],
+    })
+    assert inventory.status_code == 200
+    assert "egress-ai" in inventory.json()["answer"]
+    assert mcp.call_tool.call_args_list == [call(
+        "resources_list", {"apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP"},
+    )]
+
+    missing_cluster = client.post("/api/v1/chat", json={"message": "egressip"})
+    assert missing_cluster.json()["needs_cluster_selection"] is True
+    missing_namespace = client.post("/api/v1/chat", json={
+        "message": "egressip", "target_cluster_ids": ["kkbtest"],
+    })
+    pending = production_proxy_context(
+        missing_namespace.json()["conversation_context"]
+    )
+    resumed = client.post("/api/v1/chat", json={
+        "message": "test-yapayzekarag", "conversation_context": pending,
+    })
+    assert resumed.status_code == 200
+    assert "egress-ai" in resumed.json()["answer"]
+    assert "pending_operational_intent" not in resumed.json()["conversation_context"]
     application.state.llm_client.chat_completion.assert_not_called()
 
 
@@ -217,7 +331,7 @@ def test_valid_egressip_without_optional_selectors_or_status_is_not_rejected() -
     assert mcp.call_tool.call_count == 1
 
 
-def test_malformed_nested_egressip_json_is_parse_error() -> None:
+def test_malformed_nested_egressip_json_is_reported_as_malformed() -> None:
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_tool()]
     mcp.call_tool.return_value = {
@@ -235,7 +349,7 @@ def test_malformed_nested_egressip_json_is_parse_error() -> None:
     finally:
         logging.getLogger("kocc_ai.agent").removeHandler(handler)
     assert "doğrulanamadı" in result.answer
-    assert "egressip_result status=parse_error" in stream.getvalue()
+    assert "egressip_result status=malformed" in stream.getvalue()
 
 
 @patch("app.main.AgentLoop")

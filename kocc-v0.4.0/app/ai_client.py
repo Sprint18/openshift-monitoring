@@ -265,7 +265,8 @@ class AIBackendClient:
             "pending_suggestion_original", "pending_suggestion_name",
             "active_entity_kind", "active_entity_name", "investigation_focus",
             "previous_operational_intent", "pending_operational_intent",
-            "pending_operational_cluster_id",
+            "pending_operational_cluster_id", "pending_operational_parameter",
+            "pending_operational_scope",
         ):
             item = value.get(key)
             if isinstance(item, str) and len(item) <= 100:

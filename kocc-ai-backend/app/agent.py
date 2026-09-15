@@ -974,7 +974,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if namespace_items is None or labels is None:
             logger.info(
                 "egressip_result status=%s",
-                "tool_error" if namespace_result is None else "parse_error",
+                "tool_error" if namespace_result is None else "malformed",
             )
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
@@ -1002,7 +1002,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             names = resource_names(egress_result, "EgressIP")
             if names is None:
                 logger.info(
-                    "egressip_result status=parse_error stage=list shape=%s",
+                    "egressip_result status=malformed stage=list shape=%s",
                     result_shape(egress_result),
                 )
                 return AgentResult(
@@ -1020,7 +1020,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             ]
             detail_call_budget = max(0, self.settings.agent_max_tool_calls - 2)
             if len(detail_names) > detail_call_budget:
-                logger.info("egressip_result status=parse_error")
+                logger.info("egressip_result status=malformed")
                 return AgentResult(
                     f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                     summaries, [], 0,
@@ -1035,7 +1035,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     tool_schemas.get("resources_get"),
                 )
                 if arguments is None:
-                    logger.info("egressip_result status=parse_error")
+                    logger.info("egressip_result status=malformed")
                     return AgentResult(
                         f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                         summaries, [], 0,
@@ -1049,7 +1049,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 if item is None or not egressip_has_full_detail(item):
                     logger.info(
                         "egressip_result status=%s",
-                        "tool_error" if detail is None else "parse_error",
+                        "tool_error" if detail is None else "malformed",
                     )
                     return AgentResult(
                         f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
@@ -1058,7 +1058,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 detailed_items.append(item)
         matches, verified = evaluate_egressips(detailed_items, labels)
         if not verified:
-            logger.info("egressip_result status=parse_error")
+            logger.info("egressip_result status=malformed")
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
@@ -1124,7 +1124,10 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             )
         listed_items = resource_items(result)
         if listed_items == []:
-            logger.info("egressip_result status=empty")
+            logger.info(
+                "egressip_result status=empty shape=%s normalized_count=0",
+                result_shape(result),
+            )
             return AgentResult(
                 f"## EgressIP Envanteri\n\n{cluster_name} için EgressIP nesnesi "
                 "bulunamadı.",
@@ -1132,7 +1135,7 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             )
         if listed_items is None:
             logger.info(
-                "egressip_result status=parse_error stage=list shape=%s",
+                "egressip_result status=malformed stage=list shape=%s normalized_count=0",
                 result_shape(result),
             )
             return AgentResult(
@@ -1145,8 +1148,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         ]
         if len(records) != len(listed_items):
             logger.info(
-                "egressip_result status=parse_error stage=items shape=%s",
-                result_shape(result),
+                "egressip_result status=malformed stage=items shape=%s normalized_count=%s",
+                result_shape(result), len(records),
             )
             return AgentResult(
                 f"{cluster_name} cluster'ındaki OVN EgressIP envanteri şu anda "
@@ -1189,8 +1192,9 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         if len(records) > 50:
             lines.append(f"\n- Ek {len(records) - 50} nesne gösterilmedi.")
         logger.info(
-            "egressip_result status=success objects=%s assigned=%s",
-            len(records), assignment_count,
+            "egressip_result status=success shape=%s objects=%s assigned=%s "
+            "normalized_count=%s",
+            result_shape(result), len(records), assignment_count, len(records),
         )
         return AgentResult(
             "\n".join(lines), summaries,

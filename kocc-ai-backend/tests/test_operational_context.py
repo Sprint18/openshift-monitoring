@@ -181,7 +181,7 @@ def test_real_turn_one_evidence_survives_proxy_and_drives_followup(
     assert "`lab-sdlc` seçildi" in second.json()["answer"]
 
     third = client.post("/api/v1/chat", json={
-        "message": "onun namespace'indeki diger podların durumuna da bak",
+        "message": "bu namespacedeki diğer podların durumu ne",
         "conversation_context": production_proxy_context(
             second.json()["conversation_context"]
         ),
@@ -782,6 +782,39 @@ def test_explicit_cluster_override_does_not_receive_foreign_focus(
     call = agent_class.return_value.run.call_args
     assert call.args == ("node durumuna bak",)
     assert call.kwargs == {}
+
+
+@patch("app.main.AgentLoop")
+@patch("app.main.MCPClient")
+def test_explicit_problem_pod_cluster_switch_is_a_hard_context_boundary(
+    mcp_class: Mock, agent_class: Mock,
+) -> None:
+    agent_class.return_value.run.return_value = AgentResult("rm fresh", [], [])
+    stale = ConversationContext(
+        active_cluster_ids=("kkbtest",),
+        active_entity_kind="Namespace", active_entity_name="namespace-a",
+        active_inspection=ActiveInspection(
+            "pod_health", "Pod", "kkbtest", namespace="namespace-a",
+        ),
+        investigation_focus="namespace-a",
+        previous_operational_intent="inspect_pods",
+    ).with_pending_operational("inspect_events", "kkbtest")
+    response = TestClient(create_app(settings(token="token"))).post(
+        "/api/v1/chat", json={
+            "message": "RMTEST'te problemli podları kontrol et",
+            "conversation_context": stale.public_dict(),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["cluster"] == "rmtest"
+    call_args = agent_class.return_value.run.call_args
+    assert "namespace-a" not in call_args.args[0]
+    assert call_args.kwargs == {}
+    context = response.json()["conversation_context"]
+    assert context.get("active_entity_name") is None
+    assert context.get("investigation_focus") is None
+    assert context.get("active_inspection") is None
+    assert context.get("pending_operational_intent") is None
 
 
 @patch("app.main.AgentLoop")

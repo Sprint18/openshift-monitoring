@@ -418,6 +418,12 @@ class ConversationContext:
             pending_suggestion_name=self.pending_suggestion_name,
         )
 
+    def for_cluster_boundary(
+        self, cluster_ids: tuple[str, ...],
+    ) -> "ConversationContext":
+        """Cross an explicit cluster boundary without carrying scoped entities."""
+        return ConversationContext(active_cluster_ids=cluster_ids)
+
     def with_active_inspection(
         self, inspection: ActiveInspection,
     ) -> "ConversationContext":

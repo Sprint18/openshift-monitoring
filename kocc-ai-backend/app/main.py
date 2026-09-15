@@ -198,13 +198,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         resolved = resolve_cluster_request(
             payload.message, application.state.clusters
         )
+        explicit_repeat_query = (
+            namespace_query_from_context(conversation_context)
+            if resolved is not None
+            and resolved.operational_message.strip().casefold().strip(" ?.!")
+            in {"", "peki"}
+            else None
+        )
+        explicit_cluster_boundary = bool(
+            resolved is not None
+            and conversation_context.active_cluster_ids
+            and set(resolved.scope.cluster_ids)
+            != set(conversation_context.active_cluster_ids)
+        )
+        if explicit_cluster_boundary:
+            logger.info(
+                "context_transition previous_cluster=%s current_cluster=%s "
+                "reason=explicit_cluster_boundary context_cleared=true",
+                ",".join(conversation_context.active_cluster_ids),
+                ",".join(resolved.scope.cluster_ids),
+            )
+            conversation_context = conversation_context.for_cluster_boundary(
+                resolved.scope.cluster_ids
+            )
         direct_egress_mode = (
             egressip_query_mode(payload.message)
             if is_egressip_intent(payload.message) else None
         )
         forced_namespace_query = contextual_namespace_query(
             payload.message, conversation_context
-        )
+        ) or explicit_repeat_query
         forced_entity_message = contextual_entity_message(
             payload.message, conversation_context
         )
@@ -250,8 +273,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 required_fresh_intent, pending_focus
             )
             logger.info(
-                "pending_operational action=resolved cluster_id=%s intent=%s",
-                conversation_context.active_cluster_ids[0], required_fresh_intent,
+                "operation=%s resolution_source=pending cluster_id=%s "
+                "namespace_present=true pending_parameter=namespace "
+                "context_cleared=true",
+                required_fresh_intent, conversation_context.active_cluster_ids[0],
             )
         elif (
             conversation_context.pending_operational_intent
@@ -714,9 +739,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     )
                     semantic_history = (
                         operational_history(history)
-                        if not conversation_context.active_cluster_ids
-                        or selected.id in conversation_context.active_cluster_ids
-                        else []
+                        if not explicit_cluster_boundary and (
+                            not conversation_context.active_cluster_ids
+                            or selected.id in conversation_context.active_cluster_ids
+                        ) else []
                     )
                     active_investigation_context = (
                         "cluster=" + selected.id

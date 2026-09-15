@@ -7,33 +7,36 @@ from typing import Any
 
 _DNS_LABEL = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
 _HYPHENATED_DNS_LABEL = r"[a-z0-9]+(?:-[a-z0-9]+)+"
-_WRAPPER_KEYS = frozenset({
-    "content", "structuredContent", "result", "data", "resource", "object",
-    "response", "items",
+_GRAMMAR_TOKENS = frozenset({
+    "a", "ait", "e", "egressip", "hangisi", "hepsi", "in", "ip", "namespace",
+    "nedir", "nin", "nın", "ortamındaki", "tüm", "un", "ün",
 })
+
+
+def _namespace_candidate(value: str) -> str | None:
+    """Accept a complete DNS token, never a suffix sliced from another word."""
+    return value if value not in _GRAMMAR_TOKENS else None
 
 
 def egressip_namespace(message: str) -> str | None:
     normalized = " ".join(message.casefold().replace("’", "'").split())
     if not re.search(r"\begress\s*ip\b", normalized):
         return None
+    # Explicit namespace grammar wins. Every candidate starts at a whitespace/start
+    # boundary and ends before a complete marker/apostrophe; the regex cannot
+    # backtrack into `namespace'ine` and reinterpret its suffix as a namespace.
     patterns = (
-        rf"\b({_DNS_LABEL})\s+namespace'?(?:indeki|indeki|ndeki)\s+egress\s*ip\b",
-        rf"\b({_DNS_LABEL})\s+namespace(?:'?(?:inin|ının|unun|ünün|in|ın|un|ün))?\s+egress\s*ip\b",
-        rf"\b({_DNS_LABEL})'?(?:ye|ya|e|a)\s+ait\s+egress\s*ip\b",
-        rf"\b({_HYPHENATED_DNS_LABEL})\s+egress\s*ip\b",
-        rf"\b(?:namespace|proje)\s+({_DNS_LABEL})(?:'?(?:nin|nın|nun|nün))?.*?\begress\s*ip\b",
-        rf"\begress\s*ip\b.*?\b(?:namespace|proje)\s+({_DNS_LABEL})\b",
-        rf"\b({_DNS_LABEL})\s+hangi\s+egress\s*ip(?:'?(?:yi|yi|i))?\b",
+        rf"(?:^|\s)({_DNS_LABEL})\s+namespace(?:'(?:indeki|inde|ine|inin|ının|unun|ünün))?\s+(?:ait\s+)?egress\s*ip\b",
+        rf"(?:^|\s)(?:namespace|proje)\s+({_DNS_LABEL})(?:'(?:nin|nın|nun|nün))?.*?\begress\s*ip\b",
+        rf"\begress\s*ip\b.*?\b(?:namespace|proje)\s+({_DNS_LABEL})(?=$|\s|[?,.!])",
+        rf"(?:^|\s)({_DNS_LABEL})'(?:ye|ya|e|a)\s+ait\s+egress\s*ip\b",
+        rf"(?:^|\s)({_HYPHENATED_DNS_LABEL})\s+egress\s*ip(?:'?(?:si|i))?\b",
+        rf"(?:^|\s)({_DNS_LABEL})\s+hangi\s+egress\s*ip(?:'?(?:yi|i))?\b",
     )
-    excluded = {
-        "hangi", "mevcut", "atanmış", "atanmis", "kullandığı", "kullandigi",
-        "inin", "ının", "unun", "ünün",
-    }
     for pattern in patterns:
         match = re.search(pattern, normalized)
-        if match and match.group(1) not in excluded:
-            return match.group(1)
+        if match and (candidate := _namespace_candidate(match.group(1))):
+            return candidate
     return None
 
 
@@ -163,53 +166,61 @@ def _decoded_json(value: str) -> Any:
         return None
 
 
-def _payloads(
-    value: Any, seen: set[int] | None = None, depth: int = 0,
-) -> list[Any]:
-    if depth > 8:
+def _content_payloads(value: Any) -> list[Any]:
+    if not isinstance(value, list):
         return []
-    visited = seen or set()
-    if isinstance(value, (dict, list)):
-        identity = id(value)
-        if identity in visited:
-            return []
-        visited.add(identity)
-    values = [value]
-    if isinstance(value, dict):
-        text = value.get("text")
-        if isinstance(text, str) and (decoded := _decoded_json(text)) is not None:
-            values.extend(_payloads(decoded, visited, depth + 1))
-        for key, nested in value.items():
-            if key in _WRAPPER_KEYS:
-                values.extend(_payloads(nested, visited, depth + 1))
-    elif isinstance(value, list):
-        for nested in value:
-            values.extend(_payloads(nested, visited, depth + 1))
-    elif isinstance(value, str) and (decoded := _decoded_json(value)) is not None:
-        values.extend(_payloads(decoded, visited, depth + 1))
-    return values
+    return [
+        decoded for block in value
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+        and (decoded := _decoded_json(block["text"])) is not None
+    ]
+
+
+def _contract_payloads(result: dict[str, Any]) -> list[Any]:
+    """Return only documented MCP/legacy wrapper paths, never arbitrary children."""
+    payloads: list[Any] = [result]
+    queue: list[tuple[Any, int]] = [(result, 0)]
+    seen = {id(result)}
+    while queue:
+        container, depth = queue.pop(0)
+        if not isinstance(container, dict):
+            continue
+        payloads.extend(_content_payloads(container.get("content")))
+        if depth >= 3:
+            continue
+        for key in ("structuredContent", "result", "resource", "object", "data"):
+            nested = container.get(key)
+            if isinstance(nested, (dict, list)) and id(nested) not in seen:
+                seen.add(id(nested))
+                payloads.append(nested)
+                queue.append((nested, depth + 1))
+    return payloads
 
 
 def _text_fragments(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
     fragments: list[str] = []
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            if key == "text" and isinstance(nested, str):
-                fragments.append(nested)
-            elif key in _WRAPPER_KEYS:
-                fragments.extend(_text_fragments(nested))
-    elif isinstance(value, list):
-        for nested in value:
-            fragments.extend(_text_fragments(nested))
-    elif isinstance(value, str):
-        fragments.append(value)
+    for payload in _contract_payloads(value):
+        if not isinstance(payload, dict) or not isinstance(payload.get("content"), list):
+            continue
+        fragments.extend(
+            block["text"] for block in payload["content"]
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
     return fragments
 
 
 def resource_items(result: dict[str, Any]) -> list[dict[str, Any]] | None:
-    for candidate in _payloads(result):
+    for candidate in _contract_payloads(result):
         if isinstance(candidate, dict) and isinstance(candidate.get("items"), list):
-            return [item for item in candidate["items"] if isinstance(item, dict)]
+            return (
+                candidate["items"]
+                if all(isinstance(item, dict) for item in candidate["items"])
+                else None
+            )
+        if isinstance(candidate, list) and all(isinstance(item, dict) for item in candidate):
+            return candidate
     return None
 
 
@@ -242,7 +253,7 @@ def result_shape(result: Any) -> str:
 
 
 def resource_object(result: dict[str, Any]) -> dict[str, Any] | None:
-    return next((item for item in _payloads(result) if isinstance(item, dict) and (
+    return next((item for item in _contract_payloads(result) if isinstance(item, dict) and (
         isinstance(item.get("metadata"), dict) or isinstance(item.get("spec"), dict)
     )), None)
 
