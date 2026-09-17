@@ -169,6 +169,31 @@ def test_production_plain_get_is_unsupported_not_resource_absence() -> None:
     assert normalized.status == "unsupported"
     assert normalized.completeness == "unknown"
     assert normalized.items is None
+    shape = mcp_result_shape(payload)
+    assert "text_syntax=flat_key_value" in shape
+    assert "known_fields=apiVersion,kind,metadata" in shape
+    assert "metadata: opaque" not in shape
+
+
+def test_unsupported_namespace_get_never_becomes_no_egressip_claim() -> None:
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.return_value = {"content": [{
+        "type": "text",
+        "text": (
+            "apiVersion: v1\nkind: Namespace\nmetadata:\n"
+            "  name: test-yapayzekarag\n  labels:\n    team: hidden\n"
+        ),
+    }]}
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("test-yapayzekarag namespace'ine ait egress ip nedir")
+    assert "doğrulanamadı" in result.answer
+    assert "bulunamadı" not in result.answer
+    assert "eşleşen bir EgressIP bulunamadı" not in result.answer
+    assert [item.args[0] for item in mcp.call_tool.call_args_list] == [
+        "resources_get",
+    ]
 
 
 @patch("app.main.MCPClient")

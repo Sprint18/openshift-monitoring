@@ -10,6 +10,9 @@ NormalizationStatus = Literal[
     "success", "empty", "tool_error", "malformed", "unsupported",
 ]
 _KNOWN_WRAPPERS = ("structuredContent", "result", "resource", "object", "data")
+_KNOWN_KUBERNETES_FIELDS = (
+    "apiVersion", "kind", "metadata", "name", "labels", "spec", "status",
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,44 @@ def _decoded_json(text: str) -> Any:
         return json.loads(candidate)
     except json.JSONDecodeError:
         return None
+
+
+def _text_structure(text: str) -> tuple[str, ...]:
+    """Describe syntax without exposing any text values."""
+    lines = text.splitlines()
+    nonempty = [line for line in lines if line.strip()]
+    mapping_lines = [
+        line for line in nonempty
+        if re.match(r"^\s*[A-Za-z][A-Za-z0-9_.-]*\s*:", line)
+    ]
+    sequence_lines = [line for line in nonempty if re.match(r"^\s*-\s+", line)]
+    indented_lines = [
+        line for line in nonempty if line[:1].isspace() and not line.startswith("\t")
+    ]
+    field_names = {
+        match.group(1)
+        for line in mapping_lines
+        if (match := re.match(r"^\s*([A-Za-z][A-Za-z0-9_.-]*)\s*:", line))
+    }
+    if mapping_lines and indented_lines:
+        syntax = "indented_key_value"
+    elif mapping_lines:
+        syntax = "flat_key_value"
+    else:
+        syntax = "other"
+    return (
+        f"line_count={len(lines)}",
+        f"nonempty_lines={len(nonempty)}",
+        f"mapping_lines={len(mapping_lines)}",
+        f"sequence_lines={len(sequence_lines)}",
+        f"indented_lines={len(indented_lines)}",
+        f"tabs={str(any(line.startswith(chr(9)) for line in nonempty)).lower()}",
+        f"document_marker={str(any(line.strip() in {'---', '...'} for line in nonempty)).lower()}",
+        "known_fields=" + ",".join(
+            field for field in _KNOWN_KUBERNETES_FIELDS if field in field_names
+        ),
+        f"text_syntax={syntax}",
+    )
 
 
 def _table_rows(text: str) -> list[dict[str, Any]] | None:
@@ -235,6 +276,7 @@ def mcp_result_shape(result: Any) -> str:
                 parts.extend((
                     f"text_length={len(text)}",
                     f"first_char={stripped[:1] if stripped else 'empty'}",
+                    f"last_char={stripped[-1:] if stripped else 'empty'}",
                     f"json={str(parsed_json is not None).lower()}",
                     f"parsed_type={type(parsed).__name__}",
                     "parsed_keys=" + (
@@ -249,6 +291,7 @@ def mcp_result_shape(result: Any) -> str:
                     ),
                     f"table={str(_table_rows(text) is not None).lower()}",
                     f"plain={str(parsed is None and _table_rows(text) is None).lower()}",
+                    *_text_structure(text),
                 ))
     normalized = normalize_mcp_result(result)
     parts.extend((

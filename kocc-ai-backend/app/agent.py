@@ -967,8 +967,14 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 "resources_list", {"apiVersion": "v1", "kind": "Namespace"},
                 available_names, tool_schemas, resource="Namespace",
             )
+        namespace_normalized = (
+            normalize_mcp_result(namespace_result)
+            if namespace_result is not None else None
+        )
         namespace_object = (
-            resource_object(namespace_result) if namespace_result is not None else None
+            namespace_normalized.objects[0]
+            if namespace_normalized is not None and namespace_normalized.objects
+            else None
         )
         namespace_items = (
             [namespace_object] if namespace_object is not None
@@ -976,9 +982,19 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         )
         labels = namespace_labels(namespace_items or [], namespace)
         if namespace_items is None or labels is None:
+            normalization_status = (
+                namespace_normalized.status
+                if namespace_normalized is not None else "tool_error"
+            )
             logger.info(
-                "egressip_result status=%s",
-                "tool_error" if namespace_result is None else "malformed",
+                "egressip_result status=%s stage=namespace representation=%s "
+                "completeness=%s",
+                "parse_unsupported"
+                if normalization_status == "unsupported" else normalization_status,
+                namespace_normalized.representation
+                if namespace_normalized is not None else "unknown",
+                namespace_normalized.completeness
+                if namespace_normalized is not None else "unknown",
             )
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
