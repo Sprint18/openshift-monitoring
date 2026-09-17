@@ -606,6 +606,30 @@ def test_shiftlight_copy_is_scoped_to_visible_selected_conversation_content() ->
     assert source.count('className = "shiftlight-message assistant"') == 1
 
 
+def test_shiftlight_open_modal_isolates_background_selection_and_restores_state() -> None:
+    source = shiftlight_source()
+    isolation = source[
+        source.index("const isolateElement"):
+        source.index("class ShiftLightUIError")
+    ]
+    assert "isolatedBackground.has(element)" in isolation
+    assert "inert: element.inert" in isolation
+    assert 'ariaHidden: element.getAttribute("aria-hidden")' in isolation
+    assert "element.inert = true" in isolation
+    assert "element !== drawer && element !== overlay" in isolation
+    assert "[...document.body.children]" in isolation
+    assert "element.inert = state.inert" in isolation
+    assert 'element.removeAttribute("aria-hidden")' in isolation
+    assert "isolatedBackground.clear()" in isolation
+    open_block = source[source.index("const openDrawer"):source.index("const setFullscreen")]
+    close_block = source[source.index("const closeDrawer"):source.index("const resetWelcomeVisuals")]
+    assert "isolateModalBackground()" in open_block
+    assert 'drawer.setAttribute("aria-modal", "true")' in open_block
+    assert "restoreModalBackground()" in close_block
+    assert 'drawer.setAttribute("aria-modal", "false")' in close_block
+    assert 'document.addEventListener("copy", copyShiftLightSelection, true)' in source
+
+
 @pytest.mark.parametrize("path", ["/", "/workloads", "/health-overview"])
 @patch("app.main.ClusterCollector")
 @patch("app.main.new_cluster_client")
@@ -888,7 +912,7 @@ def test_shiftlight_fullscreen_reuses_drawer_and_preserves_ui_state() -> None:
     assert 'id="shiftlight-expand"' in partial
     assert "ShiftLight'ı tam ekran aç" in partial
     assert 'drawer.classList.toggle("fullscreen", expanded)' in source
-    assert 'drawer.setAttribute("aria-modal", String(expanded))' in source
+    assert 'drawer.setAttribute("aria-modal", "true")' in source
     assert "const scrollTop = conversation.scrollTop" in source
     assert "conversation.scrollTop = scrollTop" in source
     assert "messageInput.value" not in source[source.index("const setFullscreen"):source.index("const openFullscreen")]

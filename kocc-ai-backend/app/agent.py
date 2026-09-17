@@ -1042,10 +1042,11 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 name for name in names
                 if not egressip_has_full_detail(listed_by_name.get(name, {}))
             ]
+            # The current resources_list contract can filter resource metadata,
+            # not spec.namespaceSelector. Resource names are not ownership
+            # evidence, so preserve server order and report partial coverage
+            # whenever the bounded detail budget cannot evaluate every object.
             detail_call_budget = max(0, self.settings.agent_max_tool_calls - 2)
-            detail_names.sort(key=lambda name: (
-                namespace not in name.casefold(), name.casefold()
-            ))
             details_complete = len(detail_names) <= detail_call_budget
             detail_names = detail_names[:detail_call_budget]
             detailed_items = [

@@ -14,7 +14,7 @@ from app.agent import AgentLoop, AgentResult
 from app.clusters import ClusterScope, cluster_registry, explicit_cluster_scope
 from app.conversation import ActiveInspection, ConversationContext, SafeTurn, TriageCandidate, TriageResource
 from app.egressip import (
-    egressip_namespace, egressip_query_mode,
+    egressip_namespace, egressip_query_mode, evaluate_egressips,
 )
 from app.main import create_app
 from app.mcp_client import MCPClient, parse_mcp_body
@@ -368,6 +368,131 @@ status:
     }
 
 
+def test_indented_egressip_accepts_ipv6_sequence_scalars() -> None:
+    payload = {"content": [{"type": "text", "text": """apiVersion: k8s.ovn.org/v1
+kind: EgressIP
+metadata:
+  name: sanitized-egress
+spec:
+  egressIPs:
+  - 2001:db8::10
+  namespaceSelector:
+    matchLabels:
+      team: sanitized
+  podSelector: {}
+status:
+  items:
+  - egressIP: 2001:db8::10
+    node: sanitized-worker
+"""}]}
+    normalized = normalize_mcp_result(payload)
+    assert normalized.status == "success"
+    assert normalized.source == "content_text_kubernetes_indented"
+    assert normalized.objects[0]["spec"]["egressIPs"] == ["2001:db8::10"]
+    assert normalized.objects[0]["status"]["items"][0]["egressIP"] == (
+        "2001:db8::10"
+    )
+
+
+@pytest.mark.parametrize(("text", "reason"), (
+    ("apiVersion: v1\nkind: Namespace\nmetadata:\n\tname: PRIVATE_SENTINEL\n", "indentation"),
+    ("apiVersion: v1\nkind: Namespace\nmetadata: &meta\n  name: PRIVATE_SENTINEL\n", "scalar_form"),
+    ("apiVersion: v1\nkind: Namespace\nmetadata: {name: PRIVATE_SENTINEL}\n", "flow_style"),
+    ("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: PRIVATE_SENTINEL\n  name: SECOND_SENTINEL\n", "duplicate_key"),
+))
+def test_indented_rejection_reason_is_structural_and_value_free(
+    text: str, reason: str,
+) -> None:
+    shape = mcp_result_shape({"content": [{"type": "text", "text": text}]})
+    assert f"indented_rejection={reason}" in shape
+    assert "PRIVATE_SENTINEL" not in shape
+    assert "SECOND_SENTINEL" not in shape
+
+
+def test_match_expressions_selector_is_evaluated_from_full_detail() -> None:
+    namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {
+        "name": "sanitized-namespace", "labels": {"environment": "test"},
+    }}
+    egress = _egress("sanitized-egress")
+    egress["spec"]["namespaceSelector"] = {"matchExpressions": [{
+        "key": "environment", "operator": "In", "values": ["test"],
+    }]}
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"structuredContent": namespace},
+        {"structuredContent": {"items": [egress]}},
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("sanitized-namespace namespace egressip")
+    assert "sanitized-egress" in result.answer
+    assert "10.60.1.222" in result.answer
+
+
+def test_match_after_detail_budget_remains_inconclusive_not_false_negative() -> None:
+    namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {
+        "name": "sanitized-namespace", "labels": {"team": "target"},
+    }}
+    names = [f"egress-{index:02d}" for index in range(9)]
+    table = "APIVERSION KIND NAME\n" + "\n".join(
+        f"k8s.ovn.org/v1 EgressIP {name}" for name in names
+    )
+    details = []
+    for name in names[:8]:
+        item = _egress(name)
+        item["spec"]["namespaceSelector"]["matchLabels"]["team"] = "other"
+        details.append({"structuredContent": item})
+    target_after_budget = _egress(names[8])
+    target_after_budget["spec"]["namespaceSelector"]["matchLabels"]["team"] = (
+        "target"
+    )
+    matches, verified = evaluate_egressips(
+        [target_after_budget], namespace["metadata"]["labels"],
+    )
+    assert verified is True and matches[0]["name"] == names[8]
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"structuredContent": namespace},
+        {"content": [{"type": "text", "text": table}]},
+        *details,
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("sanitized-namespace namespace egressip")
+    assert "sınırlı detay verisiyle doğrulanamadı" in result.answer
+    assert "eşleşen bir EgressIP bulunamadı" not in result.answer
+    assert "10.60.1.222" not in result.answer
+    assert mcp.call_tool.call_count == 10
+
+
+def test_full_authoritative_detail_coverage_can_prove_no_match() -> None:
+    namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {
+        "name": "sanitized-namespace", "labels": {"team": "target"},
+    }}
+    names = ["first", "second"]
+    table = "APIVERSION KIND NAME\n" + "\n".join(
+        f"k8s.ovn.org/v1 EgressIP {name}" for name in names
+    )
+    details = []
+    for name in names:
+        item = _egress(name)
+        item["spec"]["namespaceSelector"]["matchLabels"]["team"] = "other"
+        details.append({"structuredContent": item})
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"structuredContent": namespace},
+        {"content": [{"type": "text", "text": table}]},
+        *details,
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("sanitized-namespace namespace egressip")
+    assert "Bu namespace ile eşleşen bir EgressIP bulunamadı." in result.answer
+
+
 def test_exact_live_typo_extracts_namespace_without_clarification() -> None:
     message = (
         "kkbtest clusterindaki test-yapayzekarag namespace'ien ait "
@@ -470,6 +595,28 @@ def test_official_table_envelope_is_bounded_and_does_not_require_detail_calls() 
     assert "liste yanıtında sunulmadı" in result.answer
     assert mcp.call_tool.call_count == 1
     assert "eg-a" not in mcp_result_shape(mcp.call_tool.return_value)
+
+
+def test_table_extra_columns_are_not_authoritative_namespace_selectors() -> None:
+    normalized = normalize_mcp_result({"content": [{
+        "type": "text",
+        "text": (
+            "APIVERSION KIND NAME EGRESSIPS ASSIGNED-NODE LABELS\n"
+            "k8s.ovn.org/v1 EgressIP sanitized-egress 192.0.2.10 worker-a "
+            "team=platform\n"
+        ),
+    }]})
+    assert normalized.status == "success"
+    assert normalized.representation == "kubectl_table"
+    assert normalized.completeness == "names_only"
+    assert normalized.authoritative_fields == (
+        "apiVersion", "kind", "metadata.name",
+    )
+    assert normalized.table_rows == ({
+        "ApiVersion": "k8s.ovn.org/v1",
+        "Kind": "EgressIP",
+        "Name": "sanitized-egress",
+    },)
 
 
 def test_egressip_intent_exact_production_phrases() -> None:

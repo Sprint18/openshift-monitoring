@@ -53,8 +53,43 @@
     let requestPending = false;
     let fullscreen = false;
     let welcomeRun = 0;
+    const isolatedBackground = new Map();
 
     const setFlightState = (state) => { flightMascot.dataset.state = state; };
+    const isolateElement = (element) => {
+        if (!element || isolatedBackground.has(element)) return;
+        isolatedBackground.set(element, {
+            inert: element.inert,
+            ariaHidden: element.getAttribute("aria-hidden")
+        });
+        element.inert = true;
+        element.setAttribute("aria-hidden", "true");
+    };
+    const isolateModalBackground = () => {
+        [...root.children].forEach((element) => {
+            if (element !== drawer && element !== overlay) isolateElement(element);
+        });
+        let current = root;
+        while (current.parentElement && current.parentElement !== document.body) {
+            [...current.parentElement.children].forEach((element) => {
+                if (element !== current) isolateElement(element);
+            });
+            current = current.parentElement;
+        }
+        if (current.parentElement === document.body) {
+            [...document.body.children].forEach((element) => {
+                if (element !== current) isolateElement(element);
+            });
+        }
+    };
+    const restoreModalBackground = () => {
+        isolatedBackground.forEach((state, element) => {
+            element.inert = state.inert;
+            if (state.ariaHidden === null) element.removeAttribute("aria-hidden");
+            else element.setAttribute("aria-hidden", state.ariaHidden);
+        });
+        isolatedBackground.clear();
+    };
 
     class ShiftLightUIError {
         constructor(kind) { this.kind = kind; }
@@ -436,13 +471,14 @@
     const openDrawer = () => {
         cancelWelcome();
         drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); overlay.hidden = false;
+        drawer.setAttribute("aria-modal", "true"); isolateModalBackground();
         launcher.setAttribute("aria-expanded", "true"); messageInput.focus();
     };
     const setFullscreen = (expanded, focusTarget = null, restoreFocus = true) => {
         const scrollTop = conversation.scrollTop;
         fullscreen = expanded;
         drawer.classList.toggle("fullscreen", expanded); overlay.classList.toggle("fullscreen", expanded); document.body.classList.toggle("shiftlight-fullscreen-open", expanded);
-        drawer.setAttribute("aria-modal", String(expanded)); expandButton.setAttribute("aria-pressed", String(expanded)); expandButton.textContent = expanded ? "↙" : "⛶";
+        drawer.setAttribute("aria-modal", "true"); expandButton.setAttribute("aria-pressed", String(expanded)); expandButton.textContent = expanded ? "↙" : "⛶";
         expandButton.title = expanded ? "Küçült" : "Tam Ekran"; expandButton.setAttribute("aria-label", expanded ? "ShiftLight'ı normal görünüme küçült" : "ShiftLight'ı tam ekran aç");
         requestAnimationFrame(() => { conversation.scrollTop = scrollTop; if (focusTarget) { focusTarget.scrollIntoView({block: "center"}); focusTarget.focus({preventScroll: true}); } else if (!expanded && restoreFocus) expandButton.focus(); });
     };
@@ -451,6 +487,7 @@
     const closeDrawer = () => {
         if (fullscreen) setFullscreen(false, null, false);
         drawer.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); overlay.hidden = true;
+        drawer.setAttribute("aria-modal", "false"); restoreModalBackground();
         launcher.setAttribute("aria-expanded", "false"); launcher.focus();
     };
     const resetWelcomeVisuals = () => {
