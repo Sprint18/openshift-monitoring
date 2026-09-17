@@ -1016,6 +1016,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 summaries, [], 0,
             )
         listed_items = resource_items(egress_result)
+        names: list[str] = []
+        details_complete = True
         if listed_items == []:
             detailed_items: list[dict[str, Any]] = []
         else:
@@ -1039,15 +1041,15 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 if not egressip_has_full_detail(listed_by_name.get(name, {}))
             ]
             detail_call_budget = max(0, self.settings.agent_max_tool_calls - 2)
-            if len(detail_names) > detail_call_budget:
-                logger.info("egressip_result status=malformed")
-                return AgentResult(
-                    f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
-                    summaries, [], 0,
-                )
+            detail_names.sort(key=lambda name: (
+                namespace not in name.casefold(), name.casefold()
+            ))
+            details_complete = len(detail_names) <= detail_call_budget
+            detail_names = detail_names[:detail_call_budget]
             detailed_items = [
                 item for name, item in listed_by_name.items()
                 if name not in detail_names
+                and egressip_has_full_detail(item)
             ]
             for name in detail_names:
                 arguments = self._resource_get_arguments(
@@ -1055,11 +1057,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     tool_schemas.get("resources_get"),
                 )
                 if arguments is None:
-                    logger.info("egressip_result status=malformed")
-                    return AgentResult(
-                        f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
-                        summaries, [], 0,
-                    )
+                    details_complete = False
+                    continue
                 detail, detail_summary = self._call_backend_tool(
                     "resources_get", arguments, available_names, tool_schemas,
                     resource="EgressIP",
@@ -1067,14 +1066,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                 summaries.append(detail_summary)
                 item = resource_object(detail) if detail is not None else None
                 if item is None or not egressip_has_full_detail(item):
-                    logger.info(
-                        "egressip_result status=%s",
-                        "tool_error" if detail is None else "malformed",
-                    )
-                    return AgentResult(
-                        f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
-                        summaries, [], 0,
-                    )
+                    details_complete = False
+                    continue
                 detailed_items.append(item)
         matches, verified = evaluate_egressips(detailed_items, labels)
         logger.info(
@@ -1088,6 +1081,16 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
             return AgentResult(
                 f"{namespace} namespace EgressIP bilgisi doğrulanamadı.",
                 summaries, [], 0,
+            )
+        if not matches and not details_complete:
+            logger.info(
+                "egressip_result status=partial stage=selector resources_scanned=%s "
+                "resources_total=%s completeness=partial",
+                len(detailed_items), len(names),
+            )
+            return AgentResult(
+                f"{namespace} namespace EgressIP eşleşmesi mevcut sınırlı "
+                "detay verisiyle doğrulanamadı.", summaries, [], 0,
             )
         evidence = [{"tool": "resources_list", "status": "success"}]
         if not matches:
@@ -1125,9 +1128,16 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     "- Not: Nesne ayrıca bir podSelector içeriyor; yalnız eşleşen "
                     "pod'lar bu EgressIP kapsamındadır."
                 )
+        if not details_complete:
+            lines.append(
+                "\nNot: Sonuç sınırlı detay taramasında doğrulandı; başka "
+                "eşleşmeler mevcut olabilir."
+            )
         logger.info(
-            "egressip_result status=success objects=%s assigned=%s",
-            len(matches), sum(len(match["assignments"]) for match in matches),
+            "egressip_result status=%s objects=%s assigned=%s completeness=%s",
+            "partial" if not details_complete else "success", len(matches),
+            sum(len(match["assignments"]) for match in matches),
+            "partial" if not details_complete else "full",
         )
         return AgentResult("\n".join(lines), summaries, evidence, 0)
 

@@ -175,14 +175,110 @@ def test_production_plain_get_is_unsupported_not_resource_absence() -> None:
     assert "metadata: opaque" not in shape
 
 
+def test_production_indented_namespace_object_is_authoritative() -> None:
+    payload = {"content": [{"type": "text", "text": """apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-yapayzekarag
+  labels:
+    team: ai
+spec:
+  finalizers:
+  - kubernetes
+status:
+  phase: Active
+"""}]}
+    normalized = normalize_mcp_result(payload)
+    assert normalized.status == "success"
+    assert normalized.source == "content_text_kubernetes_indented"
+    assert normalized.representation == "kubernetes_indented_object"
+    assert normalized.completeness == "full"
+    assert normalized.objects[0]["metadata"] == {
+        "name": "test-yapayzekarag", "labels": {"team": "ai"},
+    }
+
+
+@pytest.mark.parametrize("text", (
+    "apiVersion: v1\n kind: Namespace\nmetadata: {}\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata:\n\tname: unsafe\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: &meta\n  name: unsafe\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: *meta\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: !custom value\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: |\n  hidden\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: {name: unsafe}\n",
+))
+def test_indented_kubernetes_parser_rejects_ambiguous_yaml(text: str) -> None:
+    normalized = normalize_mcp_result({
+        "content": [{"type": "text", "text": text}],
+    })
+    assert normalized.status == "unsupported"
+    assert normalized.objects == ()
+
+
+def test_namespace_lookup_uses_bounded_indented_egressip_details() -> None:
+    namespace_text = """apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-yapayzekarag
+  labels:
+    team: ai
+spec: {}
+status:
+  phase: Active
+"""
+    table_names = ["egress-test-yapayzekarag"] + [
+        f"egress-{index:03d}" for index in range(202)
+    ]
+    table_text = "APIVERSION KIND NAME AGE\n" + "\n".join(
+        f"k8s.ovn.org/v1 EgressIP {name} 1d" for name in table_names
+    )
+
+    def detail(name: str, team: str) -> dict:
+        return {"content": [{"type": "text", "text": f"""apiVersion: k8s.ovn.org/v1
+kind: EgressIP
+metadata:
+  name: {name}
+spec:
+  egressIPs:
+  - 10.60.1.222
+  namespaceSelector:
+    matchLabels:
+      team: {team}
+  podSelector: {{}}
+status:
+  items:
+  - egressIP: 10.60.1.222
+    node: worker-a
+"""}]}
+
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"content": [{"type": "text", "text": namespace_text}]},
+        {"content": [{"type": "text", "text": table_text}]},
+        detail("egress-test-yapayzekarag", "ai"),
+        *[detail(f"egress-{index:03d}", "other") for index in range(7)],
+    ]
+    result = AgentLoop(
+        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+    ).run("test-yapayzekarag namespace'ine ait egress ip nedir")
+    assert "egress-test-yapayzekarag" in result.answer
+    assert "10.60.1.222" in result.answer
+    assert "başka eşleşmeler mevcut olabilir" in result.answer
+    assert mcp.call_tool.call_count == 10
+    assert [item.args[0] for item in mcp.call_tool.call_args_list[:2]] == [
+        "resources_get", "resources_list",
+    ]
+
+
 def test_unsupported_namespace_get_never_becomes_no_egressip_claim() -> None:
     mcp = Mock()
     mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
     mcp.call_tool.return_value = {"content": [{
         "type": "text",
         "text": (
-            "apiVersion: v1\nkind: Namespace\nmetadata:\n"
-            "  name: test-yapayzekarag\n  labels:\n    team: hidden\n"
+            "apiVersion: v1\nkind: Namespace\nmetadata: |\n"
+            "  name: test-yapayzekarag\n"
         ),
     }]}
     result = AgentLoop(

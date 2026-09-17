@@ -13,6 +13,9 @@ _KNOWN_WRAPPERS = ("structuredContent", "result", "resource", "object", "data")
 _KNOWN_KUBERNETES_FIELDS = (
     "apiVersion", "kind", "metadata", "name", "labels", "spec", "status",
 )
+_INDENTED_MAX_LINES = 5_000
+_INDENTED_MAX_DEPTH = 16
+_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,125 @@ def _decoded_json(text: str) -> Any:
         return json.loads(candidate)
     except json.JSONDecodeError:
         return None
+
+
+def _indented_scalar(value: str) -> Any:
+    value = value.strip()
+    if value == "{}":
+        return {}
+    if value == "[]":
+        return []
+    if not value or value.startswith(("&", "*", "!", "|", ">")):
+        raise ValueError("unsupported scalar")
+    if any(marker in value for marker in (" &", " *", " !!")):
+        raise ValueError("unsupported scalar")
+    if value.startswith('"'):
+        parsed = json.loads(value)
+        if not isinstance(parsed, str):
+            raise ValueError("non-string quoted scalar")
+        return parsed
+    if value.startswith("'"):
+        if not value.endswith("'") or len(value) < 2:
+            raise ValueError("unterminated scalar")
+        return value[1:-1].replace("''", "'")
+    if value.startswith(("{", "[")) or value.endswith(("}", "]")):
+        raise ValueError("flow style is unsupported")
+    return value
+
+
+def _decoded_kubernetes_indented(text: str) -> dict[str, Any] | None:
+    """Parse only the bounded mapping/sequence subset emitted for K8s objects."""
+    if "\t" in text or any(token in text for token in ("\n---", "\n...")):
+        return None
+    raw_lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not raw_lines or len(raw_lines) > _INDENTED_MAX_LINES:
+        return None
+    tokens: list[tuple[int, str]] = []
+    for line in raw_lines:
+        indent = len(line) - len(line.lstrip(" "))
+        if indent % 2 or indent // 2 > _INDENTED_MAX_DEPTH:
+            return None
+        content = line[indent:]
+        if not content or content.startswith(("#", "---", "...")):
+            return None
+        tokens.append((indent, content))
+
+    def split_mapping(content: str) -> tuple[str, str]:
+        if ":" not in content:
+            raise ValueError("mapping separator missing")
+        key, value = content.split(":", 1)
+        if not _KEY_PATTERN.fullmatch(key):
+            raise ValueError("invalid key")
+        return key, value.strip()
+
+    def parse_block(index: int, indent: int) -> tuple[Any, int]:
+        if index >= len(tokens) or tokens[index][0] != indent:
+            raise ValueError("invalid indentation")
+        sequence = tokens[index][1].startswith("-")
+        container: Any = [] if sequence else {}
+        while index < len(tokens):
+            current_indent, content = tokens[index]
+            if current_indent < indent:
+                break
+            if current_indent != indent:
+                raise ValueError("ambiguous indentation")
+            if content.startswith("-") != sequence:
+                break
+            if sequence:
+                if content != "-" and not content.startswith("- "):
+                    raise ValueError("invalid sequence")
+                remainder = content[1:].strip()
+                index += 1
+                if not remainder:
+                    if index >= len(tokens) or tokens[index][0] <= indent:
+                        raise ValueError("empty sequence item")
+                    item, index = parse_block(index, tokens[index][0])
+                elif ":" in remainder:
+                    key, value = split_mapping(remainder)
+                    item = {}
+                    if value:
+                        item[key] = _indented_scalar(value)
+                    else:
+                        if index >= len(tokens) or tokens[index][0] <= indent:
+                            item[key] = None
+                        else:
+                            item[key], index = parse_block(index, tokens[index][0])
+                    if index < len(tokens) and tokens[index][0] > indent:
+                        extra_indent = tokens[index][0]
+                        extra, index = parse_block(index, extra_indent)
+                        if not isinstance(extra, dict) or any(k in item for k in extra):
+                            raise ValueError("duplicate sequence mapping key")
+                        item.update(extra)
+                else:
+                    item = _indented_scalar(remainder)
+                container.append(item)
+                continue
+            key, value = split_mapping(content)
+            if key in container:
+                raise ValueError("duplicate key")
+            index += 1
+            if value:
+                container[key] = _indented_scalar(value)
+            elif index < len(tokens) and (
+                tokens[index][0] > indent
+                or (tokens[index][0] == indent and tokens[index][1].startswith("-"))
+            ):
+                container[key], index = parse_block(index, tokens[index][0])
+            else:
+                container[key] = None
+        return container, index
+
+    try:
+        parsed, final_index = parse_block(0, tokens[0][0])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if final_index != len(tokens) or not isinstance(parsed, dict):
+        return None
+    if not isinstance(parsed.get("apiVersion"), str) or not isinstance(
+        parsed.get("kind"), str
+    ) or not isinstance(parsed.get("metadata"), dict):
+        return None
+    return parsed
 
 
 def _text_structure(text: str) -> tuple[str, ...]:
@@ -232,6 +354,17 @@ def normalize_mcp_result(result: Any) -> NormalizedMCPResult:
         if decoded is not None:
             if normalized := _canonical_payload(decoded, "content_text_json"):
                 return normalized
+        indented = _decoded_kubernetes_indented(text)
+        if indented is not None:
+            if normalized := _canonical_payload(
+                indented, "content_text_kubernetes_indented"
+            ):
+                return NormalizedMCPResult(
+                    normalized.status, normalized.source, normalized.objects,
+                    normalized.table_rows, normalized.raw_item_count,
+                    representation="kubernetes_indented_object",
+                    completeness="full", authoritative_fields=("*",),
+                )
         rows = _table_rows(text)
         if rows is None:
             rows = _bare_resource_rows(text)

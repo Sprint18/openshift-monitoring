@@ -565,6 +565,27 @@ def test_ai_template_brand_context_evidence_and_responsive_hooks() -> None:
     assert "shiftlight-empty" in source
 
 
+def test_collapsed_evidence_is_removed_from_selection_until_expanded() -> None:
+    source = shiftlight_source()
+    css = (Path(__file__).parents[1] / "app/static/shiftlight_assistant.css").read_text()
+    evidence_block = source[
+        source.index("const appendEvidence"):source.index("const appendClusterChoices")
+    ]
+    assert "list.hidden = true" in evidence_block
+    assert 'details.addEventListener("toggle"' in evidence_block
+    assert "list.hidden = !details.open" in evidence_block
+    assert '.shiftlight-evidence:not([open])>dl' in css
+    assert '.shiftlight-evidence[open]>dl{display:grid' in css
+    assert evidence_block.count('addText(details, "summary"') == 1
+    assert "details.appendChild(list)" in evidence_block
+    assert "safeEvidence(item.evidence)" in source
+    assert "renderAnswer" not in evidence_block
+    assistant_block = source[
+        source.index("const assistantShell"):source.index("const addDetailedViewAction")
+    ]
+    assert assistant_block.count('"shiftlight-answer"') == 1
+
+
 @pytest.mark.parametrize("path", ["/", "/workloads", "/health-overview"])
 @patch("app.main.ClusterCollector")
 @patch("app.main.new_cluster_client")

@@ -458,13 +458,16 @@ def test_egressip_get_fallback_respects_existing_tool_call_budget() -> None:
             "apiVersion": "k8s.ovn.org/v1", "kind": "EgressIP",
             "metadata": {"name": f"candidate-{index}"},
         } for index in range(9)]},
+        *[{
+            "content": [{"type": "text", "text": "unsupported detail"}],
+        } for _index in range(8)],
     ]
     limited = replace(settings(token=None), agent_max_tool_calls=10)
     result = AgentLoop(
         limited, Mock(), mcp, "kkbtest", "KKB TEST"
     ).run("test-payments egressip nedir")
     assert "doğrulanamadı" in result.answer
-    assert mcp.call_tool.call_count == 2
+    assert mcp.call_tool.call_count == 10
 
 
 def test_multiple_matching_egressips_are_returned_and_assignments_deduplicated() -> None:

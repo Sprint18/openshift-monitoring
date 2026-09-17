@@ -311,6 +311,7 @@
         addText(details, "summary", "", "Kullanılan cluster verileri");
         evidence.forEach((item) => {
             const list = document.createElement("dl");
+            list.hidden = true;
             if (item.cluster) { addText(list, "dt", "", "Cluster"); addText(list, "dd", "", item.cluster.toUpperCase()); }
             addText(list, "dt", "", "Kaynak"); addText(list, "dd", "", item.tool);
             addText(list, "dt", "", "Durum"); addText(list, "dd", "", "Başarılı");
@@ -318,6 +319,11 @@
                 if (Object.hasOwn(FACT_KEYS, key)) { addText(list, "dt", "", FACT_KEYS[key]); addText(list, "dd", "", String(value)); }
             });
             details.appendChild(list);
+        });
+        details.addEventListener("toggle", () => {
+            details.querySelectorAll(":scope > dl").forEach((list) => {
+                list.hidden = !details.open;
+            });
         });
         article.appendChild(details);
     };
