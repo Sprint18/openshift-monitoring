@@ -1018,6 +1018,8 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
         listed_items = resource_items(egress_result)
         names: list[str] = []
         details_complete = True
+        detail_attempted = 0
+        detail_normalized = 0
         if listed_items == []:
             detailed_items: list[dict[str, Any]] = []
         else:
@@ -1063,18 +1065,26 @@ that the scheduling decision was affected, not cluster-wide CPU exhaustion."""
                     "resources_get", arguments, available_names, tool_schemas,
                     resource="EgressIP",
                 )
+                detail_attempted += 1
                 summaries.append(detail_summary)
                 item = resource_object(detail) if detail is not None else None
                 if item is None or not egressip_has_full_detail(item):
                     details_complete = False
                     continue
+                detail_normalized += 1
                 detailed_items.append(item)
         matches, verified = evaluate_egressips(detailed_items, labels)
+        coverage = "full" if details_complete else "partial"
+        match_status = (
+            "unsupported" if not verified else
+            "success" if matches or details_complete else "partial"
+        )
         logger.info(
-            "egressip_namespace_match namespace=%s resources_scanned=%s "
-            "resources_matched=%s status=%s",
-            namespace, len(detailed_items), len(matches),
-            "success" if verified else "malformed",
+            "egressip_namespace_match namespace=%s resources_total=%s "
+            "detail_attempted=%s detail_normalized=%s resources_evaluated=%s "
+            "resources_matched=%s coverage=%s status=%s",
+            namespace, len(names), detail_attempted, detail_normalized,
+            len(detailed_items), len(matches), coverage, match_status,
         )
         if not verified:
             logger.info("egressip_result status=malformed")

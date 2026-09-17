@@ -25,7 +25,7 @@ def egressip_namespace(message: str) -> str | None:
     # boundary and ends before a complete marker/apostrophe; the regex cannot
     # backtrack into `namespace'ine` and reinterpret its suffix as a namespace.
     patterns = (
-        rf"(?:^|\s)({_DNS_LABEL})\s+namespace(?:'(?:indeki|inde|ine|inin|ının|unun|ünün))?\s+(?:ait\s+)?egress\s*ip\b",
+        rf"(?:^|\s)({_DNS_LABEL})\s+(?:namespace|namesepace)(?:'(?:indeki|inde|ine|ien|inin|ının|unun|ünün))?\s+(?:(?:ait|için)\s+)?egress\s*ip\b",
         rf"(?:^|\s)(?:namespace|proje)\s+({_DNS_LABEL})(?:'(?:nin|nın|nun|nün))?.*?\begress\s*ip\b",
         rf"\begress\s*ip\b.*?\b(?:namespace|proje)\s+({_DNS_LABEL})(?=$|\s|[?,.!])",
         rf"(?:^|\s)({_DNS_LABEL})'(?:ye|ya|e|a)\s+ait\s+egress\s*ip\b",

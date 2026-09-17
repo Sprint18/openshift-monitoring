@@ -327,6 +327,33 @@
         });
         article.appendChild(details);
     };
+    const selectedShiftLightText = (selection) => {
+        if (!selection || selection.rangeCount < 1 || selection.isCollapsed) return null;
+        const boundary = document.createRange();
+        boundary.selectNodeContents(conversation);
+        const fragments = [];
+        for (let index = 0; index < selection.rangeCount; index += 1) {
+            const selected = selection.getRangeAt(index);
+            if (!selected.intersectsNode(conversation)) continue;
+            const clipped = selected.cloneRange();
+            if (clipped.compareBoundaryPoints(Range.START_TO_START, boundary) < 0) clipped.setStart(conversation, 0);
+            if (clipped.compareBoundaryPoints(Range.END_TO_END, boundary) > 0) clipped.setEnd(conversation, conversation.childNodes.length);
+            const fragment = clipped.cloneContents();
+            fragment.querySelectorAll("[hidden], [aria-hidden='true'], template, script, style, details:not([open]) > :not(summary)").forEach((node) => node.remove());
+            const wrapper = document.createElement("div");
+            wrapper.appendChild(fragment);
+            const text = (wrapper.innerText || wrapper.textContent || "").trim();
+            if (text) fragments.push(text);
+        }
+        return fragments.length ? fragments.join("\n") : null;
+    };
+    const copyShiftLightSelection = (event) => {
+        if (!drawer.classList.contains("open") || !event.clipboardData) return;
+        const text = selectedShiftLightText(window.getSelection());
+        if (text === null) return;
+        event.clipboardData.setData("text/plain", text);
+        event.preventDefault();
+    };
     const appendClusterChoices = (article, item) => {
         if (!item.pendingQuestion || !item.clarificationId || !item.clusterChoices.length) return;
         const actions = document.createElement("div"); actions.className = "shiftlight-cluster-choices";
@@ -599,5 +626,6 @@
     scopeSelect.addEventListener("change", () => { const current = activeConversation() || createConversation(); current.scope = safeScope(scopeSelect.value); current.updatedAt = nowIso(); persistStore(); });
     messageInput.addEventListener("input", resizeComposer); messageInput.addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (!requestPending) form.requestSubmit(); } });
     document.addEventListener("keydown", (event) => { if (event.key !== "Escape" || !drawer.classList.contains("open")) return; if (fullscreen) closeFullscreen(); else closeDrawer(); });
+    document.addEventListener("copy", copyShiftLightSelection, true);
     renderConversation(); setPending(false); showNudge(); if (root.dataset.openOnLoad === "true") openDrawer();
 })();

@@ -586,6 +586,26 @@ def test_collapsed_evidence_is_removed_from_selection_until_expanded() -> None:
     assert assistant_block.count('"shiftlight-answer"') == 1
 
 
+def test_shiftlight_copy_is_scoped_to_visible_selected_conversation_content() -> None:
+    source = shiftlight_source()
+    copy_block = source[
+        source.index("const selectedShiftLightText"):
+        source.index("const appendClusterChoices")
+    ]
+    assert "selection.getRangeAt(index)" in copy_block
+    assert "selected.intersectsNode(conversation)" in copy_block
+    assert "clipped.cloneContents()" in copy_block
+    assert "details:not([open]) > :not(summary)" in copy_block
+    assert "[hidden]" in copy_block
+    assert "[aria-hidden='true']" in copy_block
+    assert 'fragments.join("\\n")' in copy_block
+    assert "conversation.textContent" not in copy_block
+    assert 'document.addEventListener("copy", copyShiftLightSelection, true)' in source
+    assert "if (text === null) return" in source
+    assert 'event.clipboardData.setData("text/plain", text)' in source
+    assert source.count('className = "shiftlight-message assistant"') == 1
+
+
 @pytest.mark.parametrize("path", ["/", "/workloads", "/health-overview"])
 @patch("app.main.ClusterCollector")
 @patch("app.main.new_cluster_client")

@@ -96,7 +96,13 @@ def _decoded_kubernetes_indented(text: str) -> dict[str, Any] | None:
         if ":" not in content:
             raise ValueError("mapping separator missing")
         key, value = content.split(":", 1)
-        if not _KEY_PATTERN.fullmatch(key):
+        if key.startswith('"'):
+            key = json.loads(key)
+        elif key.startswith("'"):
+            if not key.endswith("'") or len(key) < 2:
+                raise ValueError("unterminated key")
+            key = key[1:-1].replace("''", "'")
+        if not isinstance(key, str) or not _KEY_PATTERN.fullmatch(key):
             raise ValueError("invalid key")
         return key, value.strip()
 

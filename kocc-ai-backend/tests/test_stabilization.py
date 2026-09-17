@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent import AgentLoop, AgentResult
+from app.clusters import ClusterScope, cluster_registry, explicit_cluster_scope
 from app.conversation import ActiveInspection, ConversationContext, SafeTurn, TriageCandidate, TriageResource
 from app.egressip import (
     egressip_namespace, egressip_query_mode,
@@ -206,6 +207,8 @@ status:
     "apiVersion: v1\nkind: Namespace\nmetadata: !custom value\n",
     "apiVersion: v1\nkind: Namespace\nmetadata: |\n  hidden\n",
     "apiVersion: v1\nkind: Namespace\nmetadata: {name: unsafe}\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: one\n  name: two\n",
+    "apiVersion: v1\nkind: Namespace\nmetadata: {}\n---\nkind: Namespace\n",
 ))
 def test_indented_kubernetes_parser_rejects_ambiguous_yaml(text: str) -> None:
     normalized = normalize_mcp_result({
@@ -213,6 +216,23 @@ def test_indented_kubernetes_parser_rejects_ambiguous_yaml(text: str) -> None:
     })
     assert normalized.status == "unsupported"
     assert normalized.objects == ()
+
+
+def test_indented_kubernetes_parser_enforces_line_and_depth_bounds() -> None:
+    excessive_lines = "apiVersion: v1\nkind: Namespace\nmetadata:\n" + "\n".join(
+        f"  label{index}: value" for index in range(5_001)
+    )
+    excessive_depth = (
+        "apiVersion: v1\nkind: Namespace\nmetadata:\n" +
+        "  root:\n" + "".join(
+            f"{'  ' * depth}level{depth}:\n" for depth in range(2, 19)
+        ) + f"{'  ' * 19}value: terminal\n"
+    )
+    for text in (excessive_lines, excessive_depth):
+        normalized = normalize_mcp_result({
+            "content": [{"type": "text", "text": text}],
+        })
+        assert normalized.status == "unsupported"
 
 
 def test_namespace_lookup_uses_bounded_indented_egressip_details() -> None:
@@ -259,9 +279,16 @@ status:
         detail("egress-test-yapayzekarag", "ai"),
         *[detail(f"egress-{index:03d}", "other") for index in range(7)],
     ]
-    result = AgentLoop(
-        settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
-    ).run("test-yapayzekarag namespace'ine ait egress ip nedir")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.getLogger("kocc_ai.agent").addHandler(handler)
+    try:
+        result = AgentLoop(
+            settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+        ).run("test-yapayzekarag namespace'ine ait egress ip nedir")
+    finally:
+        logging.getLogger("kocc_ai.agent").removeHandler(handler)
+    logs = stream.getvalue()
     assert "egress-test-yapayzekarag" in result.answer
     assert "10.60.1.222" in result.answer
     assert "başka eşleşmeler mevcut olabilir" in result.answer
@@ -269,6 +296,88 @@ status:
     assert [item.args[0] for item in mcp.call_tool.call_args_list[:2]] == [
         "resources_get", "resources_list",
     ]
+    assert (
+        "resources_total=203 detail_attempted=8 detail_normalized=8 "
+        "resources_evaluated=8 resources_matched=1 coverage=partial "
+        "status=success"
+    ) in logs
+
+
+def test_unsupported_egressip_detail_is_attempted_but_not_evaluated() -> None:
+    namespace = {"apiVersion": "v1", "kind": "Namespace", "metadata": {
+        "name": "sanitized-namespace", "labels": {"team": "target"},
+    }}
+    table = (
+        "APIVERSION KIND NAME\n"
+        "k8s.ovn.org/v1 EgressIP first\n"
+        "k8s.ovn.org/v1 EgressIP second\n"
+    )
+    nonmatch = _egress("second")
+    nonmatch["spec"]["namespaceSelector"]["matchLabels"]["team"] = "other"
+    mcp = Mock()
+    mcp.list_tools.return_value = [_resource_get_tool(), _resource_tool()]
+    mcp.call_tool.side_effect = [
+        {"structuredContent": namespace},
+        {"content": [{"type": "text", "text": table}]},
+        {"content": [{"type": "text", "text": "unsupported prose"}]},
+        {"structuredContent": nonmatch},
+    ]
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logging.getLogger("kocc_ai.agent").addHandler(handler)
+    try:
+        result = AgentLoop(
+            settings(token=None), Mock(), mcp, "kkbtest", "KKB TEST",
+        ).run("sanitized-namespace namespace egressip")
+    finally:
+        logging.getLogger("kocc_ai.agent").removeHandler(handler)
+    logs = stream.getvalue()
+    assert "sınırlı detay verisiyle doğrulanamadı" in result.answer
+    assert "resources_total=2 detail_attempted=2 detail_normalized=1" in logs
+    assert "resources_evaluated=1 resources_matched=0" in logs
+    assert "coverage=partial status=partial" in logs
+
+
+def test_indented_egressip_accepts_quoted_kubernetes_label_keys() -> None:
+    payload = {"content": [{"type": "text", "text": """apiVersion: k8s.ovn.org/v1
+kind: EgressIP
+metadata:
+  name: sanitized-egress
+  labels:
+    "on": enabled
+    app.kubernetes.io/name: sanitized
+spec:
+  egressIPs:
+  - 192.0.2.10
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: sanitized-namespace
+  podSelector: {}
+status:
+  items:
+  - egressIP: 192.0.2.10
+    node: sanitized-worker
+"""}]}
+    normalized = normalize_mcp_result(payload)
+    assert normalized.status == "success"
+    assert normalized.source == "content_text_kubernetes_indented"
+    assert normalized.representation == "kubernetes_indented_object"
+    assert normalized.completeness == "full"
+    assert normalized.objects[0]["metadata"]["labels"] == {
+        "on": "enabled", "app.kubernetes.io/name": "sanitized",
+    }
+
+
+def test_exact_live_typo_extracts_namespace_without_clarification() -> None:
+    message = (
+        "kkbtest clusterindaki test-yapayzekarag namespace'ien ait "
+        "egressip nedir"
+    )
+    assert egressip_query_mode(message) == "namespace"
+    assert egressip_namespace(message) == "test-yapayzekarag"
+    assert explicit_cluster_scope(message, cluster_registry(settings())) == (
+        ClusterScope("single", ("kkbtest",))
+    )
 
 
 def test_unsupported_namespace_get_never_becomes_no_egressip_claim() -> None:
@@ -380,7 +489,10 @@ def test_egressip_intent_exact_production_phrases() -> None:
     "test-yapayzekarag egress ip nedir",
     "test-yapayzekarag namespace'indeki egress ip nedir",
     "test-yapayzekarag namespace'ine ait egressip nedir",
+    "test-yapayzekarag namespace'ien ait egressip nedir",
+    "test-yapayzekarag namesepace'ine ait egressip nedir",
     "test-yapayzekarag namespace'inin egress ip'si nedir",
+    "test-yapayzekarag namespace için egressip nedir",
     "kkbtest ortamındaki test-yapayzekarag namespace'ine ait egressip nedir",
     "kkbtest clusterındaki test-yapayzekarag namespace egress ip nedir",
     "test-yapayzekarag hangi egress ip'yi kullanıyor",
